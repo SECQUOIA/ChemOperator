@@ -51,12 +51,15 @@ solver, and more on the way.
   [`pyproject.toml`](pyproject.toml)
 - System SUNDIALS/IDA support may be needed when building `scikits-odes`
 
-Clone the repository and synchronize the locked environment:
-
+Full install from fresh WSL:
 ```bash
-git clone <repository-url>
-cd <repository-directory>
-uv sync --locked
+sudo apt update && sudo apt upgrade -y
+sudo apt install -y build-essential gfortran cmake pkg-config git curl python3-dev libsundials-dev libopenblas-dev liblapack-dev
+curl -LsSf https://astral.sh/uv/install.sh | sh
+source $HOME/.local/bin/env
+git clone https://github.com/SECQUOIA/ChemOperator.git
+cd ChemOperator
+uv sync
 ```
 
 Run commands inside the environment with `uv run`:
@@ -434,7 +437,6 @@ experiment uses Hydra.
 | [`scripts/pipe_flow_transient_fno.py`](scripts/pipe_flow_transient_fno.py) | FNO tuning, training, evaluation, checkpointing, and plots |
 | [`scripts/q2d_fno.py`](scripts/q2d_fno.py) | Quasi-2D FNO training, superresolution, and break-even analysis |
 | [`scripts/processing_test.py`](scripts/processing_test.py) | Visual smoke test for preprocessing and inverse reconstruction |
-| [`nemo-examples/`](nemo-examples) | PhysicsNeMo PINN/FNO/DeepONet prototypes |
 
 Examples:
 
