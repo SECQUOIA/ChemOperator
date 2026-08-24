@@ -1,0 +1,11 @@
+{
+  "relative_l2": 0.03617689591173659,
+  "rmse_m_per_s": 0.00047999494229265306,
+  "momentum_residual_mse": 0.05419106565415859,
+  "condition_mse": 0.06487845794856548,
+  "training_seconds": 1735.4437894610019,
+  "best_epoch": 15,
+  "best_validation_relative_l2": 0.050806146007031205,
+  "physicsnemo_pde": "TransientHagenPoiseuille",
+  "parameters": 49589
+}

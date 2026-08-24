@@ -1,9 +1,0 @@
-{
-  "batch_size": 16,
-  "hidden_channels": 64,
-  "learning_rate": 0.0003364867144187955,
-  "modes_r": 3,
-  "modes_z": 6,
-  "n_layers": 4,
-  "weight_decay": 1.3296521457299503e-07
-}

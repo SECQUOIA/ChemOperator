@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib.util
 import math
+from dataclasses import replace
 from pathlib import Path
 
 import numpy as np
@@ -21,7 +22,10 @@ from chem_operator.sampling import Constant, Uniform
 
 
 SCRIPT_PATH = (
-    Path(__file__).resolve().parents[1] / "scripts" / "pipe_flow_transient_fno.py"
+    Path(__file__).resolve().parents[1]
+    / "scripts"
+    / "pipe_flow"
+    / "transient_fno.py"
 )
 SCRIPT_SPEC = importlib.util.spec_from_file_location(
     "pipe_flow_transient_fno",
@@ -212,8 +216,11 @@ def test_fno_training_and_plots_smoke(  # pylint: disable=too-many-locals
             float(1.0e3 * plotted_sample["r"][-1]),
         )
 
-        monkeypatch.setattr(FNO_SCRIPT, "OUTPUT_DIR", tmp_path)
-        monkeypatch.setattr(FNO_SCRIPT, "DATA_DIR", fno_data_dir)
+        monkeypatch.setattr(
+            FNO_SCRIPT,
+            "PATHS",
+            replace(FNO_SCRIPT.PATHS, output=tmp_path, data=fno_data_dir),
+        )
         monkeypatch.setattr(FNO_SCRIPT, "MAX_TEST_TRAJECTORIES", 1)
         use_saved_model(torch.device("cpu"), calculate_metrics=False)
         for path in (

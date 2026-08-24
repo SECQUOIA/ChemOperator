@@ -1,0 +1,13 @@
+{
+  "modes": 8,
+  "latent_channels": 8,
+  "n_layers": 3,
+  "padding": 8,
+  "decoder_layers": 2,
+  "decoder_layer_size": 8,
+  "learning_rate": 0.0001464445202306412,
+  "weight_decay": 4.0531435701819866e-07,
+  "batch_size": 2,
+  "physics_weight": 0.005792550804028146,
+  "constraint_weight": 0.0002528036822796219
+}

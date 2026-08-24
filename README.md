@@ -430,27 +430,29 @@ experiment uses Hydra.
 
 | Script | Workflow |
 | --- | --- |
-| [`scripts/cstr_deeponet.py`](scripts/cstr_deeponet.py) | Direct and POD-DeepONet on non-isothermal CSTR trajectories |
-| [`scripts/pfr_chain_deeponet.py`](scripts/pfr_chain_deeponet.py) | Ray/Optuna tuning plus direct and POD-DeepONet on PFR data |
-| [`scripts/packed_bed_1d_deeponet.py`](scripts/packed_bed_1d_deeponet.py) | Direct and POD-DeepONet on heterogeneous packed-bed data |
-| [`scripts/pipe_flow_deeponet.py`](scripts/pipe_flow_deeponet.py) | Hydra-configured pipe-flow DeepONet and physics-loss study |
-| [`scripts/pipe_flow_transient_fno.py`](scripts/pipe_flow_transient_fno.py) | FNO tuning, training, evaluation, checkpointing, and plots |
-| [`scripts/q2d_fno.py`](scripts/q2d_fno.py) | Quasi-2D FNO training, superresolution, and break-even analysis |
-| [`scripts/processing_test.py`](scripts/processing_test.py) | Visual smoke test for preprocessing and inverse reconstruction |
+| [`scripts/cstr/deeponet.py`](scripts/cstr/deeponet.py) | Direct and POD-DeepONet on non-isothermal CSTR trajectories |
+| [`scripts/pfr/chain_deeponet.py`](scripts/pfr/chain_deeponet.py) | Ray/Optuna tuning plus direct and POD-DeepONet on PFR data |
+| [`scripts/packed_bed_1d/deeponet.py`](scripts/packed_bed_1d/deeponet.py) | Direct and POD-DeepONet on heterogeneous packed-bed data |
+| [`scripts/pipe_flow/deeponet.py`](scripts/pipe_flow/deeponet.py) | Hydra-configured pipe-flow DeepONet and physics-loss study |
+| [`scripts/pipe_flow/transient_fno.py`](scripts/pipe_flow/transient_fno.py) | Neuraloperator FNO tuning, training, evaluation, checkpointing, and plots |
+| [`scripts/pipe_flow/transient_nemo_fno.py`](scripts/pipe_flow/transient_nemo_fno.py) | PhysicsNeMo transient pipe-flow FNO workflow |
+| [`scripts/q2d/fno.py`](scripts/q2d/fno.py) | Quasi-2D FNO training, superresolution, and break-even analysis |
+| [`scripts/diagnostics/processing.py`](scripts/diagnostics/processing.py) | Visual smoke test for preprocessing and inverse reconstruction |
 
 Examples:
 
 ```bash
-uv run python scripts/cstr_deeponet.py
-uv run python scripts/pipe_flow_transient_fno.py
-uv run python scripts/pipe_flow_deeponet.py final.epochs=5
+uv run python scripts/cstr/deeponet.py
+uv run python scripts/pipe_flow/transient_fno.py
+uv run python scripts/pipe_flow/deeponet.py final.epochs=5
 ```
 
 Review each script's data paths, run-mode flags, trajectory limits, and compute
 settings before launching it. The tuning scripts can be long-running and use a
-GPU when PyTorch reports one as available. Outputs are written below
-`scripts/*_results/`; Ray state is written below `.ray/` or the configured
-output directory.
+GPU when PyTorch reports one as available. Examples are grouped by physical
+case, with notebooks and configuration beside their runners. Each runner writes
+to `scripts/<case>/results/<runner>/`; project-level Ray state is written below
+`.ray/`, while tuning results remain inside the runner's output directory.
 
 ## Quasi-2D packed-bed solver
 
