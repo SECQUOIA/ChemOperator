@@ -14,12 +14,37 @@ from chem_operator.sampling import ParameterSpec, Constant, Grid, Uniform
 
 class CSTRCaseSimulator(CaseSimulator):
     name = "cstr"
+    _requires_heat_transfer = False
+
+    _required_thermal_parameters = frozenset(
+        {
+            "solve_energy",
+            "ambient_temperature",
+            "wall_area",
+            "heat_transfer_coefficient",
+        }
+    )
 
     def __init__(
         self,
         parameter_space: Mapping[str, ParameterSpec] | None = None,
         mechanism_file_name: str = "n-heptane-NUIG-2016.yaml",
     ):
+        if self._requires_heat_transfer:
+            if parameter_space is None:
+                raise ValueError(
+                    f"{type(self).__name__} requires a parameter space with "
+                    "thermal controls."
+                )
+
+            missing = self._required_thermal_parameters.difference(parameter_space)
+            if missing:
+                missing_names = ", ".join(sorted(missing))
+                raise ValueError(
+                    "Non-isothermal parameter space is missing required "
+                    f"parameters: {missing_names}."
+                )
+
         if parameter_space is None:
             self._parameter_space = {}
         else:
@@ -65,7 +90,7 @@ class CSTRCaseSimulator(CaseSimulator):
             if name in params:
                 controls[name] = params[name]
 
-        return CaseParameters(
+        case = CaseParameters(
             initial_conditions={
                 "gas/T": params["T0"],
                 "gas/P": params["P0"],
@@ -83,29 +108,78 @@ class CSTRCaseSimulator(CaseSimulator):
                 "reactive_fraction": reactive_fraction,
             }
         )
+        self._validate_thermal_case(case)
+        return case
 
-    def run_case(
+    def _validate_thermal_case(
         self,
         case: CaseParameters,
-    ) -> SimulationRecord:
-        solve_energy = bool(case.controls.get("solve_energy", False))
-        heat_transfer_coefficient = float(
-            case.controls.get("heat_transfer_coefficient", 0.0)
-        )
-        wall_area = float(case.geometry.get("wall_area", 0.0))
+    ) -> tuple[bool, float, float, float | None]:
+        controls = case.controls or {}
+        geometry = case.geometry or {}
+
+        if self._requires_heat_transfer:
+            missing = self._required_thermal_parameters.difference(
+                controls.keys() | geometry.keys()
+            )
+            if missing:
+                missing_names = ", ".join(sorted(missing))
+                raise ValueError(
+                    "Non-isothermal case is missing required thermal values: "
+                    f"{missing_names}."
+                )
+
+        solve_energy_value = controls.get("solve_energy", False)
+        if not isinstance(solve_energy_value, (bool, np.bool_)):
+            raise ValueError("solve_energy must be a Boolean value.")
+        solve_energy = bool(solve_energy_value)
+
+        heat_transfer_coefficient = controls.get("heat_transfer_coefficient", 0.0)
+        wall_area = geometry.get("wall_area", 0.0)
+        ambient_temperature = controls.get("ambient_temperature")
 
         if heat_transfer_coefficient < 0.0:
             raise ValueError("heat_transfer_coefficient must be non-negative.")
         if wall_area < 0.0:
             raise ValueError("wall_area must be non-negative.")
-        if heat_transfer_coefficient > 0.0 and wall_area == 0.0:
+        if ambient_temperature is not None and ambient_temperature <= 0.0:
+            raise ValueError("ambient_temperature must be positive.")
+        if self._requires_heat_transfer and heat_transfer_coefficient == 0.0:
             raise ValueError(
-                "wall_area must be positive when heat transfer is enabled."
+                "heat_transfer_coefficient must be positive for a non-isothermal CSTR."
             )
-        if heat_transfer_coefficient > 0.0 and not solve_energy:
-            raise ValueError(
-                "solve_energy must be True when heat transfer is enabled."
-            )
+
+        if heat_transfer_coefficient > 0.0:
+            if wall_area == 0.0:
+                raise ValueError(
+                    "wall_area must be positive when heat transfer is enabled."
+                )
+            if not solve_energy:
+                raise ValueError(
+                    "solve_energy must be True when heat transfer is enabled."
+                )
+            if ambient_temperature is None:
+                raise ValueError(
+                    "ambient_temperature is required when heat transfer is enabled."
+                )
+
+        return (
+            solve_energy,
+            heat_transfer_coefficient,
+            wall_area,
+            ambient_temperature,
+        )
+
+    def run_case(
+        self,
+        case: CaseParameters,
+    ) -> SimulationRecord:
+        (
+            solve_energy,
+            heat_transfer_coefficient,
+            wall_area,
+            ambient_temperature,
+        ) = self._validate_thermal_case(case)
 
         gas = ct.Solution(get_mechanism_file(self.mechanism_file_name))
         gas.TPX = case.initial_conditions["gas/T"], case.initial_conditions["gas/P"], case.initial_conditions["gas/X"]
@@ -133,9 +207,7 @@ class CSTRCaseSimulator(CaseSimulator):
         )
 
         if heat_transfer_coefficient > 0.0:
-            ambient_temperature = float(case.controls["ambient_temperature"])
-            if ambient_temperature <= 0.0:
-                raise ValueError("ambient_temperature must be positive.")
+            assert ambient_temperature is not None
 
             ambient_gas = ct.Solution(get_mechanism_file(self.mechanism_file_name))
             ambient_gas.TPX = (
@@ -163,6 +235,7 @@ class CSTRCaseSimulator(CaseSimulator):
 
         if case.solver_parameters["adaptive"]:
             t = 0.0
+            states.append(stirred_reactor.phase.state, t=t)
             while t < case.solver_parameters["t_final"]:
                 t = reactor_network.step()
                 states.append(stirred_reactor.phase.state, t=t)
@@ -172,7 +245,6 @@ class CSTRCaseSimulator(CaseSimulator):
             for t in times:
                 reactor_network.advance(t)
                 states.append(stirred_reactor.phase.state, t=t)
-            pass
 
         toc = time.perf_counter()
 
@@ -192,10 +264,9 @@ class NonIsothermalCSTRCaseSimulator(CSTRCaseSimulator):
     """CSTR simulator using a separate non-isothermal dataset prefix."""
 
     name = "cstr_non_isothermal"
+    _requires_heat_transfer = True
 
 if __name__ == "__main__":
-    prog_path = Path(__file__).resolve().parent
-
     if False:
         cstr_simulator = CSTRCaseSimulator(
             parameter_space={
@@ -231,7 +302,7 @@ if __name__ == "__main__":
         "residence_time": Constant(2.0),
         "pressure_controller_K": Constant(1e-6),
         # thermal controls
-        "solve_energy": Constant(True),
+        "solve_energy": Constant(True), # controls isothermal or non-isothermal
         "ambient_temperature": Constant(600.0),
         "wall_area": Constant(1.0e-2),
         "heat_transfer_coefficient": Uniform(0.001, 2.0),
@@ -247,7 +318,7 @@ if __name__ == "__main__":
         )
         cstr_non_isothermal_dataset_generator = SimulationDatasetGenerator(
             cstr_non_isothermal_simulator,
-            datasets_path.parent.parent / "cstr",
+            datasets_path / "cstr",
         )
         records_splits = cstr_non_isothermal_dataset_generator.generate_splits(
             n_cases=50
