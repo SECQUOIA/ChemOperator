@@ -13,7 +13,7 @@ from importlib.resources import files
 
 import cantera as ct
 import numpy as np
-import matplotlib.pyplot as plt
+from matplotlib.axes import Axes
 import pandas as pd
 
 os.environ["DDE_BACKEND"] = "pytorch"
@@ -55,7 +55,7 @@ def to_numpy(x):
         return x.detach().cpu().numpy()
     return np.asarray(x)
 
-def add_filtered_handles(ax: plt.Axes) -> None:
+def add_filtered_handles(ax: Axes) -> None:
     handles, labels = ax.get_legend_handles_labels()
     by_label = dict(zip(labels, handles))
     ax.legend(by_label.values(), by_label.keys())
