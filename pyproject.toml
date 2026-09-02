@@ -42,6 +42,7 @@ config-settings-package = { scikits-odes-daepack = { setup-args = "-Dc_std=c17" 
 dev = [
     "pylint>=4.0.6",
     "pytest>=9.1.1",
+    "pytest-cov>=7.1.0",
 ]
 
 [tool.pytest.ini_options]
