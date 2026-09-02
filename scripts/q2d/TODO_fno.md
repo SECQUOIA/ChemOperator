@@ -3,6 +3,7 @@
 ## Accuracy-constrained break-even
 
 Need to generate specific test data h5 file that solves the same case (all `Constant`) at multiple resolutions.
+Should also test at multiple [external solver] tolerances
 
 $$
 N_{\mathrm{break}}(r)

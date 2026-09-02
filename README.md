@@ -31,8 +31,8 @@ solver, and more on the way.
 
 | System | Simulator | Coordinates | Main fields | Solver |
 | --- | --- | --- | --- | --- |
-| Continuous stirred-tank reactor | `CSTRCaseSimulator` | `t` | `T`, `P`, `X` | Cantera reactor network |
-| Non-isothermal CSTR | `NonIsothermalCSTRCaseSimulator` | `t` | `T`, `P`, `X` | Cantera with optional wall heat transfer |
+| Continuous stirred-tank reactor | `CSTRSim` | `t` | `T`, `P`, `X` | Cantera reactor network |
+| Non-isothermal CSTR | `NonIsothermalCSTRSim` | `t` | `T`, `P`, `X` | Cantera with optional wall heat transfer |
 | Lagrangian plug-flow reactor | `PFRLagrangianParticleSim` | `t` | `z`, `T`, `P`, `X`, `velocity` | Cantera constant-pressure reactor |
 | Chain-of-reactors PFR | `PFRChainOfReactorsSim` | `z` | `t`, `T`, `P`, `X`, `velocity`, `residence_time` | Cantera steady reactor chain |
 | Non-isothermal reactor-chain PFR | `PFRNonIsothermalChainOfReactorsSim` | `z` | Same as reactor-chain PFR | Cantera with optional wall heat transfer |
@@ -294,6 +294,14 @@ file:
 dataset.close()
 ```
 
+The reader also exposes lightweight discovery metadata without loading field
+arrays. `inspect_fields()`, `inspect_constants()`, and
+`inspect_coordinates()` return JSON-safe descriptors. Field, species, and
+channel references can be resolved with `resolve_field()`,
+`resolve_species()`, `resolve_channel()`, and
+`resolve_channel_reference()`. Use `manifest()` or `fingerprint()` to record
+the dataset view used by a checkpoint.
+
 ## Preprocessing
 
 `DataProcessor` converts raw dictionaries into packed tensors while preserving
@@ -381,6 +389,10 @@ Each supports field-wise and already-packed tensors, plus separate statistics
 for state deltas. `fit_zscore_normalizer` streams trajectories rather than
 loading an entire HDF5 split into memory. Fit statistics on the training split
 only, then reuse them for validation, testing, and inference.
+
+Every normalizer provides a versioned, JSON-safe `state_dict()`. Restore it
+with `normalizer_from_state_dict()`; the same representation is also safe to
+store with `torch.save` and load with `weights_only=True`.
 
 ## Model adapters
 
@@ -538,10 +550,14 @@ not by repeating them along a field axis.
 ```text
 .
 ├── src/chem_operator/
-│   ├── datasets.py              # Records, generation, and lazy HDF5 reader
-│   ├── dataset_processing.py    # Packing and reversible target transforms
-│   ├── normalization.py         # Tensor normalizers
-│   ├── models.py                # Framework adapters and benchmark helpers
+│   ├── datasets.py              # Public dataset compatibility facade
+│   ├── dataset_processing.py    # Public preprocessing compatibility facade
+│   ├── normalization.py         # Public normalization compatibility facade
+│   ├── models.py                # Public model compatibility facade
+│   ├── _datasets/               # Dataset records, generation, and HDF5 reader
+│   ├── _dataset_processing/     # Packing and reversible target transforms
+│   ├── _normalization/          # Tensor normalizer implementations
+│   ├── _models/                 # Adapters, POD, and training implementations
 │   ├── sampling.py              # Parameter specifications
 │   ├── example_data/            # Packaged Cantera mechanisms
 │   └── reactors/                # Built-in physical systems
@@ -599,7 +615,6 @@ normalization across resolutions, and a CPU FNO training smoke test.
   research areas.
 - Accuracy-constrained break-even analysis still needs matched tutorial cases
   solved at multiple resolutions.
-- A PhysicsNeMo PFR example with conjugate heat transfer is planned.
 
 Q2D-specific work is tracked in
 [`scripts/TODO_q2d_fno.md`](scripts/TODO_q2d_fno.md).
