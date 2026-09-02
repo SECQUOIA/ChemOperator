@@ -1,45 +1,30 @@
 {
-  "direct_config": {
+  "dataset": "cstr_non_isothermal",
+  "config": {
     "loss": "relative_l2",
     "epochs": 30,
     "learning_rate": 0.001,
     "weight_decay": 0.0,
     "batch_size": 16,
-    "width": 256,
-    "latent_width": 50,
+    "width": 512,
+    "latent_width": 64,
     "branch_hidden_layers": 2,
     "trunk_hidden_layers": 2,
     "activation": "tanh",
     "display_every": 10,
     "variance_threshold": 0.9995,
-    "seed": 7,
-    "plot_cases": 2
-  },
-  "pod_config": {
-    "loss": "relative_l2",
-    "epochs": 30,
-    "learning_rate": 0.001,
-    "weight_decay": 0.0,
-    "batch_size": 16,
-    "width": 256,
-    "latent_width": 50,
-    "branch_hidden_layers": 2,
-    "trunk_hidden_layers": 2,
-    "activation": "tanh",
-    "display_every": 10,
-    "variance_threshold": 0.9995,
-    "seed": 7,
+    "seed": 42,
     "plot_cases": 2
   },
   "parameter_counts": {
     "DeepONet": {
-      "n_params": 16791092,
-      "n_params_branch": 16710668,
-      "n_params_trunk": 79154
+      "n_params": 42908342,
+      "n_params_branch": 42610560,
+      "n_params_trunk": 296512
     },
     "POD-DeepONet": {
-      "n_params": 392710,
-      "n_params_branch": 392710,
+      "n_params": 916998,
+      "n_params_branch": 916998,
       "n_params_trunk": 0
     }
   },
@@ -47,14 +32,14 @@
   "pod_cumulative_explained_variance": 0.9996393875598687,
   "metrics": {
     "DeepONet": {
-      "rmse": 15.40472872918269,
-      "relative_l2": 0.005180569934348319,
-      "max_absolute_error": 12417.84375
+      "rmse": 15.412917875511152,
+      "relative_l2": 0.005183323922815304,
+      "max_absolute_error": 12432.3671875
     },
     "POD-DeepONet": {
-      "rmse": 0.8794897684633651,
-      "relative_l2": 0.0002957701061906339,
-      "max_absolute_error": 1995.4375
+      "rmse": 0.8771077785532331,
+      "relative_l2": 0.0002949690492210961,
+      "max_absolute_error": 2110.515625
     }
   }
 }
