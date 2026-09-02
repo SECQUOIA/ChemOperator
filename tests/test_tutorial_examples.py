@@ -5,7 +5,7 @@ import numpy as np
 
 from chem_operator.datasets import CaseParameters
 from chem_operator.utils import get_mechanism_file
-from chem_operator.reactors.cstr.dataset_generator import CSTRCaseSimulator
+from chem_operator.reactors.cstr.dataset_generator import CSTRSim
 from chem_operator.reactors.packed_bed_1D.dataset_generator import PackedBed1DSimulator
 
 def _run_cstr_tutorial_reference(case: CaseParameters) -> tuple[float, float, np.ndarray]:
@@ -70,7 +70,7 @@ def test_cstr_matches_continuous_reactor_tutorial_case():
     )
 
     tutorial_T, tutorial_P, tutorial_X = _run_cstr_tutorial_reference(tutorial_case)
-    record = CSTRCaseSimulator().run_case(tutorial_case)
+    record = CSTRSim().run_case(tutorial_case)
 
     assert record.coordinates["t"][-1] >= tutorial_case.solver_parameters["t_final"]
     np.testing.assert_allclose(record.fields["T"][-1], tutorial_T, rtol=1e-10)
