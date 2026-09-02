@@ -5,8 +5,6 @@ from copy import deepcopy
 from collections.abc import Mapping
 from typing import Any
 
-os.environ.setdefault("MPLCONFIGDIR", "/tmp/matplotlib")
-
 import cantera as ct
 import numpy as np
 from scikits.odes import dae
@@ -15,15 +13,12 @@ from chem_operator.utils import get_mechanism_file, datasets_path
 from chem_operator.datasets import (
     CaseParameters,
     CaseSimulator,
-    SimulationRecord,
-    SimulationDatasetGenerator,
+    SimulationRecord
 )
-from chem_operator.sampling import ParameterSpec, Constant, Uniform
-
+from chem_operator.sampling import ParameterSpec
 
 DEFAULT_MECHANISM_FILE_NAME = "ammonia-Ru-Ba-YSZ-CSM-2019.yaml"
 DEFAULT_SURFACE_PHASE_NAME = "Ru_surface"
-
 
 def _inlet_composition(
     nh3_mole_fraction: float,
@@ -341,46 +336,3 @@ class PackedBed1DSimulator(CaseSimulator):
                 "solver_parameters": deepcopy(case.solver_parameters),
             },
         )
-
-
-if __name__ == "__main__":
-    prog_path = Path(__file__).resolve().parent
-
-    packed_bed_simulator = PackedBed1DSimulator(
-        parameter_space={
-            # sampled inlet and wall parameters, centered near the tutorial case
-            "T0": Uniform(660.0, 690.0),
-            "P0": Uniform(4.75e5, 5.25e5),
-            "inlet_velocity": Uniform(8e-4, 1.2e-3),
-            "wall_temperature": Uniform(705.0, 740.0),
-            "inlet_nh3_mole_fraction": Uniform(0.975, 0.995),
-            # constants from the tutorial
-            "diluent_species": Constant("AR"),
-            "length": Constant(5e-2),
-            "radius": Constant(5e-3),
-            "porosity": Constant(0.5),
-            "tortuosity": Constant(2.0),
-            "particle_diameter": Constant(3.37e-4),
-            "specific_surface_area": Constant(3.5e6),
-            "heat_transfer_coefficient": Constant(1e2),
-            "solve_energy": Constant(True),
-            "membrane_present": Constant(True),
-            "membrane_permeability": Constant(1e-15),
-            "membrane_thickness": Constant(3e-6),
-            "membrane_species": Constant("H2"),
-            "sweep_pressure": Constant(1e5),
-            # solver controls
-            "first_step_size": Constant(1e-15),
-            "atol": Constant(1e-14),
-            "rtol": Constant(1e-6),
-            "max_steps": Constant(8000),
-        }
-    )
-
-    packed_bed_dataset_generator = SimulationDatasetGenerator(
-        packed_bed_simulator, datasets_path / "packed_bed_1D",
-    )
-    records_splits = packed_bed_dataset_generator.generate_splits(
-        n_cases=1000,
-    )
-    packed_bed_dataset_generator.save_splits(records_splits, overwrite=True)

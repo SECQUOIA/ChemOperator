@@ -12,7 +12,7 @@ from chem_operator.utils import get_mechanism_file
 from chem_operator.datasets import CaseParameters, CaseSimulator, SimulationRecord, SimulationDatasetGenerator
 from chem_operator.sampling import ParameterSpec, Constant, Grid, Uniform
 
-class CSTRCaseSimulator(CaseSimulator):
+class CSTRSim(CaseSimulator):
     name = "cstr"
     _requires_heat_transfer = False
 
@@ -260,7 +260,7 @@ class CSTRCaseSimulator(CaseSimulator):
         )
 
 
-class NonIsothermalCSTRCaseSimulator(CSTRCaseSimulator):
+class NonIsothermalCSTRSim(CSTRSim):
     """CSTR simulator using a separate non-isothermal dataset prefix."""
 
     name = "cstr_non_isothermal"

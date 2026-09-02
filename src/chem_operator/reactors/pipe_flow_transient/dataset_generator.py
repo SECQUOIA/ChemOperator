@@ -361,25 +361,3 @@ class TransientHagenPoiseuillePipeFlowSim(CaseSimulator):
                 },
             },
         )
-
-
-if __name__ == "__main__":
-    simulator = TransientHagenPoiseuillePipeFlowSim(
-        parameter_space={
-            "radius": Uniform(0.5e-3, 1.5e-3),
-            "length": Uniform(0.5, 2.0),
-            "dynamic_viscosity": Uniform(0.8e-3, 1.2e-3),
-            "pressure_drop": Uniform(10.0, 100.0),
-            "density": Constant(1000.0),
-            "n_time_points": Constant(128),
-            "n_radial_points": Constant(128),
-            "max_fourier_number": Constant(2.0),
-        },
-    )
-    dataset_generator = SimulationDatasetGenerator(
-        simulator,
-        PROJECT_ROOT / "datasets" / "pipe_flow_transient",
-        seed=0,
-    )
-    record_splits = dataset_generator.generate_splits(n_cases=10000)
-    dataset_generator.save_splits(record_splits, overwrite=True)

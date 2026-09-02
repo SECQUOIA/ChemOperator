@@ -21,10 +21,8 @@ from chem_operator.datasets import (
 )
 from chem_operator.sampling import Constant, ParameterSpec, Uniform
 
-
 PROJECT_ROOT = Path(__file__).resolve().parents[4]
 LAMINAR_REYNOLDS_LIMIT = 2300.0
-
 
 class HagenPoiseuille(PDE):
     """PhysicsNeMo form of steady, fully developed circular-pipe flow."""
@@ -220,23 +218,3 @@ class HagenPoiseuillePipeFlowSim(CaseSimulator):
                 },
             },
         )
-
-
-if __name__ == "__main__":
-    simulator = HagenPoiseuillePipeFlowSim(
-        parameter_space={
-            "radius": Uniform(0.5e-3, 1.5e-3),
-            "length": Uniform(0.5, 2.0),
-            "dynamic_viscosity": Uniform(0.8e-3, 1.2e-3),
-            "pressure_drop": Uniform(10.0, 100.0),
-            "density": Constant(1000.0),
-            "n_radial_points": Constant(128),
-        }
-    )
-    dataset_generator = SimulationDatasetGenerator(
-        simulator,
-        PROJECT_ROOT / "datasets" / "pipe_flow",
-        seed=0,
-    )
-    record_splits = dataset_generator.generate_splits(n_cases=10000)
-    dataset_generator.save_splits(record_splits, overwrite=True)
