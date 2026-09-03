@@ -1,56 +1,62 @@
 {
-  "direct_config": {
-    "loss": "relative_l2",
-    "epochs": 60,
-    "learning_rate": 0.0036740592026352267,
-    "weight_decay": 1.5930522616241016e-05,
-    "batch_size": 16,
-    "width": 800,
-    "latent_width": 32,
-    "activation": "relu",
-    "display_every": 10,
-    "variance_threshold": 0.9995,
-    "seed": 42,
-    "plot_cases": 2
-  },
-  "pod_config": {
-    "loss": "relative_l2",
-    "epochs": 60,
-    "learning_rate": 0.0028285701736643545,
-    "weight_decay": 6.443891483080299e-06,
-    "batch_size": 16,
-    "width": 800,
-    "latent_width": 44,
-    "activation": "relu",
-    "display_every": 10,
-    "variance_threshold": 0.9995,
-    "seed": 42,
-    "plot_cases": 2
-  },
-  "parameter_counts": {
-    "DeepONet": {
-      "n_params": 1658061,
-      "n_params_branch": 990016,
-      "n_params_trunk": 668032
+  "schema_version": 1,
+  "problem": "pfr_chain",
+  "models": {
+    "deeponet": {
+      "config": {
+        "loss": "relative_l2",
+        "epochs": 80,
+        "learning_rate": 0.000996923543812786,
+        "weight_decay": 1.4578770256757077e-06,
+        "batch_size": 16,
+        "width": 1024,
+        "latent_width": 64,
+        "branch_hidden_layers": 3,
+        "trunk_hidden_layers": 3,
+        "activation": "relu",
+        "display_every": 10,
+        "seed": 42
+      },
+      "parameter_counts": {
+        "n_params": 5139341,
+        "n_params_branch": 2972480,
+        "n_params_trunk": 2166848
+      },
+      "metrics": {
+        "rmse": 27.444894220033344,
+        "relative_l2": 0.0009763555995446947,
+        "max_absolute_error": 650.7325439453125
+      }
     },
-    "POD-DeepONet": {
-      "n_params": 692044,
-      "n_params_branch": 692044,
-      "n_params_trunk": 0
+    "pod_deeponet": {
+      "config": {
+        "loss": "relative_l2",
+        "epochs": 80,
+        "learning_rate": 0.0019956529392808394,
+        "weight_decay": 2.6070247583707675e-05,
+        "batch_size": 16,
+        "width": 1024,
+        "latent_width": 44,
+        "branch_hidden_layers": 3,
+        "trunk_hidden_layers": 0,
+        "activation": "tanh",
+        "display_every": 10,
+        "seed": 42
+      },
+      "parameter_counts": {
+        "n_params": 2164780,
+        "n_params_branch": 2164780,
+        "n_params_trunk": 0
+      },
+      "metrics": {
+        "rmse": 26.349400411394306,
+        "relative_l2": 0.0009373832680882112,
+        "max_absolute_error": 625.1029052734375
+      }
     }
   },
-  "pod_components": 44,
-  "pod_cumulative_explained_variance": 0.9995193313268905,
-  "metrics": {
-    "DeepONet": {
-      "rmse": 25.770878962889597,
-      "relative_l2": 0.0009168023576742623,
-      "max_absolute_error": 429.86474609375
-    },
-    "POD-DeepONet": {
-      "rmse": 23.585600183741,
-      "relative_l2": 0.0008390607820072473,
-      "max_absolute_error": 508.730712890625
-    }
+  "pod": {
+    "components": 44,
+    "cumulative_explained_variance": 0.9995197894258834
   }
 }

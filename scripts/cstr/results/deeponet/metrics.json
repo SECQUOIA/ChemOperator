@@ -1,45 +1,62 @@
 {
-  "dataset": "cstr_non_isothermal",
-  "config": {
-    "loss": "relative_l2",
-    "epochs": 30,
-    "learning_rate": 0.001,
-    "weight_decay": 0.0,
-    "batch_size": 16,
-    "width": 512,
-    "latent_width": 64,
-    "branch_hidden_layers": 2,
-    "trunk_hidden_layers": 2,
-    "activation": "tanh",
-    "display_every": 10,
-    "variance_threshold": 0.9995,
-    "seed": 42,
-    "plot_cases": 2
-  },
-  "parameter_counts": {
-    "DeepONet": {
-      "n_params": 42908342,
-      "n_params_branch": 42610560,
-      "n_params_trunk": 296512
+  "schema_version": 1,
+  "problem": "cstr_non_isothermal",
+  "models": {
+    "deeponet": {
+      "config": {
+        "loss": "relative_l2",
+        "epochs": 30,
+        "learning_rate": 0.001,
+        "weight_decay": 0.0,
+        "batch_size": 16,
+        "width": 512,
+        "latent_width": 64,
+        "branch_hidden_layers": 2,
+        "trunk_hidden_layers": 2,
+        "activation": "tanh",
+        "display_every": 10,
+        "seed": 42
+      },
+      "parameter_counts": {
+        "n_params": 42908342,
+        "n_params_branch": 42610560,
+        "n_params_trunk": 296512
+      },
+      "metrics": {
+        "rmse": 15.412917875511152,
+        "relative_l2": 0.005183323922815304,
+        "max_absolute_error": 12432.3671875
+      }
     },
-    "POD-DeepONet": {
-      "n_params": 916998,
-      "n_params_branch": 916998,
-      "n_params_trunk": 0
+    "pod_deeponet": {
+      "config": {
+        "loss": "relative_l2",
+        "epochs": 30,
+        "learning_rate": 0.001,
+        "weight_decay": 0.0,
+        "batch_size": 16,
+        "width": 512,
+        "latent_width": 64,
+        "branch_hidden_layers": 2,
+        "trunk_hidden_layers": 2,
+        "activation": "tanh",
+        "display_every": 10,
+        "seed": 42
+      },
+      "parameter_counts": {
+        "n_params": 916998,
+        "n_params_branch": 916998,
+        "n_params_trunk": 0
+      },
+      "metrics": {
+        "rmse": 0.8771077785532331,
+        "relative_l2": 0.0002949690492210961,
+        "max_absolute_error": 2110.515625
+      }
     }
   },
-  "pod_components": 6,
-  "pod_cumulative_explained_variance": 0.9996393875598687,
-  "metrics": {
-    "DeepONet": {
-      "rmse": 15.412917875511152,
-      "relative_l2": 0.005183323922815304,
-      "max_absolute_error": 12432.3671875
-    },
-    "POD-DeepONet": {
-      "rmse": 0.8771077785532331,
-      "relative_l2": 0.0002949690492210961,
-      "max_absolute_error": 2110.515625
-    }
+  "pod": {
+    "components": 6,
+    "cumulative_explained_variance": 0.9996393875598687
   }
 }

@@ -1,43 +1,43 @@
 {
   "direct": {
-    "best_valid_loss": 0.23510167598724366,
+    "best_valid_loss": 0.2476960003376007,
     "config": {
       "loss": "relative_l2",
       "width": 1024,
-      "latent_width": 128,
+      "latent_width": 64,
       "branch_hidden_layers": 3,
       "trunk_hidden_layers": 3,
       "activation": "relu",
-      "learning_rate": 0.0005242693862597307,
-      "weight_decay": 8.706020878304853e-05,
+      "learning_rate": 0.000996923543812786,
+      "weight_decay": 1.4578770256757077e-06,
       "batch_size": 16,
-      "epochs": 60,
+      "epochs": 40,
       "seed": 42
     },
     "parameter_counts": {
-      "n_params": 6057741,
-      "n_params_branch": 3825280,
-      "n_params_trunk": 2232448
+      "n_params": 5139341,
+      "n_params_branch": 2972480,
+      "n_params_trunk": 2166848
     }
   },
   "pod": {
-    "best_valid_loss": 0.19710516631603242,
+    "best_valid_loss": 0.2365744799375534,
     "config": {
       "loss": "relative_l2",
       "width": 1024,
       "latent_width": 44,
-      "branch_hidden_layers": 4,
+      "branch_hidden_layers": 3,
       "trunk_hidden_layers": 0,
-      "activation": "relu",
-      "learning_rate": 0.0007599674150654904,
-      "weight_decay": 2.3270677083837795e-06,
+      "activation": "tanh",
+      "learning_rate": 0.0019956529392808394,
+      "weight_decay": 2.6070247583707675e-05,
       "batch_size": 16,
-      "epochs": 60,
+      "epochs": 40,
       "seed": 42
     },
     "parameter_counts": {
-      "n_params": 3214380,
-      "n_params_branch": 3214380,
+      "n_params": 2164780,
+      "n_params_branch": 2164780,
       "n_params_trunk": 0
     }
   }
