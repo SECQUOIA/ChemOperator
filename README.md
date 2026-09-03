@@ -3,7 +3,7 @@
 ChemOperator is a research library for generating chemical-reactor simulation
 datasets and preparing them for neural-operator models. It provides a common
 record format for reactor simulations, reproducible parameter sampling, lazy
-HDF5 datasets, tensor preprocessing, and adapters for nueral operator workflows
+HDF5 datasets, tensor preprocessing, and adapters for neural-operator workflows.
 
 The repository includes Cantera-based CSTR and plug-flow reactor models,
 a heterogeneous 1D packed-bed model, analytical steady and transient pipe-flow
@@ -23,7 +23,7 @@ solver, and more on the way.
 - Lazy, worker-safe PyTorch dataset access with temporal or spatial windowing
 - Field packing, state/delta targets, and reversible normalization
 - DeepXDE, NeuralOperator, FNO, autoencoder, and POD utilities
-- Direct and POD-DeepONet benchmark helpers
+- Headless direct and POD-DeepONet comparison and artifact helpers
 - PhysicsNeMo PDE definitions for steady and transient Hagen–Poiseuille flow
 - Packaged Cantera example mechanisms
 
@@ -443,11 +443,14 @@ experiment uses Hydra.
 | Script | Workflow |
 | --- | --- |
 | [`scripts/cstr/deeponet.py`](scripts/cstr/deeponet.py) | Direct and POD-DeepONet on non-isothermal CSTR trajectories |
+| [`scripts/cstr/plot_deeponet.py`](scripts/cstr/plot_deeponet.py) | Plot a saved CSTR DeepONet comparison |
 | [`scripts/pfr/chain_deeponet.py`](scripts/pfr/chain_deeponet.py) | Ray/Optuna tuning plus direct and POD-DeepONet on PFR data |
+| [`scripts/pfr/plot_deeponet.py`](scripts/pfr/plot_deeponet.py) | Plot a saved PFR-chain DeepONet comparison |
 | [`scripts/packed_bed_1d/deeponet.py`](scripts/packed_bed_1d/deeponet.py) | Direct and POD-DeepONet on heterogeneous packed-bed data |
-| [`scripts/pipe_flow/deeponet.py`](scripts/pipe_flow/deeponet.py) | Hydra-configured pipe-flow DeepONet and physics-loss study |
-| [`scripts/pipe_flow/transient_fno.py`](scripts/pipe_flow/transient_fno.py) | Neuraloperator FNO tuning, training, evaluation, checkpointing, and plots |
-| [`scripts/pipe_flow/transient_nemo_fno.py`](scripts/pipe_flow/transient_nemo_fno.py) | PhysicsNeMo transient pipe-flow FNO workflow |
+| [`scripts/packed_bed_1d/plot_deeponet.py`](scripts/packed_bed_1d/plot_deeponet.py) | Plot a saved packed-bed DeepONet comparison |
+| [`scripts/pipe_flow_transient/deeponet.py`](scripts/pipe_flow_transient/deeponet.py) | Hydra-configured pipe-flow DeepONet and physics-loss study |
+| [`scripts/pipe_flow_transient/transient_fno.py`](scripts/pipe_flow_transient/transient_fno.py) | Neuraloperator FNO tuning, training, evaluation, checkpointing, and plots |
+| [`scripts/pipe_flow_transient/transient_nemo_fno.py`](scripts/pipe_flow_transient/transient_nemo_fno.py) | PhysicsNeMo transient pipe-flow FNO workflow |
 | [`scripts/q2d/fno.py`](scripts/q2d/fno.py) | Quasi-2D FNO training, superresolution, and break-even analysis |
 | [`scripts/diagnostics/processing.py`](scripts/diagnostics/processing.py) | Visual smoke test for preprocessing and inverse reconstruction |
 
@@ -455,16 +458,23 @@ Examples:
 
 ```bash
 uv run python scripts/cstr/deeponet.py
-uv run python scripts/pipe_flow/transient_fno.py
-uv run python scripts/pipe_flow/deeponet.py final.epochs=5
+uv run python scripts/cstr/plot_deeponet.py
+uv run python scripts/pipe_flow_transient/transient_fno.py
+uv run python scripts/pipe_flow_transient/deeponet.py final.epochs=5
 ```
+
+The CSTR, PFR-chain, and packed-bed DeepONet trainers do not import plotting
+code. They write `metrics.json`, long-form `history.csv`, bounded predictions
+in `reconstructions.npz`, and `ipca_pod_matrix.npz`. Run the corresponding
+`plot_deeponet.py` afterward to generate loss and reconstruction figures.
 
 Review each script's data paths, run-mode flags, trajectory limits, and compute
 settings before launching it. The tuning scripts can be long-running and use a
 GPU when PyTorch reports one as available. Examples are grouped by physical
-case, with notebooks and configuration beside their runners. Each runner writes
-to `scripts/<case>/results/<runner>/`; project-level Ray state is written below
-`.ray/`, while tuning results remain inside the runner's output directory.
+case, with notebooks and configuration beside their runners. Training runners
+write to `scripts/<case>/results/<runner>/`; their plotting entrypoints reuse
+that output directory. Project-level Ray state is written below `.ray/`, while
+tuning results remain inside the training runner's output directory.
 
 ## Quasi-2D packed-bed solver
 

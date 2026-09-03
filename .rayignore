@@ -3,7 +3,11 @@
 __pycache__/
 .pytest_cache/
 
-src/chem_operator/scripts/q2d/
+artifacts/
+scripts/**/results/
+scripts/q2d/runs/
+
+.coverage
 
 core
 core.*

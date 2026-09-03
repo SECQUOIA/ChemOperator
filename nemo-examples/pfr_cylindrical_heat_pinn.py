@@ -62,7 +62,7 @@ class Parameters:
     inlet_flow_a_dimensional: float = 100.0  # mol/s
     inlet_concentration_a_dimensional: float = 0.1  # mol/L
     inlet_temperature_dimensional: float = 393.15  # K
-    outer_temperature_dimensional: float = 323.15  # K
+    outer_temperature_dimensional: float = 303.15  # K
     reference_temperature_dimensional: float = 300.0  # K
 
     # A -> B and 2 A -> 3 C Arrhenius/thermochemical data.
