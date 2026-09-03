@@ -2,7 +2,7 @@
 
 Edit the module-level settings below to change the experiment. The example has
 no command-line interface: running this file tunes both models independently,
-retrains the best validation configurations, and writes final test plots.
+retrains the best validation configurations, and writes final test artifacts.
 """
 
 from __future__ import annotations
@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any, Mapping
 
 os.environ.setdefault("DDE_BACKEND", "pytorch")
+# DeepXDE imports Matplotlib internally even though this runner does not plot.
 os.environ.setdefault("MPLBACKEND", "Agg")
 os.environ.setdefault("MPLCONFIGDIR", "/tmp/matplotlib")
 # This workstation idles above Ray's memory guard because of external IDE
@@ -40,12 +41,13 @@ from chem_operator.datasets import (
 from chem_operator.example_paths import ExamplePaths
 from chem_operator.models import (
     CoordinateScaler,
-    DeepONetBenchmarkConfig,
+    DeepONetTrainingConfig,
     DeepXDEAdapter,
     PODTransform,
     fit_incremental_pod_dataset,
     fit_zscore_normalizer,
-    run_deepxde_benchmark,
+    run_deeponet_comparison,
+    save_deeponet_comparison,
     tune_deeponet_hyperparameters,
 )
 
@@ -68,7 +70,7 @@ CONSTANTS = (
 COORDINATE_STRIDE = 4
 MAX_TRAJECTORIES: int | None = None
 POD_VARIANCE_THRESHOLD = 0.9995
-PLOT_CASES = 2
+RECONSTRUCTION_CASES = 2
 SEED = 42
 
 # Ray Tune settings. Each model gets its own Optuna study and ASHA scheduler.
@@ -92,19 +94,19 @@ def search_space(
 
     return {
         "loss": "relative_l2",
-        "width": tune.choice([512, 1024]),
+        "width": tune.choice([512, 768, 1024, 1280]),
         "latent_width": (
             pod_components
             if model_kind == "pod"
-            else tune.choice([64, 128])
+            else 64 # tune.choice([64, 128])
         ),
-        "branch_hidden_layers": tune.choice([3, 4, 5]),
+        "branch_hidden_layers": tune.choice([2, 3, 4]),
         "trunk_hidden_layers": (
             0
             if model_kind == "pod"
-            else tune.choice([3, 4])
+            else tune.choice([2, 3, 4])
         ),
-        "activation": tune.choice(["relu", "gelu", "tanh"]),
+        "activation": tune.choice(["gelu", "tanh"]),
         "learning_rate": tune.loguniform(5e-4, 5e-3),
         "weight_decay": tune.loguniform(1e-6, 1e-4),
         "batch_size": 16, # tune.choice([16, 32]),
@@ -261,10 +263,13 @@ def tune_model(
     return best_config, best_loss, parameter_counts
 
 
-def benchmark_config(config: Mapping[str, Any], epoch_multiplier: float = 1.0) -> DeepONetBenchmarkConfig:
+def training_config(
+    config: Mapping[str, Any],
+    epoch_multiplier: float = 1.0,
+) -> DeepONetTrainingConfig:
     """Convert a resolved Ray configuration to the final training config."""
 
-    return DeepONetBenchmarkConfig(
+    return DeepONetTrainingConfig(
         loss=str(config.get("loss", "relative_l2")),
         epochs=int(config["epochs"] * epoch_multiplier),
         learning_rate=float(config["learning_rate"]),
@@ -276,9 +281,7 @@ def benchmark_config(config: Mapping[str, Any], epoch_multiplier: float = 1.0) -
         trunk_hidden_layers=int(config["trunk_hidden_layers"]),
         activation=str(config["activation"]),
         display_every=FINAL_DISPLAY_EVERY,
-        variance_threshold=POD_VARIANCE_THRESHOLD,
         seed=int(config["seed"]),
-        plot_cases=PLOT_CASES,
     )
 
 
@@ -372,21 +375,24 @@ def main() -> None:
     valid_raw = raw_dataset("valid")
     test_raw = raw_dataset("test")
     try:
-        run_deepxde_benchmark(
+        result = run_deeponet_comparison(
             adapter(limited(train_raw), normalizer),
             adapter(limited(valid_raw), normalizer),
             adapter(limited(test_raw), normalizer),
             normalizer,
-            output_dir=PATHS.output,
-            plot_labels=("T", "velocity", "X[0]"),
-            coordinate_label="Axial position z [m]",
-            direct_config=benchmark_config(direct_config, 2.0),
-            pod_config=benchmark_config(pod_config, 2.0),
+            direct_config=training_config(direct_config, 2.0),
+            pod_config=training_config(pod_config, 2.0),
             pod=pod,
+            reconstruction_cases=RECONSTRUCTION_CASES,
             num_workers=DATALOADER_WORKERS,
             pin_memory=PIN_MEMORY,
         )
-        print(f"Results written to {PATHS.output}")
+        save_deeponet_comparison(
+            result,
+            PATHS.output,
+            problem="pfr_chain",
+        )
+        print(f"Artifacts written to {PATHS.output}")
     finally:
         train_raw.close()
         valid_raw.close()

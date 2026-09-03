@@ -17,7 +17,7 @@ pfr_param_space = {
     "length": Constant(1.5e-7),
     "area": Constant(1.0e-4),
     # solver controls
-    "n_steps": Constant(500),
+    "n_steps": Constant(200),
 }
 pfr_lagrangian_simulator = PFRLagrangianParticleSim(pfr_param_space)
 
@@ -48,7 +48,7 @@ if __name__ == "__main__":
         pfr_lagrangian_simulator, dataset_path,
     )
     records_splits = pfr_lagrangian_dataset_generator.generate_splits(n_cases=1000)
-    pfr_lagrangian_dataset_generator.save_splits(records_splits, overwrite=False)
+    pfr_lagrangian_dataset_generator.save_splits(records_splits, overwrite=True)
 
     pfr_chain_dataset_generator = SimulationDatasetGenerator(
         pfr_chain_simulator, dataset_path,

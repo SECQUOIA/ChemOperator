@@ -3,15 +3,13 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from typing import Any
+from typing import Any, Literal
 
 import numpy as np
 import torch
 from torch.utils.data import Dataset
 
 from chem_operator.dataset_processing import DataProcessor
-from chem_operator.utils import to_numpy
-
 from .arrays import OperatorArrays, _Trajectory
 from .deepxde_geometry import ArrayTransform, DeepXDEFormat
 
@@ -148,7 +146,7 @@ class DeepXDEAdapter(Dataset):
 
     @staticmethod
     def _numpy(tensor: torch.Tensor) -> np.ndarray:
-        return to_numpy(tensor)
+        return tensor.detach().cpu().numpy()
 
     def _coordinate_keys(self, sample: Mapping[str, Any]) -> tuple[str, ...]:
         if self.coordinate_names:

@@ -8,7 +8,7 @@ from typing import Any
 import torch
 
 from .deeponet import (CheckpointCallback, CoordinateScaler,
-                       DeepONetBenchmarkConfig, DeepONetTrainingHistory,
+                       DeepONetTrainingConfig, DeepONetTrainingHistory,
                        MetricReporter, TensorTransform, _loader_loss, _network,
                        _PODOnlyDeepONet, deeponet_parameter_counts,
                        make_deeponet_dataloader)
@@ -20,7 +20,7 @@ def train_deeponet_lazy(
     train: DeepXDEAdapter,
     validation: DeepXDEAdapter,
     *,
-    config: DeepONetBenchmarkConfig,
+    config: DeepONetTrainingConfig,
     coordinate_scaler: CoordinateScaler,
     target_transform: TensorTransform | None = None,
     pod: PODTransform | None = None,
@@ -194,7 +194,7 @@ def tune_deeponet_hyperparameters(
 
     from ray import tune
 
-    benchmark_config = DeepONetBenchmarkConfig(
+    training_config = DeepONetTrainingConfig(
         loss=str(config.get("loss", "relative_l2")),
         epochs=int(config["epochs"]),
         learning_rate=float(config["learning_rate"]),
@@ -211,7 +211,7 @@ def tune_deeponet_hyperparameters(
     train_deeponet_lazy(
         train,
         validation,
-        config=benchmark_config,
+        config=training_config,
         coordinate_scaler=coordinate_scaler,
         pod=pod,
         reporter=tune.report,

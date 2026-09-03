@@ -21,3 +21,9 @@ def test_dataset_convenience_exports_keep_identity() -> None:
         datasets.normalizer_from_state_dict
         is normalization.normalizer_from_state_dict
     )
+
+
+def test_legacy_deeponet_benchmark_exports_are_removed() -> None:
+    assert not hasattr(models, "DeepONetBenchmarkConfig")
+    assert not hasattr(models, "DeepONetBenchmarkResult")
+    assert not hasattr(models, "run_deepxde_benchmark")

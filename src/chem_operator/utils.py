@@ -8,13 +8,16 @@ from pathlib import Path
 # from dataclasses import dataclass
 import warnings
 from importlib.resources import files
+from typing import TYPE_CHECKING
 
 # from tqdm import tqdm, trange
 
 import cantera as ct
 import numpy as np
-from matplotlib.axes import Axes
 import pandas as pd
+
+if TYPE_CHECKING:
+    from matplotlib.axes import Axes
 
 os.environ["DDE_BACKEND"] = "pytorch"
 # import deepxde as dde
@@ -55,7 +58,7 @@ def to_numpy(x):
         return x.detach().cpu().numpy()
     return np.asarray(x)
 
-def add_filtered_handles(ax: Axes) -> None:
+def add_filtered_handles(ax: "Axes") -> None:
     handles, labels = ax.get_legend_handles_labels()
     by_label = dict(zip(labels, handles))
     ax.legend(by_label.values(), by_label.keys())

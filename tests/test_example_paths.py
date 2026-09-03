@@ -10,7 +10,7 @@ from chem_operator.example_paths import ExamplePaths
 def project_tree(tmp_path: Path) -> tuple[Path, Path]:
     """Create the minimum directory shape needed for root discovery."""
     root = tmp_path / "project"
-    script = root / "scripts" / "pipe_flow" / "transient_fno.py"
+    script = root / "scripts" / "pipe_flow_transient" / "transient_fno.py"
     script.parent.mkdir(parents=True)
     (root / "pyproject.toml").touch()
     script.touch()
@@ -25,7 +25,7 @@ def test_from_script_discovers_conventional_paths(tmp_path: Path) -> None:
     assert paths.root == root
     assert paths.datasets == root / "datasets"
     assert paths.data == root / "datasets" / "pipe_flow_transient"
-    assert paths.example == root / "scripts" / "pipe_flow"
+    assert paths.example == root / "scripts" / "pipe_flow_transient"
     assert paths.output == paths.example / "results" / "transient_fno"
     assert paths.ray == root / ".ray"
 

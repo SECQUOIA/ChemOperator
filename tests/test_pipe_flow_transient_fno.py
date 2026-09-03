@@ -24,7 +24,7 @@ from chem_operator.sampling import Constant, Uniform
 SCRIPT_PATH = (
     Path(__file__).resolve().parents[1]
     / "scripts"
-    / "pipe_flow"
+    / "pipe_flow_transient"
     / "transient_fno.py"
 )
 SCRIPT_SPEC = importlib.util.spec_from_file_location(

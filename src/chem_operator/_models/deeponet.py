@@ -48,7 +48,9 @@ class CoordinateScaler:
 
 
 @dataclass(frozen=True)
-class DeepONetBenchmarkConfig:
+class DeepONetTrainingConfig:
+    """DeepONet architecture and optimization settings."""
+
     loss: Literal["relative_l2", "mse"] = "relative_l2"
     epochs: int = 2000
     learning_rate: float = 1e-3
@@ -60,9 +62,7 @@ class DeepONetBenchmarkConfig:
     trunk_hidden_layers: int = 2
     activation: str = "tanh"
     display_every: int = 100
-    variance_threshold: float = 0.999
     seed: int = 7
-    plot_cases: int = 2
 
     def to_dict(self) -> dict[str, Any]:
         """Return JSON-compatible architecture and training metadata."""
@@ -73,25 +73,17 @@ class DeepONetBenchmarkConfig:
     def from_dict(
         cls,
         values: Mapping[str, Any],
-    ) -> "DeepONetBenchmarkConfig":
+    ) -> "DeepONetTrainingConfig":
         """Restore a configuration previously produced by :meth:`to_dict`."""
 
         return cls(**dict(values))
-
-
-@dataclass(frozen=True)
-class DeepONetBenchmarkResult:
-    direct_model: Any
-    pod_model: Any
-    pod: PODTransform
-    metrics: Mapping[str, Mapping[str, float]]
 
 
 def _network(
     branch_width: int,
     trunk_width: int,
     output_width: int,
-    config: DeepONetBenchmarkConfig,
+    config: DeepONetTrainingConfig,
 ):
     import deepxde as dde
 
@@ -129,7 +121,7 @@ class _PODOnlyDeepONet(torch.nn.Module):
         self,
         branch_width: int,
         pod: PODTransform,
-        config: DeepONetBenchmarkConfig,
+        config: DeepONetTrainingConfig,
     ):
         super().__init__()
         import deepxde as dde
@@ -168,7 +160,7 @@ class _PODOnlyDeepONet(torch.nn.Module):
 
 @dataclass
 class DeepONetTrainingHistory:
-    """Minimal loss history shared by lazy training and plotting."""
+    """Minimal loss history shared by training and artifact serialization."""
 
     steps: list[int]
     loss_train: list[list[float]]

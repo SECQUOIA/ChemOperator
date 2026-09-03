@@ -42,7 +42,7 @@ ray:
   temp_directory: .ray
 
 output:
-  directory: scripts/pipe_flow/results/deeponet
+  directory: scripts/pipe_flow_transient/results/deeponet
 
 hydra:
   run:

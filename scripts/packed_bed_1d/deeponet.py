@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 
 os.environ.setdefault("DDE_BACKEND", "pytorch")
+# DeepXDE imports Matplotlib internally even though this runner does not plot.
 os.environ.setdefault("MPLBACKEND", "Agg")
 os.environ.setdefault("MPLCONFIGDIR", "/tmp/matplotlib")
 
@@ -21,10 +22,11 @@ from chem_operator.datasets import (
 )
 from chem_operator.example_paths import ExamplePaths
 from chem_operator.models import (
-    DeepONetBenchmarkConfig,
+    DeepONetTrainingConfig,
     DeepXDEAdapter,
     fit_zscore_normalizer,
-    run_deepxde_benchmark,
+    run_deeponet_comparison,
+    save_deeponet_comparison,
 )
 
 
@@ -56,7 +58,8 @@ DISPLAY_EVERY = 100
 COORDINATE_STRIDE = 1
 RESAMPLE_POINTS = 128
 SEED = 7
-PLOT_CASES = 2
+POD_VARIANCE_THRESHOLD = 0.999
+RECONSTRUCTION_CASES = 2
 MAX_TRAJECTORIES: int | None = None
 
 
@@ -92,8 +95,8 @@ def main() -> None:
         print("Fitting packed-bed Z-score statistics from training trajectories ...")
         normalizer = fit_zscore_normalizer(train_data, FIELDS, CONSTANTS)
 
-        def processor() -> DataProcessor:
-            return DataProcessor(
+        def adapter(dataset: Dataset) -> DeepXDEAdapter:
+            processor = DataProcessor(
                 field_packer=FieldPacker(
                     channel_axis="last",
                     variable_field_order=FIELDS,
@@ -103,38 +106,40 @@ def main() -> None:
                 normalization_config=NormalizationConfig(enabled=True),
                 target_transform=TargetTransformConfig(mode="state"),
             )
+            return DeepXDEAdapter(
+                dataset,
+                processor,
+                format="cartesian_product",
+                coordinate_name="z",
+                include_constants=True,
+                resample_points=RESAMPLE_POINTS,
+                coordinate_mode="relative",
+            )
 
-        adapter_options = {
-            "format": "cartesian_product",
-            "coordinate_name": "z",
-            "include_constants": True,
-            "resample_points": RESAMPLE_POINTS,
-            "coordinate_mode": "relative",
-        }
-        train = DeepXDEAdapter(train_data, processor(), **adapter_options)
-        validation = DeepXDEAdapter(valid_data, processor(), **adapter_options)
-        test = DeepXDEAdapter(test_data, processor(), **adapter_options)
-        run_deepxde_benchmark(
-            train,
-            validation,
-            test,
-            normalizer,
-            output_dir=PATHS.output,
-            plot_labels=("T", "velocity", "X[0]", "Z[0]"),
-            coordinate_label="Axial position z [m]",
-            config=DeepONetBenchmarkConfig(
-                epochs=EPOCHS,
-                learning_rate=LEARNING_RATE,
-                batch_size=BATCH_SIZE,
-                width=WIDTH,
-                latent_width=LATENT_WIDTH,
-                display_every=DISPLAY_EVERY,
-                variance_threshold=0.999,
-                seed=SEED,
-                plot_cases=PLOT_CASES,
-            ),
+        config = DeepONetTrainingConfig(
+            epochs=EPOCHS,
+            learning_rate=LEARNING_RATE,
+            batch_size=BATCH_SIZE,
+            width=WIDTH,
+            latent_width=LATENT_WIDTH,
+            display_every=DISPLAY_EVERY,
+            seed=SEED,
         )
-        print(f"Results written to {PATHS.output}")
+        result = run_deeponet_comparison(
+            adapter(train_data),
+            adapter(valid_data),
+            adapter(test_data),
+            normalizer,
+            direct_config=config,
+            pod_variance_threshold=POD_VARIANCE_THRESHOLD,
+            reconstruction_cases=RECONSTRUCTION_CASES,
+        )
+        save_deeponet_comparison(
+            result,
+            PATHS.output,
+            problem="packed_bed_1d",
+        )
+        print(f"Artifacts written to {PATHS.output}")
     finally:
         train_raw.close()
         valid_raw.close()

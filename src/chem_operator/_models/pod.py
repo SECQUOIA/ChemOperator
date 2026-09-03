@@ -10,8 +10,6 @@ import numpy as np
 import torch
 from torch.utils.data import DataLoader
 
-from chem_operator.utils import to_numpy
-
 from .deepxde import DeepXDEAdapter
 
 
@@ -212,7 +210,7 @@ def fit_incremental_pod_dataset(
         )
         try:
             return fit_incremental_pod(
-                (to_numpy(batch) for batch in loader),
+                (batch.detach().cpu().numpy() for batch in loader),
                 variance_threshold=variance_threshold,
                 n_components=candidate,
             )
@@ -220,4 +218,3 @@ def fit_incremental_pod_dataset(
             if "fit more components" not in str(error) or candidate == limit:
                 raise
             candidate = min(2 * candidate, limit)
-
