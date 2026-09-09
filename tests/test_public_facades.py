@@ -2,12 +2,13 @@
 
 import chem_operator.dataset_processing as processing
 import chem_operator.datasets as datasets
+import chem_operator.experiments as experiments
 import chem_operator.models as models
 import chem_operator.normalization as normalization
 
 
 def test_public_facade_exports_resolve() -> None:
-    for module in (processing, datasets, models, normalization):
+    for module in (processing, datasets, experiments, models, normalization):
         assert module.__all__
         for name in module.__all__:
             assert hasattr(module, name), f"{module.__name__}.{name} is missing"

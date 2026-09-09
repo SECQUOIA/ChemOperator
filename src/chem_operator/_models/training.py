@@ -32,6 +32,7 @@ def train_deeponet_lazy(
     num_workers: int = 0,
     pin_memory: bool = False,
     device: str | torch.device | None = None,
+    dtype: torch.dtype | None = None,
 ) -> tuple[torch.nn.Module, DeepONetTrainingHistory]:
     """Train a Cartesian DeepONet from lazy trajectory ``DataLoader`` batches."""
 
@@ -78,7 +79,10 @@ def train_deeponet_lazy(
         )
     else:
         model = _PODOnlyDeepONet(branch_width, pod, config)
-    model = model.to(selected_device)
+    model = model.to(
+        device=selected_device,
+        dtype=torch.get_default_dtype() if dtype is None else dtype,
+    )
     if initial_state_dict is not None:
         model.load_state_dict(initial_state_dict, strict=True)
     parameter_counts = deeponet_parameter_counts(model)
@@ -128,6 +132,18 @@ def train_deeponet_lazy(
             pin_memory=pin_memory,
             loss_name=config.loss,
         )
+        valid_relative_l2 = (
+            valid_loss
+            if config.loss == "relative_l2"
+            else _loader_loss(
+                model,
+                valid_loader,
+                device=selected_device,
+                optimizer=None,
+                pin_memory=pin_memory,
+                loss_name="relative_l2",
+            )
+        )
         is_best = valid_loss < best_valid_loss
         if is_best:
             best_valid_loss = valid_loss
@@ -146,6 +162,7 @@ def train_deeponet_lazy(
         metrics: dict[str, float | int] = {
             "train_loss": train_loss,
             "valid_loss": valid_loss,
+            "valid_relative_l2": valid_relative_l2,
             "best_valid_loss": best_valid_loss,
             "best_epoch": history.best_epoch or epoch,
             "is_best": int(is_best),

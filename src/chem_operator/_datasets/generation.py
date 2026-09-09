@@ -143,6 +143,40 @@ class SimulationDatasetGenerator:
             "valid": self.generate_split("valid", n_valid, self.seed + 1),
             "test": self.generate_split("test", n_test, self.seed + 2),
         }
+
+    def generate_missing_splits(
+        self,
+        n_cases: int = 10,
+        train_fraction: float = 0.8,
+        valid_fraction: float = 0.1,
+        test_fraction: float = 0.1,
+    ) -> dict[str, list[SimulationRecord]]:
+        """Generate only absent split files and never overwrite existing data.
+
+        The split-specific seed and case count are identical to
+        :meth:`generate_splits`, so filling in a missing split is reproducible
+        and does not require regenerating splits that are already on disk.
+        """
+        if not np.isclose(train_fraction + valid_fraction + test_fraction, 1.0):
+            raise ValueError("Split fractions must sum to 1.")
+        split_counts = {
+            "train": int(n_cases * train_fraction),
+            "valid": int(n_cases * valid_fraction),
+        }
+        split_counts["test"] = n_cases - sum(split_counts.values())
+        generated: dict[str, list[SimulationRecord]] = {}
+        for offset, split in enumerate(("train", "valid", "test")):
+            path = self.output_path / f"{self.simulator.name}_{split}.h5"
+            if path.exists():
+                continue
+            records = self.generate_split(
+                split,
+                split_counts[split],
+                self.seed + offset,
+            )
+            self.save_split(split, records, overwrite=False)
+            generated[split] = records
+        return generated
     
     def save_split(
         self,
