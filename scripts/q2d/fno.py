@@ -16,6 +16,7 @@ prediction target into the model input.
 
 from __future__ import annotations
 
+import argparse
 from collections.abc import Mapping, Sequence
 from copy import deepcopy
 from dataclasses import asdict, dataclass
@@ -50,6 +51,7 @@ from torch.utils.data import DataLoader
 
 from chem_operator.datasets import ChemOperatorDataset
 from chem_operator.example_paths import ExamplePaths
+from chem_operator.experiments import add_workflow_arguments, resolve_device
 from chem_operator.models import (
     FNOAdapter,
     FNOChannel,
@@ -83,9 +85,9 @@ FILE_STEM = "q2d_cmr"
 SEED = 42
 METRIC = "best_valid_loss"
 
-# Run-mode flags. Leave both false for tuning, training, and evaluation.
+# Deprecated import-time compatibility only. CLI workflows use parse_args().
 TRAIN_BEST_CONFIG_ONLY = False
-PLOT_SAVED_MODEL_ONLY = True
+PLOT_SAVED_MODEL_ONLY = False
 
 TUNE_SAMPLES = 25
 TUNE_EPOCHS = 30
@@ -154,6 +156,30 @@ OUTPUT_CHANNELS = (
         unit="-",
     ),
 )
+
+
+def parse_args() -> argparse.Namespace:
+    """Parse the only command-line interface used by this model script."""
+    parser = argparse.ArgumentParser(description=__doc__)
+    add_workflow_arguments(parser)
+    return parser.parse_args()
+
+
+def generate_missing_data() -> None:
+    """Create absent base Q2D splits without replacing solver output."""
+    if __package__:
+        from .generate_dataset import q2d_simulator
+    else:
+        from generate_dataset import q2d_simulator
+    from chem_operator.datasets import SimulationDatasetGenerator
+
+    generator = SimulationDatasetGenerator(q2d_simulator, PATHS.data, seed=SEED)
+    generated = generator.generate_missing_splits(n_cases=100)
+    print(
+        "Generated splits: " + ", ".join(generated)
+        if generated
+        else "All dataset splits already exist; nothing was overwritten."
+    )
 
 
 @dataclass(frozen=True)
@@ -481,7 +507,7 @@ def ray_trial(
         geometry,
     )
     try:
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        device = resolve_device("auto")
         train_model(
             config,
             train_data,
@@ -529,10 +555,8 @@ def tune_hyperparameters(
         parameterized,
         resources={"cpu": CPUS_PER_TRIAL, "gpu": GPUS_PER_TRIAL},
     )
-    run_name = time.strftime("q2d_fno_%Y%m%d_%H%M%S")
-    tuner = tune.Tuner(
-        trainable,
-        param_space={
+    run_name = "q2d_fno"
+    parameter_space = {
             "modes_z": tune.choice([4, 5, 6]),
             "modes_r": tune.choice([2, 3, 4]),
             "hidden_channels": tune.choice([16, 20, 24, 28, 32]),
@@ -541,20 +565,33 @@ def tune_hyperparameters(
             "weight_decay": tune.loguniform(1.0e-8, 1.0e-4),
             "batch_size": 2, #tune.choice([2, 4]),
             "domain_padding": tune.choice([0.0, 0.05, 0.1, 0.15]),
-        },
-        tune_config=tune.TuneConfig(
-            search_alg=search,
-            scheduler=scheduler,
-            num_samples=TUNE_SAMPLES,
-            max_concurrent_trials=MAX_CONCURRENT_TRIALS,
-            reuse_actors=False,
-        ),
-        run_config=tune.RunConfig(
-            name=run_name,
-            storage_path=str((output_dir / "ray_results").resolve()),
-            verbose=1,
-        ),
-    )
+        }
+    storage = (output_dir / "ray_results").resolve()
+    experiment = storage / run_name
+    if tune.Tuner.can_restore(str(experiment)):
+        tuner = tune.Tuner.restore(
+            str(experiment),
+            trainable=trainable,
+            resume_unfinished=True,
+            resume_errored=True,
+        )
+    else:
+        tuner = tune.Tuner(
+            trainable,
+            param_space=parameter_space,
+            tune_config=tune.TuneConfig(
+                search_alg=search,
+                scheduler=scheduler,
+                num_samples=TUNE_SAMPLES,
+                max_concurrent_trials=MAX_CONCURRENT_TRIALS,
+                reuse_actors=False,
+            ),
+            run_config=tune.RunConfig(
+                name=run_name,
+                storage_path=str(storage),
+                verbose=1,
+            ),
+        )
     results = tuner.fit()
     best = results.get_best_result(metric=METRIC, mode="min", scope="last")
     return {
