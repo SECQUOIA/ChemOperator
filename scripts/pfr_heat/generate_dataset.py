@@ -27,5 +27,5 @@ pfr_heat_simulator = PFRHeatSim(
 if __name__ == "__main__":
     paths = ExamplePaths.from_script(__file__)
     generator = SimulationDatasetGenerator(pfr_heat_simulator, paths.datasets / "pfr_heat")
-    splits = generator.generate_splits(n_cases=20)
+    splits = generator.generate_splits(n_cases=100)
     generator.save_splits(splits, overwrite=True)
