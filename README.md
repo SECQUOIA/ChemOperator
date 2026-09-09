@@ -451,6 +451,8 @@ experiment uses Hydra.
 | [`scripts/pipe_flow_transient/deeponet.py`](scripts/pipe_flow_transient/deeponet.py) | Hydra-configured pipe-flow DeepONet and physics-loss study |
 | [`scripts/pipe_flow_transient/transient_fno.py`](scripts/pipe_flow_transient/transient_fno.py) | Neuraloperator FNO tuning, training, evaluation, checkpointing, and plots |
 | [`scripts/pipe_flow_transient/transient_nemo_fno.py`](scripts/pipe_flow_transient/transient_nemo_fno.py) | PhysicsNeMo transient pipe-flow FNO workflow |
+| [`scripts/q2d/generate_dataset.py`](scripts/q2d/generate_dataset.py) | Quasi-2D CMR dataset generation and disabled mesh-resolution sweep |
+| [`scripts/q2d/validate_solver.py`](scripts/q2d/validate_solver.py) | Bundled-reference and Docker-backed Q2D validation plots |
 | [`scripts/q2d/fno.py`](scripts/q2d/fno.py) | Quasi-2D FNO training, superresolution, and break-even analysis |
 | [`scripts/diagnostics/processing.py`](scripts/diagnostics/processing.py) | Visual smoke test for preprocessing and inverse reconstruction |
 
@@ -461,6 +463,7 @@ uv run python scripts/cstr/deeponet.py
 uv run python scripts/cstr/plot_deeponet.py
 uv run python scripts/pipe_flow_transient/transient_fno.py
 uv run python scripts/pipe_flow_transient/deeponet.py final.epochs=5
+uv run python scripts/q2d/validate_solver.py
 ```
 
 The CSTR, PFR-chain, and packed-bed DeepONet trainers do not import plotting
@@ -506,6 +509,23 @@ simulator = CMRSim(
     use_reference_if_no_solver=False,
     keep_case_dirs=True,
 )
+```
+
+Generate the base Q2D dataset with the same simulator configuration used by
+the FNO experiment:
+
+```bash
+uv run python scripts/q2d/generate_dataset.py
+```
+
+The mesh-resolution sweep in that script is retained behind an `if False`
+guard. The base generator and the sweep require the Docker image. Bundled
+tutorial outputs can be checked without Docker; pass `--radial-grid` to run
+the Docker-backed validation cases instead:
+
+```bash
+uv run python scripts/q2d/validate_solver.py
+uv run python scripts/q2d/validate_solver.py --radial-grid --lumen-points 3
 ```
 
 Alternatively, set `CHEM_OPERATOR_Q2D_SOLVER_COMMAND`. The command may contain
@@ -589,6 +609,7 @@ Run the test suite:
 
 ```bash
 uv run pytest -v
+pytest --cov=chem_operator
 ```
 
 Run one module or one test:
@@ -614,6 +635,7 @@ uv run pyreverse -o png -p ChemOperator src/chem_operator
 Tests cover the analytical solutions, HDF5 round trips, Cantera tutorial
 comparisons, non-isothermal reactor behavior, PhysicsNeMo residuals, FNO
 normalization across resolutions, and a CPU FNO training smoke test.
+
 
 ## Current limitations and roadmap
 
