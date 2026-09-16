@@ -24,8 +24,16 @@ pfr_heat_simulator = PFRHeatSim(
     }
 )
 
-if __name__ == "__main__":
+def generate_dataset(n_cases: int = 1000) -> None:
+    """Generate and overwrite all dataset splits."""
     paths = ExamplePaths.from_script(__file__)
-    generator = SimulationDatasetGenerator(pfr_heat_simulator, paths.datasets / "pfr_heat")
-    splits = generator.generate_splits(n_cases=100)
+    generator = SimulationDatasetGenerator(
+        pfr_heat_simulator,
+        paths.datasets / "pfr_heat",
+    )
+    splits = generator.generate_splits(n_cases=n_cases)
     generator.save_splits(splits, overwrite=True)
+
+
+if __name__ == "__main__":
+    generate_dataset()
