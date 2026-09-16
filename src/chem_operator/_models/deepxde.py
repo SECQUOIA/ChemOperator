@@ -10,12 +10,12 @@ import torch
 from torch.utils.data import Dataset
 
 from chem_operator.dataset_processing import DataProcessor
-from .arrays import OperatorArrays, _Trajectory
+from .arrays import OperatorArrays, ReferenceSample, _Trajectory
 from .deepxde_geometry import ArrayTransform, DeepXDEFormat
 
 
-class DeepXDEAdapter(Dataset):
-    """Adapt processed trajectories to DeepXDE operator-data layouts.
+class DeepONetAdapter(Dataset):
+    """Adapt processed trajectories to DeepONet operator-data layouts.
 
     Parameters
     ----------
@@ -39,6 +39,10 @@ class DeepXDEAdapter(Dataset):
         ``ChemOperatorDataset``; subsequent coordinates must be leading feature
         dimensions of every packed output field. ``coordinate_name`` remains
         the one-dimensional shorthand.
+    include_input_state:
+        Include the final processed input state in the branch vector. Set this
+        to false for parameter-to-field operators whose branch uses constants
+        only.
     """
 
     def __init__(
@@ -50,6 +54,7 @@ class DeepXDEAdapter(Dataset):
         coordinate_name: str | None = None,
         coordinate_names: Sequence[str] | None = None,
         include_constants: bool = False,
+        include_input_state: bool = True,
         include_initial: bool = True,
         resample_points: int | None = None,
         coordinate_mode: Literal["physical", "relative"] = "physical",
@@ -92,7 +97,7 @@ class DeepXDEAdapter(Dataset):
             raise ValueError("max_trajectories must be positive.")
         if processor.target_transform.is_delta:
             raise ValueError(
-                "DeepXDEAdapter requires state targets; configure "
+                "DeepONetAdapter requires state targets; configure "
                 "TargetTransformConfig(mode='state')."
             )
 
@@ -107,6 +112,7 @@ class DeepXDEAdapter(Dataset):
             else None
         )
         self.include_constants = include_constants
+        self.include_input_state = include_input_state
         self.include_initial = include_initial
         self.resample_points = resample_points
         self.coordinate_mode = coordinate_mode
@@ -124,6 +130,20 @@ class DeepXDEAdapter(Dataset):
 
     def __len__(self) -> int:
         return len(self.indices)
+
+    def checkpoint_config(self) -> dict[str, Any]:
+        """Return the JSON-compatible model-data interface definition."""
+        return {
+            "format": self.format,
+            "coordinate_names": list(self.coordinate_names),
+            "include_constants": self.include_constants,
+            "include_input_state": self.include_input_state,
+            "include_initial": self.include_initial,
+            "resample_points": self.resample_points,
+            "coordinate_mode": self.coordinate_mode,
+            "max_trajectories": len(self.indices),
+            "dtype": self.dtype.name,
+        }
 
     def __getitem__(self, position: int) -> dict[str, Any]:
         """Load and process exactly one trajectory for a ``DataLoader``."""
@@ -143,6 +163,44 @@ class DeepXDEAdapter(Dataset):
             "coordinate": torch.from_numpy(item.coordinate),
             "labels": item.labels,
         }
+
+    def reference_item(self, position: int) -> ReferenceSample:
+        """Return the physical target in the shared point/channel layout."""
+        item = self._load_trajectory(self.indices[position])
+        if self.resample_points is not None:
+            item = self._resample([item])[0][0]
+        values = torch.from_numpy(item.target).reshape(-1, len(item.labels))
+        normalization = self.processor.normalization_config
+        if normalization.enabled:
+            initial_points = 0
+            if self.include_initial:
+                initial_points = int(np.prod(item.model_input.shape[1:-1]) or 1)
+                if normalization.normalize_inputs:
+                    values[:initial_points] = (
+                        self.processor.normalizer.denormalize_flattened(
+                            values[:initial_points], "variable"
+                        )
+                    )
+            if normalization.normalize_targets:
+                values[initial_points:] = (
+                    self.processor.normalizer.denormalize_flattened(
+                        values[initial_points:], "variable"
+                    )
+                )
+        coordinate = torch.from_numpy(item.coordinate)
+        coordinates = (
+            coordinate.reshape(-1, 1)
+            if coordinate.ndim == 1
+            else coordinate.reshape(-1, coordinate.shape[-1])
+        )
+        case_id = item.metadata.get("record_idx", self.indices[position])
+        return ReferenceSample(
+            case_id=case_id,
+            coordinates=coordinates,
+            values=values,
+            labels=item.labels,
+            metadata=item.metadata,
+        )
 
     @staticmethod
     def _numpy(tensor: torch.Tensor) -> np.ndarray:
@@ -174,7 +232,7 @@ class DeepXDEAdapter(Dataset):
             raise KeyError(
                 f"Coordinate {name!r} is absent from {window}_coordinates."
             )
-        value = DeepXDEAdapter._numpy(coordinates[name]).reshape(-1)
+        value = DeepONetAdapter._numpy(coordinates[name]).reshape(-1)
         if value.size == 0:
             raise ValueError(f"Coordinate {name!r} has no points.")
         return value
@@ -309,9 +367,18 @@ class DeepXDEAdapter(Dataset):
         x = self._numpy(packer.to_channel_last(processed["x"]))
         y = self._numpy(packer.to_channel_last(processed["y"]))
         constants = self._numpy(processed["constants"]).reshape(-1)
-        branch = x[-1].reshape(-1)
+        branch = (
+            x[-1].reshape(-1)
+            if self.include_input_state
+            else np.empty(0, dtype=self.dtype)
+        )
         if self.include_constants and constants.size:
             branch = np.concatenate((branch, constants))
+        if not branch.size:
+            raise ValueError(
+                "DeepONet branch input is empty; enable the input state or "
+                "include at least one constant."
+            )
 
         vectors = self._coordinate_vectors(processed, y.shape[0])
         secondary_shape = tuple(vector.size for vector in vectors[1:])
@@ -497,7 +564,7 @@ class DeepXDEAdapter(Dataset):
 
     def to_deepxde_data(
         self,
-        validation: "DeepXDEAdapter",
+        validation: "DeepONetAdapter",
         *,
         train_targets: np.ndarray | None = None,
         validation_targets: np.ndarray | None = None,
@@ -523,3 +590,7 @@ class DeepXDEAdapter(Dataset):
         if self.format == "cartesian_product":
             return dde.data.TripleCartesianProd(train_x, train_y, valid_x, valid_y)
         return dde.data.Triple(train_x, train_y, valid_x, valid_y)
+
+
+# Compatibility name retained for callers that still describe the backend.
+DeepXDEAdapter = DeepONetAdapter

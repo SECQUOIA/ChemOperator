@@ -2,7 +2,8 @@
 
 from chem_operator._models.adapters import (AutoencoderAdapter,
                                             NeuralOperatorAdapter)
-from chem_operator._models.arrays import FNOChannel, OperatorArrays
+from chem_operator._models.arrays import (FNOChannel, ModelDataAdapter,
+                                          OperatorArrays, ReferenceSample)
 from chem_operator._models.deeponet import (CheckpointCallback,
                                             CoordinateScaler,
                                             DeepONetTrainingConfig,
@@ -10,7 +11,7 @@ from chem_operator._models.deeponet import (CheckpointCallback,
                                             deeponet_parameter_counts,
                                             make_deeponet_dataloader,
                                             relative_l2_loss)
-from chem_operator._models.deepxde import DeepXDEAdapter
+from chem_operator._models.deepxde import DeepONetAdapter, DeepXDEAdapter
 from chem_operator._models.deeponet_comparison import (
     DeepONetComparisonResult,
     run_deeponet_comparison,
@@ -33,6 +34,7 @@ __all__ = [
     "CoordinateScaler",
     "CompositeLossTrainer",
     "DeepONetTrainer",
+    "DeepONetAdapter",
     "DeepONetComparisonResult",
     "DeepONetTrainingConfig",
     "DeepONetTrainingHistory",
@@ -42,8 +44,10 @@ __all__ = [
     "FNOTrainer",
     "LossTerm",
     "NeuralOperatorAdapter",
+    "ModelDataAdapter",
     "OperatorArrays",
     "PODTransform",
+    "ReferenceSample",
     "deeponet_parameter_counts",
     "fit_incremental_pod",
     "fit_incremental_pod_dataset",

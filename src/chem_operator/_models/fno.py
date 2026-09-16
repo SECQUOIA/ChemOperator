@@ -11,7 +11,7 @@ from torch.utils.data import Dataset
 
 from chem_operator.normalization import ZScoreNormalizer
 
-from .arrays import FNOChannel
+from .arrays import FNOChannel, ReferenceSample
 
 
 class FNOAdapter(Dataset):
@@ -347,6 +347,31 @@ class FNOAdapter(Dataset):
             **dict(zip(self.coordinate_names, coordinates)),
             "metadata": sample.get("metadata", {}),
         }
+
+    def reference_item(self, index: int) -> ReferenceSample:
+        """Return the physical target in the shared point/channel layout."""
+        physical = self.physical_item(index)
+        coordinate_mesh = torch.meshgrid(
+            *(physical[name] for name in self.coordinate_names),
+            indexing="ij",
+        )
+        coordinates = torch.stack(coordinate_mesh, dim=-1).reshape(
+            -1,
+            len(self.coordinate_names),
+        )
+        values = physical["y"].movedim(0, -1).reshape(
+            -1,
+            len(self.output_channels),
+        )
+        metadata = physical["metadata"]
+        case_id = metadata.get("record_idx", index)
+        return ReferenceSample(
+            case_id=case_id,
+            coordinates=coordinates,
+            values=values,
+            labels=tuple(channel.label for channel in self.output_channels),
+            metadata=metadata,
+        )
 
     def __getitem__(self, index: int) -> dict[str, Any]:
         physical = self.physical_item(index)

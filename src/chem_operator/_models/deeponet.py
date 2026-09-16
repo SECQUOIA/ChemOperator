@@ -11,7 +11,7 @@ import numpy as np
 import torch
 from torch.utils.data import DataLoader
 
-from .deepxde import DeepXDEAdapter
+from .deepxde import DeepONetAdapter
 from .pod import PODTransform
 
 
@@ -234,7 +234,7 @@ def collate_deeponet_trajectories(
 
 
 def make_deeponet_dataloader(
-    dataset: DeepXDEAdapter,
+    dataset: DeepONetAdapter,
     *,
     batch_size: int,
     shuffle: bool,

@@ -22,7 +22,7 @@ from .deeponet import (
     deeponet_parameter_counts,
     make_deeponet_dataloader,
 )
-from .deepxde import DeepXDEAdapter
+from .deepxde import DeepONetAdapter
 from .pod import PODTransform, fit_incremental_pod_dataset
 from .training import train_deeponet_lazy
 
@@ -96,9 +96,9 @@ def _numpy(value: Any) -> np.ndarray:
 
 
 def run_deeponet_comparison(
-    train: DeepXDEAdapter,
-    validation: DeepXDEAdapter,
-    test: DeepXDEAdapter,
+    train: DeepONetAdapter,
+    validation: DeepONetAdapter,
+    test: DeepONetAdapter,
     normalizer: Normalizer,
     *,
     direct_config: DeepONetTrainingConfig,

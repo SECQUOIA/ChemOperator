@@ -4,12 +4,58 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Any, Literal
+from typing import Any, Literal, Protocol, runtime_checkable
 
 import numpy as np
+import torch
 
 ChannelAxis = Literal["first", "last"]
 FNOChannelSource = Literal["parameter", "constant", "field", "species"]
+
+
+@dataclass(frozen=True)
+class ReferenceSample:
+    """One model-independent physical reference case.
+
+    Coordinates are stored as ``(points, dimensions)`` and values as
+    ``(points, channels)``. Model adapters may expose any layout from
+    ``__getitem__``; this record is solely for common evaluation and
+    comparison code.
+    """
+
+    case_id: str | int
+    coordinates: torch.Tensor
+    values: torch.Tensor
+    labels: tuple[str, ...]
+    metadata: Mapping[str, Any]
+
+    def __post_init__(self) -> None:
+        if self.coordinates.ndim != 2:
+            raise ValueError("Reference coordinates must have shape (points, dimensions).")
+        if self.values.ndim != 2:
+            raise ValueError("Reference values must have shape (points, channels).")
+        if self.coordinates.shape[0] != self.values.shape[0]:
+            raise ValueError("Reference coordinate and value point counts differ.")
+        if self.values.shape[1] != len(self.labels):
+            raise ValueError("Reference labels do not match the value channels.")
+        if not torch.isfinite(self.coordinates).all() or not torch.isfinite(
+            self.values
+        ).all():
+            raise ValueError("Reference samples cannot contain NaN or infinity.")
+
+
+@runtime_checkable
+class ModelDataAdapter(Protocol):
+    """Common boundary implemented by model-family dataset adapters."""
+
+    def __len__(self) -> int: ...
+
+    def __getitem__(self, index: int) -> Mapping[str, Any]: ...
+
+    def reference_item(self, index: int) -> ReferenceSample: ...
+
+    def checkpoint_config(self) -> Mapping[str, Any]: ...
+
 
 @dataclass(frozen=True)
 class FNOChannel:
@@ -92,4 +138,3 @@ class _Trajectory:
     labels: tuple[str, ...]
     constant_labels: tuple[str, ...]
     metadata: Mapping[str, Any]
-
