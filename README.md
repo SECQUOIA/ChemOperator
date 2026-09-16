@@ -545,7 +545,7 @@ from chem_operator.datasets import CaseParameters, SimulationRecord
 from chem_operator.sampling import ParameterSpec
 
 
-class MySimulator:
+class MySim:
     name = "my_simulator"
 
     def __init__(self, parameter_space):
