@@ -1,6 +1,7 @@
-"""Tune and train a direct DeepONet for steady pipe-flow profiles."""
+"""Tune and train a POD-DeepONet for PFR-chain trajectories."""
 
 from functools import partial
+import gc
 from typing import Any
 
 from common import (
@@ -11,10 +12,13 @@ from common import (
     PROBLEM_ID,
     RECONSTRUCTION_CASES,
     SEED,
+    adapter,
     experiment_spec,
     final_data,
+    limited,
     parse_args,
     prepare_normalizer,
+    raw_dataset,
     tuning_data,
     tuning_settings,
     validate_stages,
@@ -30,25 +34,42 @@ from chem_operator.experiments import (
     evaluate_deeponet,
     run_context_from_namespace,
 )
+from chem_operator.models import PODTransform, fit_incremental_pod_dataset
+from chem_operator.normalization import ZScoreNormalizer
 
 
-MODEL_ID = "deeponet"
+MODEL_ID = "pod_deeponet"
+POD_VARIANCE_THRESHOLD = 0.9995
 
 
-def search_space() -> dict[str, Any]:
+def search_space(pod_components: int) -> dict[str, Any]:
     return {
         "loss": "relative_l2",
-        "width": tune.choice([64, 128]),
-        "latent_width": tune.choice([16, 32]),
-        "branch_hidden_layers": tune.choice([2, 3]),
-        "trunk_hidden_layers": tune.choice([2, 3]),
+        "width": tune.choice([512, 768, 1024, 1280]),
+        "latent_width": pod_components,
+        "branch_hidden_layers": tune.choice([2, 3, 4]),
+        "trunk_hidden_layers": 0,
         "activation": tune.choice(["gelu", "tanh"]),
-        "learning_rate": tune.loguniform(1.0e-4, 3.0e-3),
-        "weight_decay": tune.loguniform(1.0e-8, 1.0e-4),
-        "batch_size": tune.choice([64, 128]),
+        "learning_rate": tune.loguniform(5e-4, 5e-3),
+        "weight_decay": tune.loguniform(1e-6, 1e-4),
+        "batch_size": 16,
         "epochs": MAX_EPOCHS,
         "seed": SEED,
     }
+
+
+def prepare_pod(normalizer: ZScoreNormalizer) -> PODTransform:
+    raw = raw_dataset("train")
+    try:
+        pod = fit_incremental_pod_dataset(
+            adapter(limited(raw), normalizer),
+            variance_threshold=POD_VARIANCE_THRESHOLD,
+            num_workers=DATALOADER_WORKERS,
+        )
+    finally:
+        raw.close()
+    gc.collect()
+    return pod
 
 
 def main() -> None:
@@ -56,6 +77,7 @@ def main() -> None:
     stages = WorkflowStages.from_namespace(args)
     validate_stages(stages)
     normalizer = prepare_normalizer()
+    pod = prepare_pod(normalizer)
     context = run_context_from_namespace(
         args, problem=PROBLEM_ID, model=MODEL_ID, seed=SEED
     )
@@ -67,8 +89,8 @@ def main() -> None:
         PATHS.ray.mkdir(parents=True, exist_ok=True)
         tuning = runner.tune(
             deeponet_tuner(
-                search_space=search_space(),
-                pod=None,
+                search_space=search_space(pod.n_components),
+                pod=pod,
                 dataset_factory=partial(tuning_data, normalizer=normalizer),
                 context=context,
                 settings=tuning_settings(),
@@ -89,6 +111,7 @@ def main() -> None:
         )
         trainer = DeepONetTrainer(
             deeponet_training_config(config, epoch_multiplier=2.0),
+            pod=pod,
             num_workers=DATALOADER_WORKERS,
             pin_memory=PIN_MEMORY,
             checkpoint_metadata={"normalizer": normalizer.state_dict()},
