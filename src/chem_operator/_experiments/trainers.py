@@ -34,9 +34,14 @@ from .types import RunContext, TrainingOutcome
 Reporter = Callable[[Mapping[str, float | int]], None]
 BatchAdapter = Callable[
     [Any, torch.device, torch.dtype],
-    tuple[Any, torch.Tensor, Mapping[str, Any]],
+    tuple[Any, Any, Mapping[str, Any]],
 ]
-LossFunction = Callable[[torch.Tensor, torch.Tensor, Mapping[str, Any]], torch.Tensor]
+LossFunction = Callable[[Any, Any, Mapping[str, Any]], torch.Tensor]
+MetricAdapter = Callable[
+    [Any, Any, Mapping[str, Any]],
+    tuple[torch.Tensor | np.ndarray, torch.Tensor | np.ndarray],
+]
+BatchSize = Callable[[Any, Mapping[str, Any]], int]
 
 
 def count_parameters(model: torch.nn.Module) -> int:
@@ -101,6 +106,7 @@ class DeepONetTrainer:
         num_workers: int = 0,
         pin_memory: bool = False,
         reporter: Reporter | None = None,
+        checkpoint_metadata: Mapping[str, Any] | None = None,
     ) -> None:
         self.config = config
         self.coordinate_scaler = coordinate_scaler
@@ -110,6 +116,7 @@ class DeepONetTrainer:
         self.num_workers = num_workers
         self.pin_memory = pin_memory
         self.reporter = reporter
+        self.checkpoint_metadata = dict(checkpoint_metadata or {})
         self.model: torch.nn.Module | None = None
         self._architecture: dict[str, int] | None = None
         self._history: tuple[MetricEvent, ...] = ()
@@ -268,6 +275,7 @@ class DeepONetTrainer:
                 "span": torch.as_tensor(self.coordinate_scaler.span),
             },
             "pod": pod_state,
+            "metadata": self.checkpoint_metadata,
             "state_dict": _cpu_state_dict(self.model),
         }
         return _atomic_torch_save(payload, path)
@@ -281,6 +289,7 @@ class DeepONetTrainer:
             span=_numpy(scaler["span"]),
         )
         self.pod = _pod_from_state(payload.get("pod"))
+        self.checkpoint_metadata = dict(payload.get("metadata", {}))
         self._architecture = {
             name: int(value) for name, value in payload["architecture"].items()
         }
@@ -383,6 +392,101 @@ def default_fno_batch_adapter(
     return inputs, target, moved
 
 
+def default_metric_adapter(
+    prediction: Any,
+    target: Any,
+    batch: Mapping[str, Any],
+) -> tuple[torch.Tensor | np.ndarray, torch.Tensor | np.ndarray]:
+    """Select tensor predictions and targets for shared regression metrics."""
+    del batch
+    if not isinstance(prediction, (torch.Tensor, np.ndarray)) or not isinstance(
+        target, (torch.Tensor, np.ndarray)
+    ):
+        raise TypeError(
+            "Non-tensor outputs require an explicit metric_adapter that returns "
+            "physical prediction and target tensors."
+        )
+    return prediction, target
+
+
+def default_batch_size(target: Any, batch: Mapping[str, Any]) -> int:
+    """Infer a batch dimension from the first tensor-like target value."""
+    del batch
+    leaf = _first_tensor(target)
+    if leaf.ndim == 0:
+        raise ValueError("A target tensor must include a batch dimension.")
+    return int(leaf.shape[0])
+
+
+def _first_tensor(value: Any) -> torch.Tensor | np.ndarray:
+    if isinstance(value, (torch.Tensor, np.ndarray)):
+        return value
+    if isinstance(value, Mapping):
+        for item in value.values():
+            try:
+                return _first_tensor(item)
+            except TypeError:
+                continue
+    elif isinstance(value, (tuple, list)):
+        for item in value:
+            try:
+                return _first_tensor(item)
+            except TypeError:
+                continue
+    raise TypeError("No tensor-like value was found.")
+
+
+def _call_model(model: torch.nn.Module, inputs: Any) -> Any:
+    if isinstance(inputs, tuple):
+        return model(*inputs)
+    if isinstance(inputs, Mapping):
+        return model(**inputs)
+    return model(inputs)
+
+
+def _detach_cpu(value: Any) -> Any:
+    if isinstance(value, torch.Tensor):
+        return value.detach().cpu()
+    if isinstance(value, Mapping):
+        return {name: _detach_cpu(item) for name, item in value.items()}
+    if isinstance(value, tuple):
+        return tuple(_detach_cpu(item) for item in value)
+    if isinstance(value, list):
+        return [_detach_cpu(item) for item in value]
+    raise TypeError(
+        "FNO predictions must be tensors or nested mappings/sequences of tensors."
+    )
+
+
+def _concatenate_batches(values: Sequence[Any]) -> Any:
+    first = values[0]
+    if isinstance(first, torch.Tensor):
+        return torch.cat(values)
+    if isinstance(first, Mapping):
+        keys = tuple(first)
+        if any(tuple(value) != keys for value in values):
+            raise ValueError("Prediction mappings have inconsistent keys.")
+        return {
+            name: _concatenate_batches([value[name] for value in values])
+            for name in keys
+        }
+    if isinstance(first, tuple):
+        if any(len(value) != len(first) for value in values):
+            raise ValueError("Prediction tuples have inconsistent lengths.")
+        return tuple(
+            _concatenate_batches([value[index] for value in values])
+            for index in range(len(first))
+        )
+    if isinstance(first, list):
+        if any(len(value) != len(first) for value in values):
+            raise ValueError("Prediction lists have inconsistent lengths.")
+        return [
+            _concatenate_batches([value[index] for value in values])
+            for index in range(len(first))
+        ]
+    raise TypeError(f"Cannot concatenate prediction type {type(first).__name__}.")
+
+
 class FNOTrainer:
     """Model-factory-driven FNO trainer with optional composite loss terms."""
 
@@ -395,12 +499,16 @@ class FNOTrainer:
         *,
         loss_terms: Sequence[LossTerm] | None = None,
         batch_adapter: BatchAdapter = default_fno_batch_adapter,
-        prediction_transform: Callable[[torch.Tensor], torch.Tensor] | None = None,
-        target_transform: Callable[[torch.Tensor], torch.Tensor] | None = None,
+        prediction_transform: Callable[[Any], Any] | None = None,
+        target_transform: Callable[[Any], Any] | None = None,
+        metric_adapter: MetricAdapter = default_metric_adapter,
+        batch_size: BatchSize = default_batch_size,
+        selection_metric: str = "relative_l2",
         early_stopping_patience: int | None = None,
         num_workers: int = 0,
         pin_memory: bool = False,
         reporter: Reporter | None = None,
+        checkpoint_metadata: Mapping[str, Any] | None = None,
     ) -> None:
         self.model_factory = model_factory
         self.config = dict(config)
@@ -414,10 +522,16 @@ class FNOTrainer:
         self.batch_adapter = batch_adapter
         self.prediction_transform = prediction_transform
         self.target_transform = target_transform
+        self.metric_adapter = metric_adapter
+        self.batch_size = batch_size
+        if not selection_metric:
+            raise ValueError("selection_metric must be non-empty.")
+        self.selection_metric = selection_metric
         self.early_stopping_patience = early_stopping_patience
         self.num_workers = num_workers
         self.pin_memory = pin_memory
         self.reporter = reporter
+        self.checkpoint_metadata = dict(checkpoint_metadata or {})
         self.model: torch.nn.Module | None = None
         self._history: tuple[MetricEvent, ...] = ()
 
@@ -478,7 +592,12 @@ class FNOTrainer:
                 history.record(epoch, "train", name, value)
             for name, value in validation_metrics.items():
                 history.record(epoch, "val", name, value)
-            selected = validation_metrics["relative_l2"]
+            if self.selection_metric not in validation_metrics:
+                raise KeyError(
+                    f"Validation metrics do not contain selection metric "
+                    f"{self.selection_metric!r}."
+                )
+            selected = validation_metrics[self.selection_metric]
             is_best = selected < best_metric
             if is_best:
                 best_metric = selected
@@ -491,12 +610,14 @@ class FNOTrainer:
                 "epoch": epoch,
                 "train_objective": train_metrics["objective"],
                 "valid_objective": validation_metrics["objective"],
-                "valid_relative_l2": selected,
-                "best_valid_relative_l2": best_metric,
+                f"valid_{self.selection_metric}": selected,
+                f"best_valid_{self.selection_metric}": best_metric,
                 "best_epoch": best_epoch,
                 "is_best": int(is_best),
                 "n_params": count_parameters(model),
             }
+            if "relative_l2" in validation_metrics:
+                report["valid_relative_l2"] = validation_metrics["relative_l2"]
             if self.reporter is not None:
                 self.reporter(report)
             if (
@@ -527,9 +648,10 @@ class FNOTrainer:
                 "n_params": count_parameters(self.model),
                 "config": dict(self.config),
                 "loss_terms": [term.name for term in self.loss_terms],
+                "selection_metric": self.selection_metric,
                 "checkpoint_reload_verified": True,
             },
-            metrics={"validation_relative_l2": best_metric},
+            metrics={f"validation_{self.selection_metric}": best_metric},
         )
 
     def _epoch(
@@ -554,9 +676,9 @@ class FNOTrainer:
                 inputs, target, batch = self.batch_adapter(raw_batch, device, dtype)
                 if optimizer is not None:
                     optimizer.zero_grad(set_to_none=True)
-                prediction = self.model(inputs)
-                count = int(target.shape[0])
-                objective = prediction.new_zeros(())
+                prediction = _call_model(self.model, inputs)
+                count = self.batch_size(target, batch)
+                objective = _first_tensor(prediction).new_zeros(())
                 for term in self.loss_terms:
                     value = term.function(prediction, target, batch)
                     if value.ndim != 0:
@@ -577,6 +699,11 @@ class FNOTrainer:
                     target
                     if self.target_transform is None
                     else self.target_transform(target)
+                )
+                metric_prediction, metric_target = self.metric_adapter(
+                    metric_prediction,
+                    metric_target,
+                    batch,
                 )
                 shared.update(metric_prediction, metric_target)
         if samples == 0:
@@ -607,7 +734,7 @@ class FNOTrainer:
             generator=torch.Generator(device="cpu").manual_seed(seed),
         )
 
-    def predict(self, data: Any, context: RunContext) -> torch.Tensor:
+    def predict(self, data: Any, context: RunContext) -> Any:
         if self.model is None:
             raise RuntimeError("Fit or load an FNO checkpoint before prediction.")
         device = resolve_device(context.device)
@@ -618,14 +745,14 @@ class FNOTrainer:
             shuffle=False,
             seed=context.seed,
         )
-        predictions: list[torch.Tensor] = []
+        predictions: list[Any] = []
         with torch.no_grad():
             for raw_batch in loader:
                 inputs, _, _ = self.batch_adapter(raw_batch, device, context.dtype)
-                predictions.append(self.model(inputs).detach().cpu())
+                predictions.append(_detach_cpu(_call_model(self.model, inputs)))
         if not predictions:
             raise RuntimeError("Prediction loader produced no batches.")
-        return torch.cat(predictions)
+        return _concatenate_batches(predictions)
 
     def save_checkpoint(self, path: str | Path) -> Path:
         if self.model is None:
@@ -635,6 +762,7 @@ class FNOTrainer:
                 "checkpoint_version": self.CHECKPOINT_VERSION,
                 "trainer": "fno",
                 "config": dict(self.config),
+                "metadata": self.checkpoint_metadata,
                 "state_dict": _cpu_state_dict(self.model),
             },
             path,
@@ -643,6 +771,7 @@ class FNOTrainer:
     def load_checkpoint(self, path: str | Path, context: RunContext) -> None:
         payload = torch.load(path, map_location="cpu", weights_only=True)
         self.config = dict(payload["config"])
+        self.checkpoint_metadata = dict(payload.get("metadata", {}))
         self.model = self._model_from_payload(
             payload,
             device=resolve_device(context.device),
