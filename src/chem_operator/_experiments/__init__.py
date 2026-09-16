@@ -11,36 +11,60 @@ from .artifacts import (
     validate_manifest,
 )
 from .comparison import (
+    ComparisonRecord,
     ComparisonSeries,
     RunArtifacts,
+    comparison_records,
     final_metrics,
     load_run,
+    metric_matrix,
     read_best_config,
     read_reconstructions,
     shared_history,
+    validate_model_comparison,
 )
 from .device import hardware_metadata, resolve_device, resolve_dtype, seed_worker
+from .deeponet_workflow import (
+    DeepONetTuningSettings,
+    deeponet_tuner,
+    run_deeponet_variant,
+)
+from .evaluation import deeponet_training_config, evaluate_deeponet
 from .metrics import History, MetricEvent, StreamingRegressionMetrics, TimingRecorder
+from .runner import ExperimentResult, ExperimentRunner, ExperimentSpec
 from .trainers import (
     CompositeLossTrainer,
     DeepONetTrainer,
     FNOTrainer,
     LossTerm,
     count_parameters,
+    default_batch_size,
     default_fno_batch_adapter,
+    default_metric_adapter,
     mse_loss_term,
 )
-from .tuning import Tuner, TuningOutcome
-from .types import RunContext, RunPaths, Trainer, TrainingOutcome
-from .workflow import WorkflowStages, add_workflow_arguments
+from .tuning import RayRuntimeConfig, Tuner, TuningConfig, TuningOutcome
+from .types import EvaluationOutcome, RunContext, RunPaths, Trainer, TrainingOutcome
+from .workflow import (
+    WorkflowStages,
+    add_run_arguments,
+    add_workflow_arguments,
+    run_context_from_namespace,
+)
 
 __all__ = [
     "ARTIFACT_SCHEMA_VERSION",
     "ArtifactStore",
     "ArtifactValidationError",
     "ComparisonSeries",
+    "ComparisonRecord",
     "CompositeLossTrainer",
     "DeepONetTrainer",
+    "DeepONetTuningSettings",
+    "EvaluationOutcome",
+    "ExperimentResult",
+    "ExperimentRunner",
+    "ExperimentSpec",
     "FNOTrainer",
     "History",
     "LossTerm",
@@ -48,29 +72,42 @@ __all__ = [
     "RunArtifacts",
     "RunContext",
     "RunPaths",
+    "RayRuntimeConfig",
     "StreamingRegressionMetrics",
     "TimingRecorder",
     "Trainer",
     "TrainingOutcome",
     "Tuner",
+    "TuningConfig",
     "TuningOutcome",
     "WorkflowStages",
     "add_workflow_arguments",
+    "add_run_arguments",
     "build_manifest",
     "count_parameters",
+    "comparison_records",
+    "default_batch_size",
     "default_fno_batch_adapter",
+    "default_metric_adapter",
+    "deeponet_training_config",
+    "deeponet_tuner",
     "dependency_lock_hash",
     "final_metrics",
     "fingerprint_path",
+    "evaluate_deeponet",
     "git_provenance",
     "hardware_metadata",
     "load_run",
+    "metric_matrix",
     "mse_loss_term",
     "read_best_config",
     "read_reconstructions",
     "resolve_device",
     "resolve_dtype",
+    "run_context_from_namespace",
+    "run_deeponet_variant",
     "seed_worker",
     "shared_history",
+    "validate_model_comparison",
     "validate_manifest",
 ]

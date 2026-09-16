@@ -14,15 +14,22 @@ from torch.utils.data import Dataset
 from chem_operator.experiments import (
     ArtifactStore,
     ArtifactValidationError,
+    EvaluationOutcome,
+    ExperimentRunner,
+    ExperimentSpec,
     FNOTrainer,
+    LossTerm,
     MetricEvent,
     RunContext,
     StreamingRegressionMetrics,
     Trainer,
     WorkflowStages,
     build_manifest,
+    comparison_records,
     load_run,
+    metric_matrix,
     shared_history,
+    validate_model_comparison,
 )
 
 
@@ -185,3 +192,126 @@ def test_fno_trainer_implements_contract_and_verifies_checkpoint(
 def test_workflow_stages_reject_invalid_plot_count() -> None:
     with pytest.raises(ValueError, match="plot_cases"):
         WorkflowStages(plot_cases=0)
+
+
+def test_experiment_runner_publishes_complete_run(tmp_path: Path) -> None:
+    run_context = context(tmp_path, "fno")
+    spec = ExperimentSpec(
+        problem_id="synthetic",
+        model_id="fno",
+        benchmark_protocol_id="test-v1",
+        dataset_fingerprints={
+            "train": "sha256:train",
+            "validation": "sha256:validation",
+            "test": "sha256:test",
+        },
+        fields=("temperature",),
+        channels=("temperature",),
+        units={"temperature": "K"},
+        coordinates=("x", "y"),
+        selected_test_case_ids=(0,),
+        tuning_budget={"samples": 0, "epochs": 1},
+        project_root=tmp_path,
+    )
+    trainer = FNOTrainer(
+        lambda config: torch.nn.Conv2d(1, 1, kernel_size=1),
+        {"epochs": 1, "batch_size": 2, "learning_rate": 1.0e-2},
+    )
+
+    def evaluate(trained, data, evaluation_context):
+        started = 0.0
+        prediction = trained.predict(data, evaluation_context).numpy()
+        reference = np.stack([data[index]["y"].numpy() for index in range(len(data))])
+        error = prediction - reference
+        return EvaluationOutcome(
+            metrics={
+                "relative_l2": float(
+                    np.linalg.norm(error) / np.linalg.norm(reference)
+                )
+            },
+            reconstructions={
+                "case_ids": np.asarray((0,)),
+                "reference": reference[:1],
+                "prediction": prediction[:1],
+            },
+            inference_seconds=started,
+        )
+
+    result = ExperimentRunner(run_context, spec).run(
+        trainer,
+        TinyFields(),
+        TinyFields(),
+        TinyFields(),
+        config=trainer.config,
+        evaluator=evaluate,
+    )
+    ArtifactStore(result.context).validate_complete()
+    loaded = load_run(result.context.paths.run_dir)
+    assert loaded.manifest["parameter_count"] == 2
+    assert loaded.metrics[0]["metric"] == "relative_l2"
+
+
+def test_fno_trainer_supports_multi_input_mapping_outputs(tmp_path: Path) -> None:
+    class PairFields(Dataset):
+        def __len__(self) -> int:
+            return 4
+
+        def __getitem__(self, index: int):
+            first = torch.full((1, 2), float(index + 1))
+            second = torch.full((1, 2), 2.0)
+            return {"first": first, "second": second, "target": first + second}
+
+    class PairModel(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.scale = torch.nn.Parameter(torch.ones(()))
+
+        def forward(self, first, second):
+            value = self.scale * (first + second)
+            return {"sum": value}
+
+    def adapt(batch, device, dtype):
+        moved = {
+            name: value.to(device=device, dtype=dtype)
+            for name, value in batch.items()
+        }
+        return (
+            (moved["first"], moved["second"]),
+            {"sum": moved["target"]},
+            moved,
+        )
+
+    def loss(prediction, target, batch):
+        del batch
+        return torch.nn.functional.mse_loss(prediction["sum"], target["sum"])
+
+    def metrics(prediction, target, batch):
+        del batch
+        return prediction["sum"], target["sum"]
+
+    trainer = FNOTrainer(
+        lambda config: PairModel(),
+        {"epochs": 1, "batch_size": 2, "learning_rate": 1.0e-2},
+        loss_terms=(LossTerm("data", loss),),
+        batch_adapter=adapt,
+        metric_adapter=metrics,
+    )
+    run_context = context(tmp_path, "pair_fno")
+    outcome = trainer.fit(PairFields(), PairFields(), run_context)
+    assert outcome.metrics["validation_relative_l2"] >= 0
+    prediction = trainer.predict(PairFields(), run_context)
+    assert prediction["sum"].shape == (4, 1, 2)
+
+
+def test_comparison_records_form_problem_by_model_matrix(tmp_path: Path) -> None:
+    direct = complete_run(tmp_path / "direct", "deeponet")
+    fno = complete_run(tmp_path / "fno", "fno")
+    records = comparison_records((direct, fno), metric="relative_l2")
+    assert {(record.problem, record.model) for record in records} == {
+        ("synthetic", "deeponet"),
+        ("synthetic", "fno"),
+    }
+    assert metric_matrix((direct, fno)) == {
+        "synthetic": {"deeponet": 0.4, "fno": 0.4}
+    }
+    assert len(validate_model_comparison((direct, fno))) == 2
