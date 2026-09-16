@@ -2,12 +2,19 @@
 
 from __future__ import annotations
 
+import os
 import time
 from collections.abc import Callable, Mapping, Sequence
 from contextlib import AbstractContextManager, nullcontext
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+
+# These experiments launch local workers in the driver's installed environment.
+# Ray's automatic uv hook otherwise copies the project and installs another
+# environment under its temporary directory. Set this before importing Ray;
+# callers can explicitly opt back in for a distributed deployment.
+os.environ.setdefault("RAY_ENABLE_UV_RUN_RUNTIME_ENV", "0")
 
 from .artifacts import ArtifactStore
 from .trainers import accepts_context
@@ -179,7 +186,6 @@ class Tuner:
         """Own the Ray lifecycle, run/resume tuning, and persist portable results."""
         import optuna
         import ray
-        from ray import train as ray_train
         from ray import tune
         from ray.tune.schedulers import ASHAScheduler
         from ray.tune.search.optuna import OptunaSearch
@@ -197,14 +203,14 @@ class Tuner:
         )
 
         def trainable(trial_config: Mapping[str, Any]) -> None:
-            trial_id = ray_train.get_context().get_trial_id() or "trial"
+            trial_id = tune.get_context().get_trial_id() or "trial"
             trial_context = context.trial(trial_id)
             reported = False
 
             def report(values: Mapping[str, float | int]) -> None:
                 nonlocal reported
                 reported = True
-                ray_train.report(_metric_payload(values, self.config.metric))
+                tune.report(_metric_payload(values, self.config.metric))
 
             datasets = (
                 nullcontext((train, validation))

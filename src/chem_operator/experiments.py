@@ -53,7 +53,6 @@ from chem_operator._experiments import (
     resolve_device,
     resolve_dtype,
     run_context_from_namespace,
-    run_deeponet_variant,
     seed_worker,
     shared_history,
     validate_model_comparison,

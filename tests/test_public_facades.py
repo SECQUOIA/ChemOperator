@@ -28,3 +28,7 @@ def test_legacy_deeponet_benchmark_exports_are_removed() -> None:
     assert not hasattr(models, "DeepONetBenchmarkConfig")
     assert not hasattr(models, "DeepONetBenchmarkResult")
     assert not hasattr(models, "run_deepxde_benchmark")
+
+
+def test_variant_specific_deeponet_runner_is_not_public() -> None:
+    assert not hasattr(experiments, "run_deeponet_variant")

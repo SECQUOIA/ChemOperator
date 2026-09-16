@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 import os
+import sys
 from pathlib import Path
 
 import torch
-from ray import tune
 
 from chem_operator.experiments import (
     RayRuntimeConfig,
@@ -15,13 +15,21 @@ from chem_operator.experiments import (
     Tuner,
     TuningConfig,
 )
-
-
-def _objective(config, _train, _validation, _context, report):
-    report({"score": abs(float(config["value"]) - 2.0)})
+from ray import tune
 
 
 def test_tuner_owns_ray_and_returns_portable_best_trial(tmp_path: Path) -> None:
+    driver_python = sys.executable
+
+    # Serialize the objective by value: pytest's test module is not an
+    # installed module on Ray workers.
+    def objective(config, _train, _validation, _context, report):
+        import ray
+
+        assert sys.executable == driver_python
+        assert "working_dir" not in ray.get_runtime_context().runtime_env
+        report({"score": abs(float(config["value"]) - 2.0)})
+
     context = RunContext(
         RunPaths(tmp_path / "run"),
         seed=7,
@@ -29,7 +37,7 @@ def test_tuner_owns_ray_and_returns_portable_best_trial(tmp_path: Path) -> None:
         device=torch.device("cpu"),
     )
     orchestrator = Tuner.from_objective(
-        _objective,
+        objective,
         {"value": tune.choice([2.0])},
         config=TuningConfig(
             metric="score",

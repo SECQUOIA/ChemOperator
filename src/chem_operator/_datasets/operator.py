@@ -39,6 +39,46 @@ class ChemOperatorDataset(
     Samples are returned as structured dictionaries of raw, unnormalized
     tensors. The file is scanned once for names and valid windows, then each
     worker opens its own HDF5 handle on demand.
+
+    Parameters
+    ----------
+    path:
+        Path to the HDF5 file produced by ``SimulationDatasetGenerator``.
+    task:
+        Sampling layout used to construct input/output pairs. Supported values
+        are ``"next_step"``, ``"rollout"``, ``"operator_pointwise"``,
+        ``"operator_cartesian"``, ``"steady_map"``, and ``"field_map"``.
+    input_fields:
+        Field names to include in each sample's ``input_fields`` mapping. By
+        default, all fields in the file are included.
+    output_fields:
+        Field names to include in each sample's ``output_fields`` mapping. By
+        default, the selected input fields are used.
+    constant_inputs:
+        Constant names to include in each sample's ``constant_inputs``
+        mapping. By default, all constants in the file are included.
+    coordinate_name:
+        Coordinate along which samples are windowed. ``"time"`` also resolves
+        to a stored ``"t"`` coordinate; a sole available coordinate is used as
+        a fallback.
+    n_steps_input:
+        Number of coordinate steps in each input window.
+    n_steps_output:
+        Number of coordinate steps in each fixed-length output window. This is
+        ignored when the selected task or ``full_trajectory_mode`` requests
+        all remaining output steps.
+    index_stride:
+        Step interval used to subsample input and output windows.
+    prediction_horizon:
+        Minimum coordinate distance from the last input step to the first
+        output step. If omitted, the first output is one ``index_stride``
+        beyond the final input index.
+    full_trajectory_mode:
+        If true, return every remaining strided output step rather than a
+        fixed-length output window.
+    dtype:
+        Optional PyTorch or NumPy dtype, or dtype name, to which every numeric
+        tensor is cast. If omitted, stored dtypes are preserved.
     """
 
     VALID_TASKS = {
