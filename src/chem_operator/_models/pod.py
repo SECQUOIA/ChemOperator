@@ -10,7 +10,7 @@ import numpy as np
 import torch
 from torch.utils.data import DataLoader
 
-from .deepxde import DeepXDEAdapter
+from .deepxde import DeepONetAdapter
 
 
 @dataclass(frozen=True)
@@ -170,7 +170,7 @@ def _collate_pod_trajectories(
 
 
 def fit_incremental_pod_dataset(
-    dataset: DeepXDEAdapter,
+    dataset: DeepONetAdapter,
     *,
     variance_threshold: float = 0.999,
     max_components: int | None = None,

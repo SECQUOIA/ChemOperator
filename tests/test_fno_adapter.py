@@ -8,6 +8,7 @@ from torch.utils.data import Dataset
 from chem_operator.models import (
     FNOAdapter,
     FNOChannel,
+    ModelDataAdapter,
     fit_fno_zscore_normalizer,
 )
 
@@ -83,6 +84,7 @@ def test_configurable_channels_and_global_normalization() -> None:
         output_channels=OUTPUT_CHANNELS,
         coordinate_names=("z", "r"),
     )
+    assert isinstance(adapter, ModelDataAdapter)
 
     item = adapter[0]
     assert item["x"].shape == (2, 3, 2)
@@ -105,6 +107,16 @@ def test_configurable_channels_and_global_normalization() -> None:
             )
         )[..., 0],
     )
+
+    reference = adapter.reference_item(0)
+    assert reference.labels == ("velocity", "X_CH4", "X_H2")
+    assert reference.coordinates.shape == (6, 2)
+    assert reference.values.shape == (6, 3)
+    torch.testing.assert_close(
+        reference.values,
+        physical["y"].movedim(0, -1).reshape(6, 3),
+    )
+    assert adapter.checkpoint_config()["coordinate_names"] == ["z", "r"]
 
 
 def test_normalizer_broadcasts_on_a_different_resolution() -> None:

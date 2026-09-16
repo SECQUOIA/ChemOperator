@@ -12,13 +12,13 @@ from .deeponet import (CheckpointCallback, CoordinateScaler,
                        MetricReporter, TensorTransform, _loader_loss, _network,
                        _PODOnlyDeepONet, deeponet_parameter_counts,
                        make_deeponet_dataloader)
-from .deepxde import DeepXDEAdapter
+from .deepxde import DeepONetAdapter
 from .pod import PODTransform
 
 
 def train_deeponet_lazy(
-    train: DeepXDEAdapter,
-    validation: DeepXDEAdapter,
+    train: DeepONetAdapter,
+    validation: DeepONetAdapter,
     *,
     config: DeepONetTrainingConfig,
     coordinate_scaler: CoordinateScaler,
@@ -200,8 +200,8 @@ def train_deeponet_lazy(
 def tune_deeponet_hyperparameters(
     config: Mapping[str, Any],
     *,
-    train: DeepXDEAdapter,
-    validation: DeepXDEAdapter,
+    train: DeepONetAdapter,
+    validation: DeepONetAdapter,
     coordinate_scaler: CoordinateScaler,
     pod: PODTransform | None = None,
     num_workers: int = 0,
