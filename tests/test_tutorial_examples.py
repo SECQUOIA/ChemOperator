@@ -6,7 +6,7 @@ import numpy as np
 from chem_operator.datasets import CaseParameters
 from chem_operator.utils import get_mechanism_file
 from chem_operator.reactors.cstr.dataset_generator import CSTRSim
-from chem_operator.reactors.packed_bed_1D.dataset_generator import PackedBed1DSimulator
+from chem_operator.reactors.packed_bed_1D.dataset_generator import PackedBed1DSim
 
 def _run_cstr_tutorial_reference(case: CaseParameters) -> tuple[float, float, np.ndarray]:
     # Cantera tutorial:
@@ -136,7 +136,7 @@ def test_packed_bed_matches_1d_packed_bed_tutorial_final_state():
             "diluent_species": "AR",
         },
     )
-    simulator = PackedBed1DSimulator()
+    simulator = PackedBed1DSim()
     record = simulator.run_case(tutorial_case)
     final_state = np.concatenate(
         [

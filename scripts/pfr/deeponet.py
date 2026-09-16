@@ -1,4 +1,4 @@
-"""Tune and train a direct DeepONet for steady pipe-flow profiles."""
+"""Tune and train a direct DeepONet for PFR-chain trajectories."""
 
 from functools import partial
 from typing import Any
@@ -38,14 +38,14 @@ MODEL_ID = "deeponet"
 def search_space() -> dict[str, Any]:
     return {
         "loss": "relative_l2",
-        "width": tune.choice([64, 128]),
-        "latent_width": tune.choice([16, 32]),
-        "branch_hidden_layers": tune.choice([2, 3]),
-        "trunk_hidden_layers": tune.choice([2, 3]),
+        "width": tune.choice([512, 768, 1024, 1280]),
+        "latent_width": 64,
+        "branch_hidden_layers": tune.choice([2, 3, 4]),
+        "trunk_hidden_layers": tune.choice([2, 3, 4]),
         "activation": tune.choice(["gelu", "tanh"]),
-        "learning_rate": tune.loguniform(1.0e-4, 3.0e-3),
-        "weight_decay": tune.loguniform(1.0e-8, 1.0e-4),
-        "batch_size": tune.choice([64, 128]),
+        "learning_rate": tune.loguniform(5e-4, 5e-3),
+        "weight_decay": tune.loguniform(1e-6, 1e-4),
+        "batch_size": 16,
         "epochs": MAX_EPOCHS,
         "seed": SEED,
     }

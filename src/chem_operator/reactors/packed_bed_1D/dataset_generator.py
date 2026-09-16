@@ -219,7 +219,7 @@ class _PackedBedModel:
         return np.array(distance), np.array(solution)
 
 
-class PackedBed1DSimulator(CaseSimulator):
+class PackedBed1DSim(CaseSimulator):
     name = "packed_bed_1d"
 
     def __init__(
