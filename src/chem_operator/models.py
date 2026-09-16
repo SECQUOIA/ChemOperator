@@ -12,11 +12,6 @@ from chem_operator._models.deeponet import (CheckpointCallback,
                                             make_deeponet_dataloader,
                                             relative_l2_loss)
 from chem_operator._models.deepxde import DeepONetAdapter, DeepXDEAdapter
-from chem_operator._models.deeponet_comparison import (
-    DeepONetComparisonResult,
-    run_deeponet_comparison,
-    save_deeponet_comparison,
-)
 from chem_operator._models.fno import FNOAdapter
 from chem_operator._models.pod import (PODTransform, fit_incremental_pod,
                                        fit_incremental_pod_dataset)
@@ -55,8 +50,6 @@ __all__ = [
     "fit_zscore_normalizer",
     "make_deeponet_dataloader",
     "relative_l2_loss",
-    "run_deeponet_comparison",
-    "save_deeponet_comparison",
     "train_deeponet_lazy",
     "tune_deeponet_hyperparameters",
 ]

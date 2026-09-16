@@ -2,28 +2,21 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
+from collections.abc import Mapping
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Any
 
 from chem_operator._models.pod import PODTransform
-from chem_operator._normalization.base import Normalizer
 
-from .artifacts import ArtifactStore
-from .evaluation import deeponet_training_config, evaluate_deeponet
-from .runner import ExperimentResult, ExperimentRunner, ExperimentSpec
+from .evaluation import deeponet_training_config
 from .trainers import DeepONetTrainer
 from .tuning import (
     DatasetPairFactory,
     RayRuntimeConfig,
     Tuner,
     TuningConfig,
-    TuningOutcome,
 )
 from .types import RunContext
-
-FinalDatasetFactory = Callable[[], Any]
 
 
 @dataclass(frozen=True, slots=True)
@@ -89,84 +82,4 @@ def deeponet_tuner(
     )
 
 
-def run_deeponet_variant(
-    *,
-    context: RunContext,
-    spec: ExperimentSpec,
-    normalizer: Normalizer,
-    pod: PODTransform | None,
-    search_space: Mapping[str, Any],
-    tuning_data: DatasetPairFactory,
-    final_data: FinalDatasetFactory,
-    tuning_settings: DeepONetTuningSettings,
-    tune: bool = True,
-    train: bool = True,
-    storage_path: str | Path | None = None,
-    epoch_multiplier: float = 2.0,
-    reconstruction_cases: int = 2,
-    num_workers: int = 0,
-    pin_memory: bool = False,
-) -> ExperimentResult | TuningOutcome | None:
-    """Tune and/or train one direct or POD-DeepONet experiment run."""
-
-    expected_pod = {"deeponet": False, "pod_deeponet": True}
-    if spec.model_id not in expected_pod:
-        raise ValueError("model_id must be 'deeponet' or 'pod_deeponet'.")
-    if (pod is not None) != expected_pod[spec.model_id]:
-        requirement = "requires" if expected_pod[spec.model_id] else "does not accept"
-        raise ValueError(f"{spec.model_id} {requirement} a POD transform.")
-    runner = ExperimentRunner(context, spec)
-    tuning: TuningOutcome | None = None
-    result: ExperimentResult | TuningOutcome | None = None
-    if tune:
-        tuning = runner.tune(
-            deeponet_tuner(
-                search_space=search_space,
-                pod=pod,
-                dataset_factory=tuning_data,
-                context=context,
-                settings=tuning_settings,
-                num_workers=num_workers,
-                pin_memory=pin_memory,
-            ),
-            None,
-            None,
-            storage_path=storage_path,
-            experiment_name=(
-                f"{spec.problem_id}_{spec.model_id}_{context.paths.run_dir.name}"
-            ),
-        )
-        result = tuning
-    if not train:
-        return result
-    config = (
-        dict(tuning.best_config)
-        if tuning is not None
-        else ArtifactStore(context).read_best_config()
-    )
-    trainer = DeepONetTrainer(
-        deeponet_training_config(config, epoch_multiplier=epoch_multiplier),
-        pod=pod,
-        num_workers=num_workers,
-        pin_memory=pin_memory,
-        checkpoint_metadata={"normalizer": normalizer.state_dict()},
-    )
-    with final_data() as (training, validation, test):
-        return runner.run(
-            trainer,
-            training,
-            validation,
-            test,
-            config=config,
-            tuning=tuning,
-            evaluator=lambda fitted, data, run_context: evaluate_deeponet(
-                fitted,
-                data,
-                run_context,
-                normalizer=normalizer,
-                reconstruction_cases=reconstruction_cases,
-            ),
-        )
-
-
-__all__ = ["DeepONetTuningSettings", "deeponet_tuner", "run_deeponet_variant"]
+__all__ = ["DeepONetTuningSettings", "deeponet_tuner"]

@@ -232,7 +232,10 @@ class DeepONetTrainer:
             seed=context.seed,
         )
         predictions: list[torch.Tensor] = []
-        with torch.no_grad():
+        # DeepXDE can select CUDA as PyTorch's default device on import.
+        # DataLoader sampling uses a CPU generator; keep its allocations on
+        # CPU and move model inputs to the requested device explicitly below.
+        with torch.device("cpu"), torch.no_grad():
             for batch in loader:
                 branch = batch["branch"].to(device=device, dtype=context.dtype)
                 trunk = batch["trunk"].to(device=device, dtype=context.dtype)

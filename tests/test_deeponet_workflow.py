@@ -1,4 +1,4 @@
-"""Tests for single-variant DeepONet orchestration."""
+"""Tests for reusable DeepONet tuning configuration."""
 
 from pathlib import Path
 
@@ -6,32 +6,13 @@ import pytest
 
 from chem_operator.experiments import (
     DeepONetTuningSettings,
-    ExperimentSpec,
     RunContext,
-    run_deeponet_variant,
+    Tuner,
+    deeponet_tuner,
 )
 
 
-def spec(tmp_path: Path, model: str) -> ExperimentSpec:
-    return ExperimentSpec(
-        problem_id="synthetic",
-        model_id=model,
-        benchmark_protocol_id="test-v1",
-        dataset_fingerprints={
-            "train": "sha256:train",
-            "validation": "sha256:validation",
-            "test": "sha256:test",
-        },
-        fields=("u",),
-        channels=("u",),
-        units={"u": "-"},
-        coordinates=("x",),
-        selected_test_case_ids=(0,),
-        project_root=tmp_path,
-    )
-
-
-def test_variant_can_skip_tuning_and_training(tmp_path: Path) -> None:
+def test_deeponet_tuner_builds_a_generic_tuner(tmp_path: Path) -> None:
     context = RunContext.create(
         tmp_path,
         problem="synthetic",
@@ -39,42 +20,44 @@ def test_variant_can_skip_tuning_and_training(tmp_path: Path) -> None:
         run_id="run-1",
         seed=7,
     )
+    settings = DeepONetTuningSettings(
+        max_epochs=12,
+        num_samples=4,
+        max_concurrent_trials=2,
+        cpus_per_trial=3,
+        gpus_per_trial=0,
+    )
+    dataset_factory = lambda _context: (object(), object())
 
-    result = run_deeponet_variant(
-        context=context,
-        spec=spec(tmp_path, "deeponet"),
-        normalizer=object(),  # type: ignore[arg-type]
+    tuner = deeponet_tuner(
+        search_space={"width": 64},
         pod=None,
-        search_space={},
-        tuning_data=lambda _context: None,  # type: ignore[arg-type]
-        final_data=lambda: None,
-        tuning_settings=DeepONetTuningSettings(max_epochs=1, num_samples=1),
-        tune=False,
-        train=False,
+        dataset_factory=dataset_factory,
+        context=context,
+        settings=settings,
     )
 
-    assert result is None
+    assert isinstance(tuner, Tuner)
+    assert tuner.search_space == {"width": 64}
+    assert tuner.dataset_factory is dataset_factory
+    assert tuner.config.metric == "best_valid_loss"
+    assert tuner.config.max_epochs == 12
+    assert tuner.config.num_samples == 4
+    assert tuner.config.max_concurrent_trials == 2
+    assert tuner.config.resources_per_trial == {"cpu": 3, "gpu": 0}
+    assert tuner.config.optuna_seed == 7
 
 
-def test_pod_variant_requires_a_pod_transform(tmp_path: Path) -> None:
-    context = RunContext.create(
-        tmp_path,
-        problem="synthetic",
-        model="pod_deeponet",
-        run_id="run-1",
-        seed=7,
-    )
-
-    with pytest.raises(ValueError, match="requires a POD transform"):
-        run_deeponet_variant(
-            context=context,
-            spec=spec(tmp_path, "pod_deeponet"),
-            normalizer=object(),  # type: ignore[arg-type]
-            pod=None,
-            search_space={},
-            tuning_data=lambda _context: None,  # type: ignore[arg-type]
-            final_data=lambda: None,
-            tuning_settings=DeepONetTuningSettings(max_epochs=1, num_samples=1),
-            tune=False,
-            train=False,
+@pytest.mark.parametrize(
+    ("max_epochs", "num_samples"),
+    [(0, 1), (1, 0)],
+)
+def test_deeponet_tuning_settings_require_positive_counts(
+    max_epochs: int,
+    num_samples: int,
+) -> None:
+    with pytest.raises(ValueError, match="must be positive"):
+        DeepONetTuningSettings(
+            max_epochs=max_epochs,
+            num_samples=num_samples,
         )

@@ -323,37 +323,38 @@ def _loader_loss(
     parameter = next(model.parameters())
     model_dtype = parameter.dtype
     with context:
-        for batch in loader:
-            branch = batch["branch"].to(
-                device,
-                dtype=model_dtype,
-                non_blocking=pin_memory,
-            )
-            trunk = batch["trunk"].to(
-                device,
-                dtype=model_dtype,
-                non_blocking=pin_memory,
-            )
-            target = batch["target"].to(
-                device,
-                dtype=model_dtype,
-                non_blocking=pin_memory,
-            )
-            if optimizer is not None:
-                optimizer.zero_grad(set_to_none=True)
-            prediction = model((branch, trunk))
-            target = _loss_target(prediction, target)
-            if loss_name == "relative_l2":
-                loss = relative_l2_loss(prediction, target)
-                batch_count = target.shape[0]
-            elif loss_name == "mse":
-                loss = torch.nn.functional.mse_loss(prediction, target)
-                batch_count = target.numel()
-            else:
-                raise ValueError(f"Unsupported loss {loss_name!r}.")
-            if optimizer is not None:
-                loss.backward()
-                optimizer.step()
-            accumulated_loss += float(loss.detach()) * batch_count
-            count += batch_count
+        with torch.device("cpu"):
+            for batch in loader:
+                branch = batch["branch"].to(
+                    device,
+                    dtype=model_dtype,
+                    non_blocking=pin_memory,
+                )
+                trunk = batch["trunk"].to(
+                    device,
+                    dtype=model_dtype,
+                    non_blocking=pin_memory,
+                )
+                target = batch["target"].to(
+                    device,
+                    dtype=model_dtype,
+                    non_blocking=pin_memory,
+                )
+                if optimizer is not None:
+                    optimizer.zero_grad(set_to_none=True)
+                prediction = model((branch, trunk))
+                target = _loss_target(prediction, target)
+                if loss_name == "relative_l2":
+                    loss = relative_l2_loss(prediction, target)
+                    batch_count = target.shape[0]
+                elif loss_name == "mse":
+                    loss = torch.nn.functional.mse_loss(prediction, target)
+                    batch_count = target.numel()
+                else:
+                    raise ValueError(f"Unsupported loss {loss_name!r}.")
+                if optimizer is not None:
+                    loss.backward()
+                    optimizer.step()
+                accumulated_loss += float(loss.detach()) * batch_count
+                count += batch_count
     return accumulated_loss / max(count, 1)

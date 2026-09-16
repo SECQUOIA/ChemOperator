@@ -27,7 +27,6 @@ from .device import hardware_metadata, resolve_device, resolve_dtype, seed_worke
 from .deeponet_workflow import (
     DeepONetTuningSettings,
     deeponet_tuner,
-    run_deeponet_variant,
 )
 from .evaluation import deeponet_training_config, evaluate_deeponet
 from .metrics import History, MetricEvent, StreamingRegressionMetrics, TimingRecorder
@@ -105,7 +104,6 @@ __all__ = [
     "resolve_device",
     "resolve_dtype",
     "run_context_from_namespace",
-    "run_deeponet_variant",
     "seed_worker",
     "shared_history",
     "validate_model_comparison",
