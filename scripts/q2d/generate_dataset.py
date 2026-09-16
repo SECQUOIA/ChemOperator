@@ -26,7 +26,8 @@ q2d_simulator = CMRSim(
 )
 
 
-if __name__ == "__main__":
+def generate_dataset(n_cases: int = 100) -> None:
+    """Generate and overwrite all base dataset splits."""
     paths = ExamplePaths.from_script(__file__)
     dataset_path = paths.datasets / "q2d_cmr"
 
@@ -34,8 +35,12 @@ if __name__ == "__main__":
         q2d_simulator,
         dataset_path,
     )
-    records_splits = q2d_dataset_generator.generate_splits(n_cases=100)
+    records_splits = q2d_dataset_generator.generate_splits(n_cases=n_cases)
     q2d_dataset_generator.save_splits(records_splits, overwrite=True)
+
+
+if __name__ == "__main__":
+    generate_dataset()
 
     # This resolution sweep is intentionally disabled until the base dataset
     # workflow has been exercised independently.

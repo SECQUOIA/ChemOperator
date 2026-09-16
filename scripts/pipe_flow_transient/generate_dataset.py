@@ -1,7 +1,10 @@
+"""Generate transient Hagen--Poiseuille pipe-flow datasets."""
+
 from chem_operator.datasets import SimulationDatasetGenerator
 from chem_operator.example_paths import ExamplePaths
-from chem_operator.reactors.pipe_flow_transient.dataset_generator import TransientHagenPoiseuillePipeFlowSim
-from chem_operator.datasets import SimulationDatasetGenerator
+from chem_operator.reactors.pipe_flow_transient.dataset_generator import (
+    TransientHagenPoiseuillePipeFlowSim,
+)
 from chem_operator.sampling import Constant, Uniform
 
 pipe_flow_transient_simulator = TransientHagenPoiseuillePipeFlowSim(
@@ -17,12 +20,17 @@ pipe_flow_transient_simulator = TransientHagenPoiseuillePipeFlowSim(
     },
 )
 
-if __name__ == "__main__":
+def generate_dataset(n_cases: int = 10_000) -> None:
+    """Generate and overwrite all dataset splits."""
     paths = ExamplePaths.from_script(__file__)
     dataset_path = paths.datasets / "pipe_flow_transient"
 
     dataset_generator = SimulationDatasetGenerator(
         pipe_flow_transient_simulator, dataset_path
     )
-    record_splits = dataset_generator.generate_splits(n_cases=10000)
+    record_splits = dataset_generator.generate_splits(n_cases=n_cases)
     dataset_generator.save_splits(record_splits, overwrite=True)
+
+
+if __name__ == "__main__":
+    generate_dataset()
