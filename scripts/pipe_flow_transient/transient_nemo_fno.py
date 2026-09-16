@@ -13,6 +13,7 @@ initial/boundary conditions.
 
 from __future__ import annotations
 
+import argparse
 from copy import deepcopy
 import csv
 import json
@@ -41,6 +42,7 @@ from torch.utils.data import DataLoader, Subset
 
 from chem_operator.datasets import ChemOperatorDataset
 from chem_operator.example_paths import ExamplePaths
+from chem_operator.experiments import add_workflow_arguments, resolve_device
 from chem_operator.models import (
     FNOAdapter,
     FNOChannel,
@@ -100,6 +102,29 @@ HISTORY_FIELDS = (
     "valid_physics_loss",
     "valid_constraint_loss",
 )
+
+
+def parse_args() -> argparse.Namespace:
+    """Parse the only command-line interface used by this model script."""
+    parser = argparse.ArgumentParser(description=__doc__)
+    add_workflow_arguments(parser)
+    return parser.parse_args()
+
+
+def generate_missing_data() -> None:
+    """Create absent dataset splits without replacing existing split files."""
+    from scripts.pipe_flow_transient.generate_dataset import (
+        pipe_flow_transient_simulator,
+    )
+    from chem_operator.datasets import SimulationDatasetGenerator
+
+    generator = SimulationDatasetGenerator(pipe_flow_transient_simulator, PATHS.data)
+    generated = generator.generate_missing_splits(n_cases=10_000)
+    print(
+        "Generated splits: " + ", ".join(generated)
+        if generated
+        else "All dataset splits already exist; nothing was overwritten."
+    )
 
 
 class PhysicsFNOAdapter(FNOAdapter):
@@ -498,7 +523,6 @@ def train_model(  # pylint: disable=too-many-arguments,too-many-locals,too-many-
     print_epochs: bool = False,
 ) -> tuple[FNO, dict[str, list[float]], float]:
     """Train one PI-FNO and restore its best validation checkpoint."""
-    torch.set_default_device("cpu")
     torch.manual_seed(SEED)
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(SEED)
@@ -641,7 +665,7 @@ def ray_trial(
         Path(data_dir), "valid", normalizer, MAX_VALID_TRAJECTORIES
     )
     try:
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        device = resolve_device("auto")
         train_model(
             config,
             train_data,
@@ -691,9 +715,7 @@ def tune_hyperparameters(
         parameterized,
         resources={"cpu": CPUS_PER_TRIAL, "gpu": GPUS_PER_TRIAL},
     )
-    tuner = tune.Tuner(
-        trainable,
-        param_space={
+    parameter_space = {
             "modes": tune.choice([6, 8, 10]),
             "latent_channels": tune.choice([8, 16]),
             "n_layers": tune.choice([3, 4]),
@@ -705,20 +727,34 @@ def tune_hyperparameters(
             "batch_size": tune.choice([2, 4, 8]),
             "physics_weight": tune.loguniform(1.0e-4, 1.0e-1),
             "constraint_weight": tune.loguniform(1.0e-4, 1.0e-1),
-        },
-        tune_config=tune.TuneConfig(
-            search_alg=search,
-            scheduler=scheduler,
-            num_samples=TUNE_SAMPLES,
-            max_concurrent_trials=MAX_CONCURRENT_TRIALS,
-            reuse_actors=False,
-        ),
-        run_config=tune.RunConfig(
-            name="transient_pipe_flow_physicsnemo_fno",
-            storage_path=str((output_dir / "ray_results").resolve()),
-            verbose=1,
-        ),
-    )
+        }
+    experiment_name = "transient_pipe_flow_physicsnemo_fno"
+    storage = (output_dir / "ray_results").resolve()
+    experiment = storage / experiment_name
+    if tune.Tuner.can_restore(str(experiment)):
+        tuner = tune.Tuner.restore(
+            str(experiment),
+            trainable=trainable,
+            resume_unfinished=True,
+            resume_errored=True,
+        )
+    else:
+        tuner = tune.Tuner(
+            trainable,
+            param_space=parameter_space,
+            tune_config=tune.TuneConfig(
+                search_alg=search,
+                scheduler=scheduler,
+                num_samples=TUNE_SAMPLES,
+                max_concurrent_trials=MAX_CONCURRENT_TRIALS,
+                reuse_actors=False,
+            ),
+            run_config=tune.RunConfig(
+                name=experiment_name,
+                storage_path=str(storage),
+                verbose=1,
+            ),
+        )
     best = tuner.fit().get_best_result(metric=METRIC, mode="min", scope="last")
     return {
         key: value.item() if hasattr(value, "item") else value
@@ -829,17 +865,25 @@ def evaluate(  # pylint: disable=too-many-arguments,too-many-locals
 
 
 def write_history(path: Path, history: Mapping[str, list[float]]) -> None:
-    """Write every data and physics training metric as CSV."""
+    """Write every data and physics metric in shared long-form."""
     with path.open("w", encoding="utf-8", newline="") as file:
-        writer = csv.DictWriter(file, fieldnames=("epoch", *HISTORY_FIELDS))
+        writer = csv.DictWriter(
+            file,
+            fieldnames=("epoch", "split", "metric", "value"),
+        )
         writer.writeheader()
         for index in range(len(history[HISTORY_FIELDS[0]])):
-            writer.writerow(
-                {
-                    "epoch": index + 1,
-                    **{name: history[name][index] for name in HISTORY_FIELDS},
-                }
-            )
+            for name in HISTORY_FIELDS:
+                split = "val" if name.startswith("valid_") else "train"
+                metric = name.removeprefix("valid_")
+                writer.writerow(
+                    {
+                        "epoch": index + 1,
+                        "split": split,
+                        "metric": metric,
+                        "value": history[name][index],
+                    }
+                )
 
 
 def read_history(path: Path) -> dict[str, list[float]]:
@@ -847,8 +891,17 @@ def read_history(path: Path) -> dict[str, list[float]]:
     history = {name: [] for name in HISTORY_FIELDS}
     with path.open("r", encoding="utf-8", newline="") as file:
         for row in csv.DictReader(file):
-            for name in HISTORY_FIELDS:
-                history[name].append(float(row[name]))
+            if "split" not in row:  # Read pre-contract artifacts during migration.
+                for name in HISTORY_FIELDS:
+                    history[name].append(float(row[name]))
+                continue
+            name = (
+                f"valid_{row['metric']}"
+                if row["split"] in {"val", "validation"}
+                else row["metric"]
+            )
+            if name in history:
+                history[name].append(float(row["value"]))
     return history
 
 
@@ -990,7 +1043,6 @@ def train_best_config(
         spacing,
     )
     write_history(PATHS.output / "history.csv", history)
-    plot_history(PATHS.output / "training_validation_loss.png", history)
     return history, elapsed
 
 
@@ -998,6 +1050,7 @@ def use_saved_model(
     device: torch.device,
     *,
     calculate_metrics: bool,
+    plot_cases: int = PLOT_CASES,
 ) -> dict[str, float]:
     """Load the saved PI-FNO, validate PDE metadata, plot, and optionally score."""
     checkpoint_path = PATHS.output / "physicsnemo_fno.pt"
@@ -1036,7 +1089,7 @@ def use_saved_model(
             model,
             test_data,
             normalizer,
-            cases=PLOT_CASES,
+            cases=plot_cases,
             device=device,
         )
     finally:
@@ -1065,60 +1118,83 @@ def main() -> None:
         raise ValueError(
             "TRAIN_BEST_CONFIG_ONLY and PLOT_SAVED_MODEL_ONLY cannot both be true."
         )
+    args = parse_args()
     PATHS.output.mkdir(parents=True, exist_ok=True)
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    if PLOT_SAVED_MODEL_ONLY:
-        use_saved_model(device, calculate_metrics=False)
+    device = resolve_device("auto")
+    if args.generate:
+        generate_missing_data()
+    if args.plot and not args.tune and not args.train:
+        use_saved_model(device, calculate_metrics=False, plot_cases=args.plot_cases)
         print(f"Plots written to {PATHS.output}")
         return
 
     pde_name = training_pde_name(PATHS.data)
     print(f"Using metadata physicsnemo_pde={pde_name!r}")
-    print("Fitting training-only normalization statistics ...")
-    normalizer = fit_normalizer(PATHS.data)
     best_config_path = PATHS.output / "best_config.json"
-    if TRAIN_BEST_CONFIG_ONLY:
-        best_config = load_best_config(best_config_path)
-        train_best_config(best_config, normalizer, pde_name, device)
-        print(f"Model and loss history written to {PATHS.output}")
-        return
-
-    (PATHS.output / "ray_results").mkdir(parents=True, exist_ok=True)
-    PATHS.ray.mkdir(parents=True, exist_ok=True)
-    ray.init(
-        ignore_reinit_error=True,
-        include_dashboard=False,
-        _temp_dir=str(PATHS.ray.resolve()),
-    )
-    try:
-        best_config = tune_hyperparameters(
-            PATHS.data, PATHS.output, normalizer, pde_name
+    normalizer = None
+    best_config: dict[str, Any] | None = None
+    if args.tune:
+        print("Fitting training-only normalization statistics ...")
+        normalizer = fit_normalizer(PATHS.data)
+        (PATHS.output / "ray_results").mkdir(parents=True, exist_ok=True)
+        PATHS.ray.mkdir(parents=True, exist_ok=True)
+        ray.init(
+            ignore_reinit_error=True,
+            include_dashboard=False,
+            _temp_dir=str(PATHS.ray.resolve()),
         )
-    finally:
-        ray.shutdown()
-    with best_config_path.open("w", encoding="utf-8") as file:
-        json.dump(best_config, file, indent=2)
+        try:
+            best_config = tune_hyperparameters(
+                PATHS.data, PATHS.output, normalizer, pde_name
+            )
+        finally:
+            ray.shutdown()
+        with best_config_path.open("w", encoding="utf-8") as file:
+            json.dump(best_config, file, indent=2)
 
-    history, elapsed = train_best_config(
-        best_config, normalizer, pde_name, device
-    )
-    metrics = {
-        **use_saved_model(device, calculate_metrics=True),
-        "training_seconds": elapsed,
-        "best_epoch": int(
-            torch.tensor(history["valid_relative_l2"]).argmin().item() + 1
-        ),
-        "best_validation_relative_l2": min(history["valid_relative_l2"]),
-        "physicsnemo_pde": pde_name,
-    }
-    model, _, _, _ = load_checkpoint(
-        PATHS.output / "physicsnemo_fno.pt", device
-    )
-    metrics["parameters"] = count_parameters(model)
-    with (PATHS.output / "metrics.json").open("w", encoding="utf-8") as file:
-        json.dump(metrics, file, indent=2)
-    print(json.dumps(metrics, indent=2))
-    print(f"Results written to {PATHS.output}")
+    history: dict[str, list[float]] | None = None
+    elapsed = 0.0
+    if args.train:
+        best_config = best_config or load_best_config(
+            best_config_path
+            if args.train_config == "best"
+            else Path(args.train_config)
+        )
+        if normalizer is None:
+            print("Fitting training-only normalization statistics ...")
+            normalizer = fit_normalizer(PATHS.data)
+        history, elapsed = train_best_config(
+            best_config, normalizer, pde_name, device
+        )
+    if args.plot:
+        metrics = use_saved_model(
+            device,
+            calculate_metrics=args.train,
+            plot_cases=args.plot_cases,
+        )
+        if history is not None:
+            metrics.update(
+                {
+                    "training_seconds": elapsed,
+                    "best_epoch": int(
+                        torch.tensor(history["valid_relative_l2"]).argmin().item()
+                        + 1
+                    ),
+                    "best_validation_relative_l2": min(
+                        history["valid_relative_l2"]
+                    ),
+                    "physicsnemo_pde": pde_name,
+                    "parameters": count_parameters(
+                        load_checkpoint(
+                            PATHS.output / "physicsnemo_fno.pt", device
+                        )[0]
+                    ),
+                }
+            )
+            with (PATHS.output / "metrics.json").open("w", encoding="utf-8") as file:
+                json.dump(metrics, file, indent=2)
+            print(json.dumps(metrics, indent=2))
+    print(f"Selected stages completed in {PATHS.output}")
 
 
 if __name__ == "__main__":

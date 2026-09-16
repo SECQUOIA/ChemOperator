@@ -250,9 +250,9 @@ def make_deeponet_dataloader(
         raise ValueError("batch_size must be positive.")
     if num_workers < 0:
         raise ValueError("num_workers cannot be negative.")
-    generator = torch.Generator(
-        device=torch.get_default_device()
-    ).manual_seed(seed)
+    # DataLoader indices and its generator are CPU-side even when the model is
+    # on a worker-local accelerator. Do not inherit process-global defaults.
+    generator = torch.Generator(device="cpu").manual_seed(seed)
     return DataLoader(
         dataset,
         batch_size=min(batch_size, len(dataset)),
@@ -320,13 +320,25 @@ def _loader_loss(
     accumulated_loss = 0.0
     count = 0
     context = torch.enable_grad() if training else torch.no_grad()
+    parameter = next(model.parameters())
+    model_dtype = parameter.dtype
     with context:
         for batch in loader:
             branch = batch["branch"].to(
-                device, non_blocking=pin_memory
+                device,
+                dtype=model_dtype,
+                non_blocking=pin_memory,
             )
-            trunk = batch["trunk"].to(device, non_blocking=pin_memory)
-            target = batch["target"].to(device, non_blocking=pin_memory)
+            trunk = batch["trunk"].to(
+                device,
+                dtype=model_dtype,
+                non_blocking=pin_memory,
+            )
+            target = batch["target"].to(
+                device,
+                dtype=model_dtype,
+                non_blocking=pin_memory,
+            )
             if optimizer is not None:
                 optimizer.zero_grad(set_to_none=True)
             prediction = model((branch, trunk))

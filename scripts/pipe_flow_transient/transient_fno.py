@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import argparse
 from copy import deepcopy
 import csv
 import json
@@ -20,6 +21,7 @@ os.environ.setdefault("RAY_memory_monitor_refresh_ms", "0")
 import matplotlib.pyplot as plt
 from neuralop.losses import LpLoss
 from neuralop.models import FNO
+import numpy as np
 import optuna
 import ray
 from ray import tune
@@ -31,6 +33,7 @@ from torch.utils.data import DataLoader, Subset
 
 from chem_operator.datasets import ChemOperatorDataset
 from chem_operator.example_paths import ExamplePaths
+from chem_operator.experiments import add_workflow_arguments, resolve_device
 from chem_operator.models import (
     FNOAdapter,
     FNOChannel,
@@ -58,9 +61,9 @@ FILE_STEM = "transient_hagen_poiseuille_pipe_flow"
 METRIC = "best_valid_loss"
 SEED = 42
 
-# Run-mode flags. Leave both false for tuning, training, and evaluation.
+# Deprecated import-time compatibility only. CLI workflows use parse_args().
 TRAIN_BEST_CONFIG_ONLY = False
-PLOT_SAVED_MODEL_ONLY = True
+PLOT_SAVED_MODEL_ONLY = False
 
 # CPU-conscious defaults. Set a limit to None to use an entire split.
 MAX_TRAIN_TRAJECTORIES: int | None = None #2000
@@ -75,6 +78,32 @@ PLOT_CASES = 2
 CPUS_PER_TRIAL = 2
 GPUS_PER_TRIAL = 1 if torch.cuda.is_available() else 0
 MAX_CONCURRENT_TRIALS = 1
+
+
+def parse_args() -> argparse.Namespace:
+    """Parse the only command-line interface used by this model script."""
+    parser = argparse.ArgumentParser(description=__doc__)
+    add_workflow_arguments(parser)
+    return parser.parse_args()
+
+
+def generate_missing_data() -> None:
+    """Create absent dataset splits without replacing any existing split."""
+    from scripts.pipe_flow_transient.generate_dataset import (
+        pipe_flow_transient_simulator,
+    )
+    from chem_operator.datasets import SimulationDatasetGenerator
+
+    generator = SimulationDatasetGenerator(
+        pipe_flow_transient_simulator,
+        PATHS.data,
+    )
+    generated = generator.generate_missing_splits(n_cases=10_000)
+    print(
+        "Generated splits: " + ", ".join(generated)
+        if generated
+        else "All dataset splits already exist; nothing was overwritten."
+    )
 
 
 def raw_dataset(data_dir: Path, split: str) -> ChemOperatorDataset:
@@ -216,7 +245,6 @@ def train_model(  # pylint: disable=too-many-arguments,too-many-locals
     print_epochs: bool = False,
 ) -> tuple[FNO, dict[str, list[float]], float]:
     """Train one FNO and restore its best validation checkpoint."""
-    torch.set_default_device("cpu")
     torch.manual_seed(SEED)
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(SEED)
@@ -356,29 +384,41 @@ def tune_hyperparameters(
         parameterized,
         resources={"cpu": CPUS_PER_TRIAL, "gpu": GPUS_PER_TRIAL},
     )
-    tuner = tune.Tuner(
-        trainable,
-        param_space={
+    parameter_space = {
             "modes": tune.choice([8, 12]),
             "hidden_channels": tune.choice([8, 16]),
             "n_layers": 3, #tune.choice([2, 3]),
             "learning_rate": tune.loguniform(1.0e-4, 3.0e-3),
             "weight_decay": tune.loguniform(1.0e-8, 1.0e-4),
             "batch_size": tune.choice([2, 4, 8, 16, 32]),
-        },
-        tune_config=tune.TuneConfig(
-            search_alg=search,
-            scheduler=scheduler,
-            num_samples=TUNE_SAMPLES,
-            max_concurrent_trials=MAX_CONCURRENT_TRIALS,
-            reuse_actors=False,
-        ),
-        run_config=tune.RunConfig(
-            name="transient_pipe_flow_fno",
-            storage_path=str((output_dir / "ray_results").resolve()),
-            verbose=1,
-        ),
-    )
+        }
+    experiment_name = "transient_pipe_flow_fno"
+    storage = (output_dir / "ray_results").resolve()
+    experiment = storage / experiment_name
+    if tune.Tuner.can_restore(str(experiment)):
+        tuner = tune.Tuner.restore(
+            str(experiment),
+            trainable=trainable,
+            resume_unfinished=True,
+            resume_errored=True,
+        )
+    else:
+        tuner = tune.Tuner(
+            trainable,
+            param_space=parameter_space,
+            tune_config=tune.TuneConfig(
+                search_alg=search,
+                scheduler=scheduler,
+                num_samples=TUNE_SAMPLES,
+                max_concurrent_trials=MAX_CONCURRENT_TRIALS,
+                reuse_actors=False,
+            ),
+            run_config=tune.RunConfig(
+                name=experiment_name,
+                storage_path=str(storage),
+                verbose=1,
+            ),
+        )
     results = tuner.fit()
     best = results.get_best_result(metric=METRIC, mode="min", scope="last")
     return {
@@ -467,23 +507,32 @@ def write_history(
     path: Path,
     history: Mapping[str, list[float]],
 ) -> None:
-    """Write per-epoch training and validation losses as CSV."""
+    """Write per-epoch losses using the shared long-form contract."""
     with path.open("w", encoding="utf-8", newline="") as file:
         writer = csv.DictWriter(
             file,
-            fieldnames=("epoch", "train_loss", "valid_loss"),
+            fieldnames=("epoch", "split", "metric", "value"),
         )
         writer.writeheader()
         for index, (train_value, valid_value) in enumerate(
             zip(history["train_loss"], history["valid_loss"]),
             start=1,
         ):
-            writer.writerow(
-                {
-                    "epoch": index,
-                    "train_loss": train_value,
-                    "valid_loss": valid_value,
-                }
+            writer.writerows(
+                (
+                    {
+                        "epoch": index,
+                        "split": "train",
+                        "metric": "objective",
+                        "value": train_value,
+                    },
+                    {
+                        "epoch": index,
+                        "split": "val",
+                        "metric": "relative_l2",
+                        "value": valid_value,
+                    },
+                )
             )
 
 
@@ -510,8 +559,13 @@ def read_history(path: Path) -> dict[str, list[float]]:
     history = {"train_loss": [], "valid_loss": []}
     with path.open("r", encoding="utf-8", newline="") as file:
         for row in csv.DictReader(file):
-            history["train_loss"].append(float(row["train_loss"]))
-            history["valid_loss"].append(float(row["valid_loss"]))
+            if "split" not in row:  # Read pre-contract artifacts during migration.
+                history["train_loss"].append(float(row["train_loss"]))
+                history["valid_loss"].append(float(row["valid_loss"]))
+            elif row["split"] == "train" and row["metric"] == "objective":
+                history["train_loss"].append(float(row["value"]))
+            elif row["split"] in {"val", "validation"} and row["metric"] == "relative_l2":
+                history["valid_loss"].append(float(row["value"]))
     return history
 
 
@@ -633,7 +687,6 @@ def train_best_config(
         normalizer,
     )
     write_history(PATHS.output / "history.csv", history)
-    plot_history(PATHS.output / "training_validation_loss.png", history)
     return history, elapsed
 
 
@@ -641,6 +694,7 @@ def use_saved_model(
     device: torch.device,
     *,
     calculate_metrics: bool,
+    plot_cases: int = PLOT_CASES,
 ) -> dict[str, float]:
     """Load the saved model, make reconstruction plots, and optionally score."""
     checkpoint_path = PATHS.output / "fno.pt"
@@ -670,7 +724,7 @@ def use_saved_model(
             PATHS.output / "test_reconstructions.png",
             model,
             test_data,
-            cases=PLOT_CASES,
+            cases=plot_cases,
             device=device,
         )
     finally:
@@ -691,52 +745,66 @@ def main() -> None:
         raise ValueError(
             "TRAIN_BEST_CONFIG_ONLY and PLOT_SAVED_MODEL_ONLY cannot both be true."
         )
-
+    args = parse_args()
     PATHS.output.mkdir(parents=True, exist_ok=True)
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    if PLOT_SAVED_MODEL_ONLY:
-        use_saved_model(device, calculate_metrics=False)
+    device = resolve_device("auto")
+    if args.generate:
+        generate_missing_data()
+    if args.plot and not args.tune and not args.train:
+        use_saved_model(device, calculate_metrics=False, plot_cases=args.plot_cases)
         print(f"Plots written to {PATHS.output}")
         return
 
-    print("Fitting training-only normalization statistics ...")
-    normalizer = fit_normalizer(PATHS.data)
     best_config_path = PATHS.output / "best_config.json"
-    if TRAIN_BEST_CONFIG_ONLY:
-        best_config = load_best_config(best_config_path)
+    normalizer = None
+    best_config: dict[str, Any] | None = None
+    if args.tune:
+        print("Fitting training-only normalization statistics ...")
+        normalizer = fit_normalizer(PATHS.data)
+        (PATHS.output / "ray_results").mkdir(parents=True, exist_ok=True)
+        PATHS.ray.mkdir(parents=True, exist_ok=True)
+        ray.init(
+            ignore_reinit_error=True,
+            include_dashboard=False,
+            _temp_dir=str(PATHS.ray.resolve()),
+        )
+        try:
+            best_config = tune_hyperparameters(PATHS.data, PATHS.output, normalizer)
+        finally:
+            ray.shutdown()
+        with best_config_path.open("w", encoding="utf-8") as file:
+            json.dump(best_config, file, indent=2)
+
+    if args.train:
+        if args.train_config == "best":
+            best_config = best_config or load_best_config(best_config_path)
+        else:
+            best_config = load_best_config(Path(args.train_config))
+        if normalizer is None:
+            print("Fitting training-only normalization statistics ...")
+            normalizer = fit_normalizer(PATHS.data)
         train_best_config(best_config, normalizer, device)
-        print(f"Model and loss history written to {PATHS.output}")
-        return
-
-    (PATHS.output / "ray_results").mkdir(parents=True, exist_ok=True)
-    PATHS.ray.mkdir(parents=True, exist_ok=True)
-    ray.init(
-        ignore_reinit_error=True,
-        include_dashboard=False,
-        _temp_dir=str(PATHS.ray.resolve()),
-    )
-    try:
-        best_config = tune_hyperparameters(PATHS.data, PATHS.output, normalizer)
-    finally:
-        ray.shutdown()
-    with best_config_path.open("w", encoding="utf-8") as file:
-        json.dump(best_config, file, indent=2)
-
-    history, elapsed = train_best_config(best_config, normalizer, device)
-    metrics = {
-        **use_saved_model(device, calculate_metrics=True),
-        "training_seconds": elapsed,
-        "best_epoch": int(
-            torch.tensor(history["valid_loss"]).argmin().item() + 1
-        ),
-        "best_validation_loss": min(history["valid_loss"]),
-    }
-    model, _ = load_checkpoint(PATHS.output / "fno.pt", device)
-    metrics["parameters"] = count_parameters(model)
-    with (PATHS.output / "metrics.json").open("w", encoding="utf-8") as file:
-        json.dump(metrics, file, indent=2)
-    print(json.dumps(metrics, indent=2))
-    print(f"Results written to {PATHS.output}")
+    if args.plot:
+        metrics = use_saved_model(
+            device,
+            calculate_metrics=args.train,
+            plot_cases=args.plot_cases,
+        )
+        if args.train:
+            history = read_history(PATHS.output / "history.csv")
+            metrics.update(
+                {
+                    "best_epoch": int(np.argmin(history["valid_loss"]) + 1),
+                    "best_validation_loss": min(history["valid_loss"]),
+                    "parameters": count_parameters(
+                        load_checkpoint(PATHS.output / "fno.pt", device)[0]
+                    ),
+                }
+            )
+            with (PATHS.output / "metrics.json").open("w", encoding="utf-8") as file:
+                json.dump(metrics, file, indent=2)
+            print(json.dumps(metrics, indent=2))
+    print(f"Selected stages completed in {PATHS.output}")
 
 
 if __name__ == "__main__":

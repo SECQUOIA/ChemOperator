@@ -23,17 +23,24 @@ from chem_operator._models.statistics import (fit_fno_zscore_normalizer,
                                               fit_zscore_normalizer)
 from chem_operator._models.training import (train_deeponet_lazy,
                                             tune_deeponet_hyperparameters)
+from chem_operator._experiments.trainers import (CompositeLossTrainer,
+                                                  DeepONetTrainer, FNOTrainer,
+                                                  LossTerm)
 
 __all__ = [
     "AutoencoderAdapter",
     "CheckpointCallback",
     "CoordinateScaler",
+    "CompositeLossTrainer",
+    "DeepONetTrainer",
     "DeepONetComparisonResult",
     "DeepONetTrainingConfig",
     "DeepONetTrainingHistory",
     "DeepXDEAdapter",
     "FNOAdapter",
     "FNOChannel",
+    "FNOTrainer",
+    "LossTerm",
     "NeuralOperatorAdapter",
     "OperatorArrays",
     "PODTransform",

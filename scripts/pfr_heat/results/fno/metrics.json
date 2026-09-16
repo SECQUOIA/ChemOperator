@@ -1,0 +1,21 @@
+{
+  "relative_l2_F_A": 0.3773057791921828,
+  "relative_l2_F_B": 0.19817685915364158,
+  "relative_l2_F_C": 1.2229343520270453,
+  "relative_l2_T_gas": 0.10201914277341631,
+  "relative_l2_T_solid": 0.018417102698650625,
+  "relative_l2": 0.38377064716898734,
+  "species_loss": 0.538775748676724,
+  "gas_loss": 0.4158564673529731,
+  "solid_loss": 0.0948897980981403,
+  "bc_loss": 0.025898720965617232,
+  "parameters": 379141,
+  "training_seconds": 95.60398142099439,
+  "tuning_seconds": 390.36426820300403,
+  "best_epoch": 21,
+  "best_validation_relative_l2": 0.31789854168891907,
+  "training_shape": [
+    101,
+    21
+  ]
+}
