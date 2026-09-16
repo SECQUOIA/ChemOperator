@@ -16,6 +16,7 @@ from __future__ import annotations
 import argparse
 from copy import deepcopy
 import csv
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -27,14 +28,10 @@ os.environ.setdefault("MPLCONFIGDIR", "/tmp/matplotlib")
 os.environ.setdefault("RAY_memory_monitor_refresh_ms", "0")
 
 import matplotlib.pyplot as plt
-import optuna
 from physicsnemo.models.fno import FNO
 from physicsnemo.sym.eq.pde import PDE
 from physicsnemo.sym.eq.phy_informer import PhysicsInformer
-import ray
 from ray import tune
-from ray.tune.schedulers import ASHAScheduler
-from ray.tune.search.optuna import OptunaSearch
 import torch
 from torch import nn
 from torch.nn import functional as torch_functional
@@ -42,7 +39,15 @@ from torch.utils.data import DataLoader, Subset
 
 from chem_operator.datasets import ChemOperatorDataset
 from chem_operator.example_paths import ExamplePaths
-from chem_operator.experiments import add_workflow_arguments, resolve_device
+from chem_operator.experiments import (
+    RayRuntimeConfig,
+    RunContext,
+    RunPaths,
+    Tuner,
+    TuningConfig,
+    add_workflow_arguments,
+    resolve_device,
+)
 from chem_operator.models import (
     FNOAdapter,
     FNOChannel,
@@ -104,27 +109,28 @@ HISTORY_FIELDS = (
 )
 
 
+def _load_generate_dataset():
+    """Load the sibling generator for direct and importlib-based execution."""
+    path = Path(__file__).with_name("generate_dataset.py")
+    specification = importlib.util.spec_from_file_location(
+        "pipe_flow_transient_generate_dataset",
+        path,
+    )
+    if specification is None or specification.loader is None:
+        raise ImportError(f"Cannot load dataset generator at {path}.")
+    module = importlib.util.module_from_spec(specification)
+    specification.loader.exec_module(module)
+    return module.generate_dataset
+
+
+generate_dataset = _load_generate_dataset()
+
+
 def parse_args() -> argparse.Namespace:
     """Parse the only command-line interface used by this model script."""
     parser = argparse.ArgumentParser(description=__doc__)
     add_workflow_arguments(parser)
     return parser.parse_args()
-
-
-def generate_missing_data() -> None:
-    """Create absent dataset splits without replacing existing split files."""
-    from scripts.pipe_flow_transient.generate_dataset import (
-        pipe_flow_transient_simulator,
-    )
-    from chem_operator.datasets import SimulationDatasetGenerator
-
-    generator = SimulationDatasetGenerator(pipe_flow_transient_simulator, PATHS.data)
-    generated = generator.generate_missing_splits(n_cases=10_000)
-    print(
-        "Generated splits: " + ", ".join(generated)
-        if generated
-        else "All dataset splits already exist; nothing was overwritten."
-    )
 
 
 class PhysicsFNOAdapter(FNOAdapter):
@@ -519,7 +525,7 @@ def train_model(  # pylint: disable=too-many-arguments,too-many-locals,too-many-
     pde_name: str,
     epochs: int,
     device: torch.device,
-    report_to_ray: bool = False,
+    reporter=None,
     print_epochs: bool = False,
 ) -> tuple[FNO, dict[str, list[float]], float]:
     """Train one PI-FNO and restore its best validation checkpoint."""
@@ -634,8 +640,8 @@ def train_model(  # pylint: disable=too-many-arguments,too-many-locals,too-many-
                 f"bc={history['constraint_loss'][-1]:.4e}, "
                 f"valid={valid_error:.4e}"
             )
-        if report_to_ray:
-            tune.report(
+        if reporter is not None:
+            reporter(
                 {
                     **{name: history[name][-1] for name in HISTORY_FIELDS},
                     METRIC: best_error,
@@ -654,6 +660,7 @@ def ray_trial(
     data_dir: str,
     normalization: Mapping[str, Mapping[str, torch.Tensor]],
     pde_name: str,
+    reporter,
 ) -> None:
     """Ray trainable that owns its lazy HDF5 readers."""
     torch.set_num_threads(max(1, CPUS_PER_TRIAL))
@@ -674,7 +681,7 @@ def ray_trial(
             pde_name=pde_name,
             epochs=TUNE_EPOCHS,
             device=device,
-            report_to_ray=True,
+            reporter=reporter,
         )
     finally:
         train_raw.close()
@@ -686,35 +693,8 @@ def tune_hyperparameters(
     output_dir: Path,
     normalizer: ZScoreNormalizer,
     pde_name: str,
-) -> dict[str, Any]:
-    """Tune architecture, optimizer, and physics weighting with Optuna/ASHA."""
-    search = OptunaSearch(
-        metric=METRIC,
-        mode="min",
-        sampler=optuna.samplers.TPESampler(
-            seed=SEED,
-            n_startup_trials=2,
-            multivariate=True,
-        ),
-    )
-    scheduler = ASHAScheduler(
-        metric=METRIC,
-        mode="min",
-        time_attr="training_iteration",
-        max_t=TUNE_EPOCHS,
-        grace_period=max(1, TUNE_EPOCHS // 3),
-        reduction_factor=2,
-    )
-    parameterized = tune.with_parameters(
-        ray_trial,
-        data_dir=str(data_dir.resolve()),
-        normalization=normalizer_state(normalizer),
-        pde_name=pde_name,
-    )
-    trainable = tune.with_resources(
-        parameterized,
-        resources={"cpu": CPUS_PER_TRIAL, "gpu": GPUS_PER_TRIAL},
-    )
+) -> Any:
+    """Run the local search space through the shared tuner."""
     parameter_space = {
             "modes": tune.choice([6, 8, 10]),
             "latent_channels": tune.choice([8, 16]),
@@ -730,36 +710,42 @@ def tune_hyperparameters(
         }
     experiment_name = "transient_pipe_flow_physicsnemo_fno"
     storage = (output_dir / "ray_results").resolve()
-    experiment = storage / experiment_name
-    if tune.Tuner.can_restore(str(experiment)):
-        tuner = tune.Tuner.restore(
-            str(experiment),
-            trainable=trainable,
-            resume_unfinished=True,
-            resume_errored=True,
+    normalization = normalizer_state(normalizer)
+
+    def objective(config, _train, _validation, _context, report):
+        return ray_trial(
+            config,
+            data_dir=str(data_dir.resolve()),
+            normalization=normalization,
+            pde_name=pde_name,
+            reporter=report,
         )
-    else:
-        tuner = tune.Tuner(
-            trainable,
-            param_space=parameter_space,
-            tune_config=tune.TuneConfig(
-                search_alg=search,
-                scheduler=scheduler,
-                num_samples=TUNE_SAMPLES,
-                max_concurrent_trials=MAX_CONCURRENT_TRIALS,
-                reuse_actors=False,
-            ),
-            run_config=tune.RunConfig(
-                name=experiment_name,
-                storage_path=str(storage),
-                verbose=1,
-            ),
-        )
-    best = tuner.fit().get_best_result(metric=METRIC, mode="min", scope="last")
-    return {
-        key: value.item() if hasattr(value, "item") else value
-        for key, value in best.config.items()
-    }
+
+    tuner = Tuner.from_objective(
+        objective,
+        parameter_space,
+        config=TuningConfig(
+            metric=METRIC,
+            mode="min",
+            num_samples=TUNE_SAMPLES,
+            max_epochs=TUNE_EPOCHS,
+            resources_per_trial={"cpu": CPUS_PER_TRIAL, "gpu": GPUS_PER_TRIAL},
+            max_concurrent_trials=MAX_CONCURRENT_TRIALS,
+            grace_period=max(1, TUNE_EPOCHS // 3),
+            optuna_seed=SEED,
+            ray_runtime=RayRuntimeConfig(temp_dir=PATHS.ray.resolve()),
+        ),
+    )
+    context = RunContext(
+        RunPaths(output_dir), SEED, torch.float32, resolve_device("auto")
+    )
+    return tuner.fit(
+        None,
+        None,
+        context,
+        storage_path=storage,
+        experiment_name=experiment_name,
+    )
 
 
 def save_checkpoint(  # pylint: disable=too-many-arguments,too-many-positional-arguments
@@ -1122,7 +1108,7 @@ def main() -> None:
     PATHS.output.mkdir(parents=True, exist_ok=True)
     device = resolve_device("auto")
     if args.generate:
-        generate_missing_data()
+        generate_dataset()
     if args.plot and not args.tune and not args.train:
         use_saved_model(device, calculate_metrics=False, plot_cases=args.plot_cases)
         print(f"Plots written to {PATHS.output}")
@@ -1138,17 +1124,10 @@ def main() -> None:
         normalizer = fit_normalizer(PATHS.data)
         (PATHS.output / "ray_results").mkdir(parents=True, exist_ok=True)
         PATHS.ray.mkdir(parents=True, exist_ok=True)
-        ray.init(
-            ignore_reinit_error=True,
-            include_dashboard=False,
-            _temp_dir=str(PATHS.ray.resolve()),
+        tuning = tune_hyperparameters(
+            PATHS.data, PATHS.output, normalizer, pde_name
         )
-        try:
-            best_config = tune_hyperparameters(
-                PATHS.data, PATHS.output, normalizer, pde_name
-            )
-        finally:
-            ray.shutdown()
+        best_config = dict(tuning.best_config)
         with best_config_path.open("w", encoding="utf-8") as file:
             json.dump(best_config, file, indent=2)
 

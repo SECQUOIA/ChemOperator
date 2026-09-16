@@ -22,24 +22,29 @@ import matplotlib.pyplot as plt
 from neuralop.losses import LpLoss
 from neuralop.models import FNO
 import numpy as np
-import optuna
-import ray
 from ray import tune
-from ray.tune.schedulers import ASHAScheduler
-from ray.tune.search.optuna import OptunaSearch
 import torch
 from torch import nn
 from torch.utils.data import DataLoader, Subset
 
 from chem_operator.datasets import ChemOperatorDataset
 from chem_operator.example_paths import ExamplePaths
-from chem_operator.experiments import add_workflow_arguments, resolve_device
+from chem_operator.experiments import (
+    RayRuntimeConfig,
+    RunContext,
+    RunPaths,
+    Tuner,
+    TuningConfig,
+    add_workflow_arguments,
+    resolve_device,
+)
 from chem_operator.models import (
     FNOAdapter,
     FNOChannel,
     fit_fno_zscore_normalizer,
 )
 from chem_operator.normalization import ZScoreNormalizer
+from generate_dataset import generate_dataset
 
 
 PATHS = ExamplePaths.from_script(__file__, dataset="pipe_flow_transient")
@@ -85,25 +90,6 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     add_workflow_arguments(parser)
     return parser.parse_args()
-
-
-def generate_missing_data() -> None:
-    """Create absent dataset splits without replacing any existing split."""
-    from scripts.pipe_flow_transient.generate_dataset import (
-        pipe_flow_transient_simulator,
-    )
-    from chem_operator.datasets import SimulationDatasetGenerator
-
-    generator = SimulationDatasetGenerator(
-        pipe_flow_transient_simulator,
-        PATHS.data,
-    )
-    generated = generator.generate_missing_splits(n_cases=10_000)
-    print(
-        "Generated splits: " + ", ".join(generated)
-        if generated
-        else "All dataset splits already exist; nothing was overwritten."
-    )
 
 
 def raw_dataset(data_dir: Path, split: str) -> ChemOperatorDataset:
@@ -241,7 +227,7 @@ def train_model(  # pylint: disable=too-many-arguments,too-many-locals
     *,
     epochs: int,
     device: torch.device,
-    report_to_ray: bool = False,
+    reporter=None,
     print_epochs: bool = False,
 ) -> tuple[FNO, dict[str, list[float]], float]:
     """Train one FNO and restore its best validation checkpoint."""
@@ -301,8 +287,8 @@ def train_model(  # pylint: disable=too-many-arguments,too-many-locals
                 f"Epoch {epoch:03d}/{epochs}: "
                 f"train={train_value:.6e}, valid={valid_value:.6e}"
             )
-        if report_to_ray:
-            tune.report(
+        if reporter is not None:
+            reporter(
                 {
                     "train_loss": train_value,
                     "valid_loss": valid_value,
@@ -321,6 +307,7 @@ def ray_trial(
     *,
     data_dir: str,
     normalization: Mapping[str, Mapping[str, torch.Tensor]],
+    reporter,
 ) -> None:
     """Ray trainable that opens its own lazy HDF5 readers."""
     torch.set_num_threads(max(1, CPUS_PER_TRIAL))
@@ -345,7 +332,7 @@ def ray_trial(
             valid_data,
             epochs=TUNE_EPOCHS,
             device=device,
-            report_to_ray=True,
+            reporter=reporter,
         )
     finally:
         train_raw.close()
@@ -356,34 +343,8 @@ def tune_hyperparameters(
     data_dir: Path,
     output_dir: Path,
     normalizer: ZScoreNormalizer,
-) -> dict[str, Any]:
-    """Run Optuna search with ASHA early stopping and return the best config."""
-    search = OptunaSearch(
-        metric=METRIC,
-        mode="min",
-        sampler=optuna.samplers.TPESampler(
-            seed=SEED,
-            n_startup_trials=2,
-            multivariate=True,
-        ),
-    )
-    scheduler = ASHAScheduler(
-        metric=METRIC,
-        mode="min",
-        time_attr="training_iteration",
-        max_t=TUNE_EPOCHS,
-        grace_period=max(1, TUNE_EPOCHS // 3),
-        reduction_factor=2,
-    )
-    parameterized = tune.with_parameters(
-        ray_trial,
-        data_dir=str(data_dir.resolve()),
-        normalization=normalizer_state(normalizer),
-    )
-    trainable = tune.with_resources(
-        parameterized,
-        resources={"cpu": CPUS_PER_TRIAL, "gpu": GPUS_PER_TRIAL},
-    )
+) -> Any:
+    """Run the local search space through the shared tuner."""
     parameter_space = {
             "modes": tune.choice([8, 12]),
             "hidden_channels": tune.choice([8, 16]),
@@ -394,37 +355,41 @@ def tune_hyperparameters(
         }
     experiment_name = "transient_pipe_flow_fno"
     storage = (output_dir / "ray_results").resolve()
-    experiment = storage / experiment_name
-    if tune.Tuner.can_restore(str(experiment)):
-        tuner = tune.Tuner.restore(
-            str(experiment),
-            trainable=trainable,
-            resume_unfinished=True,
-            resume_errored=True,
+    normalization = normalizer_state(normalizer)
+
+    def objective(config, _train, _validation, _context, report):
+        return ray_trial(
+            config,
+            data_dir=str(data_dir.resolve()),
+            normalization=normalization,
+            reporter=report,
         )
-    else:
-        tuner = tune.Tuner(
-            trainable,
-            param_space=parameter_space,
-            tune_config=tune.TuneConfig(
-                search_alg=search,
-                scheduler=scheduler,
-                num_samples=TUNE_SAMPLES,
-                max_concurrent_trials=MAX_CONCURRENT_TRIALS,
-                reuse_actors=False,
-            ),
-            run_config=tune.RunConfig(
-                name=experiment_name,
-                storage_path=str(storage),
-                verbose=1,
-            ),
-        )
-    results = tuner.fit()
-    best = results.get_best_result(metric=METRIC, mode="min", scope="last")
-    return {
-        key: value.item() if hasattr(value, "item") else value
-        for key, value in best.config.items()
-    }
+
+    tuner = Tuner.from_objective(
+        objective,
+        parameter_space,
+        config=TuningConfig(
+            metric=METRIC,
+            mode="min",
+            num_samples=TUNE_SAMPLES,
+            max_epochs=TUNE_EPOCHS,
+            resources_per_trial={"cpu": CPUS_PER_TRIAL, "gpu": GPUS_PER_TRIAL},
+            max_concurrent_trials=MAX_CONCURRENT_TRIALS,
+            grace_period=max(1, TUNE_EPOCHS // 3),
+            optuna_seed=SEED,
+            ray_runtime=RayRuntimeConfig(temp_dir=PATHS.ray.resolve()),
+        ),
+    )
+    context = RunContext(
+        RunPaths(output_dir), SEED, torch.float32, resolve_device("auto")
+    )
+    return tuner.fit(
+        None,
+        None,
+        context,
+        storage_path=storage,
+        experiment_name=experiment_name,
+    )
 
 
 def save_checkpoint(
@@ -749,7 +714,7 @@ def main() -> None:
     PATHS.output.mkdir(parents=True, exist_ok=True)
     device = resolve_device("auto")
     if args.generate:
-        generate_missing_data()
+        generate_dataset()
     if args.plot and not args.tune and not args.train:
         use_saved_model(device, calculate_metrics=False, plot_cases=args.plot_cases)
         print(f"Plots written to {PATHS.output}")
@@ -763,15 +728,8 @@ def main() -> None:
         normalizer = fit_normalizer(PATHS.data)
         (PATHS.output / "ray_results").mkdir(parents=True, exist_ok=True)
         PATHS.ray.mkdir(parents=True, exist_ok=True)
-        ray.init(
-            ignore_reinit_error=True,
-            include_dashboard=False,
-            _temp_dir=str(PATHS.ray.resolve()),
-        )
-        try:
-            best_config = tune_hyperparameters(PATHS.data, PATHS.output, normalizer)
-        finally:
-            ray.shutdown()
+        tuning = tune_hyperparameters(PATHS.data, PATHS.output, normalizer)
+        best_config = dict(tuning.best_config)
         with best_config_path.open("w", encoding="utf-8") as file:
             json.dump(best_config, file, indent=2)
 
