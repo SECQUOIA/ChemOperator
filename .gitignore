@@ -13,6 +13,9 @@ wheels/
 # datasets
 *.h5
 
+# artifacts
+artifacts/
+
 # ray
 ray_results/
 core
