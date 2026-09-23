@@ -41,7 +41,7 @@ from chem_operator.normalization import ZScoreNormalizer
 
 
 PATHS = ExamplePaths.from_script(__file__, dataset="pfr")
-FILE_STEM = "pfr_chain_of_reactors"
+FILE_STEM = "pfr_chain"
 PROBLEM_ID = "pfr_chain"
 PROTOCOL_ID = "operator-cartesian-v1"
 FIELDS = ("T", "P", "X", "velocity")

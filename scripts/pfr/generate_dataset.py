@@ -59,5 +59,5 @@ if __name__ == "__main__":
     pfr_dataset_generator = SimulationDatasetGenerator(
         pfr_simulator, dataset_path,
     )
-    records_splits = pfr_dataset_generator.generate_splits(n_cases=200)
+    records_splits = pfr_dataset_generator.generate_splits(n_cases=300)
     pfr_dataset_generator.save_splits(records_splits, overwrite=True)

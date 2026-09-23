@@ -351,4 +351,4 @@ class PFRChainOfReactorsSim(CaseSimulator):
 class PFRNonIsothermalChainOfReactorsSim(PFRChainOfReactorsSim):
     """PFR chain using a separate non-isothermal dataset prefix."""
 
-    name = "pfr_non_isothermal_chain_of_reactors"
+    name = "pfr_non_isothermal_chain"
