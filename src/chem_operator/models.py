@@ -30,7 +30,6 @@ __all__ = [
     "CompositeLossTrainer",
     "DeepONetTrainer",
     "DeepONetAdapter",
-    "DeepONetComparisonResult",
     "DeepONetTrainingConfig",
     "DeepONetTrainingHistory",
     "DeepXDEAdapter",
