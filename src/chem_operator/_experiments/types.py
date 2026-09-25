@@ -144,6 +144,27 @@ class TrainingOutcome:
         object.__setattr__(self, "metrics", dict(self.metrics))
 
 
+@dataclass(frozen=True, slots=True)
+class EvaluationOutcome:
+    """Portable test metrics and bounded arrays produced after training."""
+
+    metrics: Mapping[str, float]
+    reconstructions: Mapping[str, Any]
+    inference_seconds: float
+    metadata: Mapping[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        if self.inference_seconds < 0:
+            raise ValueError("inference_seconds cannot be negative.")
+        if not self.metrics:
+            raise ValueError("EvaluationOutcome.metrics cannot be empty.")
+        if not self.reconstructions:
+            raise ValueError("EvaluationOutcome.reconstructions cannot be empty.")
+        object.__setattr__(self, "metrics", dict(self.metrics))
+        object.__setattr__(self, "reconstructions", dict(self.reconstructions))
+        object.__setattr__(self, "metadata", dict(self.metadata))
+
+
 @runtime_checkable
 class Trainer(Protocol):
     """Minimal interface implemented by every model-family trainer."""

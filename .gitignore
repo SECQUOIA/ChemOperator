@@ -6,12 +6,18 @@ dist/
 wheels/
 *.egg-info
 
+# Testing
+.coverage
+
 # Virtual environments
 .venv
 .ray/
 
 # datasets
 *.h5
+
+# artifacts
+artifacts/
 
 # ray
 ray_results/

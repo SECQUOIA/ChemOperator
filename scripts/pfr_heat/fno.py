@@ -27,21 +27,25 @@ os.environ.setdefault("RAY_memory_monitor_refresh_ms", "0")
 os.environ.setdefault("WARP_CACHE_PATH", "/tmp/warp")
 
 import matplotlib.pyplot as plt
-import optuna
 from physicsnemo.models.fno import FNO
 from physicsnemo.sym.eq.phy_informer import PhysicsInformer
-import ray
 from ray import tune
-from ray.tune.schedulers import ASHAScheduler
-from ray.tune.search.optuna import OptunaSearch
 import torch
 from torch import nn
 from torch.nn import functional as F
 from torch.utils.data import DataLoader, Dataset
 
-from chem_operator.datasets import ChemOperatorDataset, SimulationDatasetGenerator
+from chem_operator.datasets import ChemOperatorDataset
 from chem_operator.example_paths import ExamplePaths
-from chem_operator.experiments import add_workflow_arguments, resolve_device
+from chem_operator.experiments import (
+    RayRuntimeConfig,
+    RunContext,
+    RunPaths,
+    Tuner,
+    TuningConfig,
+    add_workflow_arguments,
+    resolve_device,
+)
 from chem_operator.normalization import ZScoreNormalizer, normalizer_from_state_dict
 from chem_operator.reactors.pfr_heat.dataset_generator import (
     CylindricalWall,
@@ -70,9 +74,9 @@ WALL_OUTPUTS = ("T_solid",)
 PHYSICS_CONSTANTS = PFR_INPUTS + ("flow_scale", "temperature_scale")
 EXPECTED_PDES = {"reactor": "PlugFlowReactor", "solid": "CylindricalWall"}
 
-TUNE_SAMPLES = 7
-TUNE_EPOCHS = 20
-FINAL_EPOCHS = 25
+TUNE_SAMPLES = 6
+TUNE_EPOCHS = 40
+FINAL_EPOCHS = 75
 EVALUATION_BATCH_SIZE = 4
 CPUS_PER_TRIAL = 2
 GPUS_PER_TRIAL = int(torch.cuda.is_available())
@@ -84,14 +88,8 @@ HISTORY_KEYS = (
 )
 
 
-def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description=__doc__)
-    add_workflow_arguments(parser)
-    return parser.parse_args()
-
-
 def generate_missing_data() -> None:
-    """Fill absent splits without replacing existing solver output."""
+    """Create absent splits without replacing existing solver output."""
     generator_path = Path(__file__).with_name("generate_dataset.py")
     specification = importlib.util.spec_from_file_location(
         "pfr_heat_generate_dataset", generator_path
@@ -100,15 +98,23 @@ def generate_missing_data() -> None:
         raise ImportError(f"Cannot load dataset generator at {generator_path}.")
     generator_module = importlib.util.module_from_spec(specification)
     specification.loader.exec_module(generator_module)
-    pfr_heat_simulator = generator_module.pfr_heat_simulator
+    from chem_operator.datasets import SimulationDatasetGenerator
 
-    generator = SimulationDatasetGenerator(pfr_heat_simulator, PATHS.data, seed=SEED)
+    generator = SimulationDatasetGenerator(
+        generator_module.pfr_heat_simulator, PATHS.data, seed=SEED
+    )
     generated = generator.generate_missing_splits(n_cases=20)
     print(
         "Generated splits: " + ", ".join(generated)
-        if generated else "All dataset splits already exist; nothing was overwritten."
+        if generated
+        else "All dataset splits already exist; nothing was overwritten."
     )
 
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description=__doc__)
+    add_workflow_arguments(parser)
+    return parser.parse_args()
 
 def raw_dataset(data_dir: Path, split: str) -> ChemOperatorDataset:
     return ChemOperatorDataset(
@@ -461,7 +467,7 @@ def validation_metrics(model, dataset, pfr_normalizer, wall_normalizer, batch_si
 
 def train_model(
     config, train_data, valid_data, pfr_normalizer, wall_normalizer, *,
-    epochs, device, report_to_ray=False, print_epochs=False,
+    epochs, device, reporter=None, print_epochs=False,
 ):
     torch.manual_seed(SEED)
     model = model_from_config(config, pfr_normalizer, wall_normalizer, device)
@@ -524,8 +530,8 @@ def train_model(
                 f"physics={pde_value:.3e}, "
                 f"bc={history['bc_loss'][-1]:.3e}, valid={valid['relative_l2']:.3e}"
             )
-        if report_to_ray:
-            tune.report({
+        if reporter is not None:
+            reporter({
                 **{name: history[name][-1] for name in HISTORY_KEYS},
                 METRIC: best_error, "n_params": count_parameters(model),
             })
@@ -538,7 +544,7 @@ def make_adapter(data_dir, split, pfr_normalizer, wall_normalizer, shape):
     return raw, CoupledPFRHeatDataset(raw, pfr_normalizer, wall_normalizer, shape)
 
 
-def ray_trial(config, *, data_dir, pfr_state, wall_state, shape):
+def ray_trial(config, *, data_dir, pfr_state, wall_state, shape, reporter):
     pfr = normalizer_from_state_dict(pfr_state)
     wall = normalizer_from_state_dict(wall_state)
     train_raw, train = make_adapter(data_dir, "train", pfr, wall, shape)
@@ -546,7 +552,7 @@ def ray_trial(config, *, data_dir, pfr_state, wall_state, shape):
     try:
         train_model(
             config, train, valid, pfr, wall, epochs=TUNE_EPOCHS,
-            device=resolve_device("auto"), report_to_ray=True,
+            device=resolve_device("auto"), reporter=reporter,
         )
     finally:
         train_raw.close()
@@ -554,21 +560,7 @@ def ray_trial(config, *, data_dir, pfr_state, wall_state, shape):
 
 
 def tune_hyperparameters(data_dir, output_dir, pfr, wall, shape):
-    search = OptunaSearch(
-        metric=METRIC, mode="min",
-        sampler=optuna.samplers.TPESampler(seed=SEED, n_startup_trials=3),
-    )
-    scheduler = ASHAScheduler(
-        metric=METRIC, mode="min", max_t=TUNE_EPOCHS,
-        grace_period=TUNE_EPOCHS // 3, reduction_factor=2,
-    )
-    trainable = tune.with_resources(
-        tune.with_parameters(
-            ray_trial, data_dir=str(data_dir.resolve()),
-            pfr_state=pfr.state_dict(), wall_state=wall.state_dict(), shape=shape,
-        ),
-        resources={"cpu": CPUS_PER_TRIAL, "gpu": GPUS_PER_TRIAL},
-    )
+    """Run the local search space using shared Ray/Optuna mechanics."""
     space = {
         "pfr_modes": tune.choice([8, 12, 16]),
         "wall_modes_z": tune.choice([8, 12, 16]),
@@ -586,29 +578,44 @@ def tune_hyperparameters(data_dir, output_dir, pfr, wall, shape):
         "lambda_bc": tune.loguniform(1e-4, 1e-1),
     }
     storage = (output_dir / "ray_results").resolve()
-    experiment = storage / "pfr_heat_coupled_physicsnemo_fno"
-    if tune.Tuner.can_restore(str(experiment)):
-        tuner = tune.Tuner.restore(
-            str(experiment), trainable=trainable,
-            resume_unfinished=True, resume_errored=True,
+    pfr_state, wall_state = pfr.state_dict(), wall.state_dict()
+
+    def objective(config, _train, _validation, _context, report):
+        return ray_trial(
+            config,
+            data_dir=str(data_dir.resolve()),
+            pfr_state=pfr_state,
+            wall_state=wall_state,
+            shape=shape,
+            reporter=report,
         )
-    else:
-        tuner = tune.Tuner(
-            trainable, param_space=space,
-            tune_config=tune.TuneConfig(
-                search_alg=search, scheduler=scheduler,
-                num_samples=TUNE_SAMPLES, max_concurrent_trials=MAX_CONCURRENT_TRIALS,
-            ),
-            run_config=tune.RunConfig(
-                name="pfr_heat_coupled_physicsnemo_fno",
-                storage_path=str(storage), verbose=1,
-            ),
-        )
-    best = tuner.fit().get_best_result(metric=METRIC, mode="min", scope="last")
-    return {
-        key: value.item() if hasattr(value, "item") else value
-        for key, value in best.config.items()
-    }
+
+    tuner = Tuner.from_objective(
+        objective,
+        space,
+        config=TuningConfig(
+            metric=METRIC,
+            mode="min",
+            num_samples=TUNE_SAMPLES,
+            max_epochs=TUNE_EPOCHS,
+            resources_per_trial={"cpu": CPUS_PER_TRIAL, "gpu": GPUS_PER_TRIAL},
+            max_concurrent_trials=MAX_CONCURRENT_TRIALS,
+            grace_period=TUNE_EPOCHS // 3,
+            optuna_seed=SEED,
+            optuna_startup_trials=3,
+            ray_runtime=RayRuntimeConfig(temp_dir=PATHS.ray.resolve()),
+        ),
+    )
+    context = RunContext(
+        RunPaths(output_dir), SEED, torch.float32, resolve_device("auto")
+    )
+    return tuner.fit(
+        None,
+        None,
+        context,
+        storage_path=storage,
+        experiment_name="pfr_heat_coupled_physicsnemo_fno",
+    )
 
 
 def save_checkpoint(path, model, config, pfr, wall, shape):
@@ -793,13 +800,9 @@ def main() -> None:
     if args.tune:
         (PATHS.output / "ray_results").mkdir(parents=True, exist_ok=True)
         PATHS.ray.mkdir(parents=True, exist_ok=True)
-        ray.init(ignore_reinit_error=True, include_dashboard=False, _temp_dir=str(PATHS.ray))
-        tic = time.perf_counter()
-        try:
-            config = tune_hyperparameters(PATHS.data, PATHS.output, pfr, wall, shape)
-        finally:
-            ray.shutdown()
-        tuning_seconds = time.perf_counter() - tic
+        tuning = tune_hyperparameters(PATHS.data, PATHS.output, pfr, wall, shape)
+        config = dict(tuning.best_config)
+        tuning_seconds = tuning.tuning_seconds
         with config_path.open("w", encoding="utf-8") as file:
             json.dump(config, file, indent=2)
     history, training_seconds = None, 0.0

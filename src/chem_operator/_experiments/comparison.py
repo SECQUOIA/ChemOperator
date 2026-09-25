@@ -24,7 +24,10 @@ class RunArtifacts:
 
     @property
     def label(self) -> str:
-        return f"{self.manifest['problem_id']}/{self.manifest['model_id']}"
+        return (
+            f"{self.manifest['problem_id']}/{self.manifest['model_id']}/"
+            f"{self.path.name}"
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -33,6 +36,19 @@ class ComparisonSeries:
 
     label: str
     events: Sequence[MetricEvent]
+
+
+@dataclass(frozen=True, slots=True)
+class ComparisonRecord:
+    """One tidy metric value addressable by problem, model, and run."""
+
+    problem: str
+    model: str
+    run_id: str
+    benchmark_protocol: str
+    split: str
+    metric: str
+    value: float
 
 
 def load_run(path: str | Path, *, require_complete: bool = True) -> RunArtifacts:
@@ -107,6 +123,103 @@ def final_metrics(
             )
         compared[run.label] = float(matches[0]["value"])
     return compared
+
+
+def comparison_records(
+    runs: Iterable[RunArtifacts | str | Path],
+    *,
+    metric: str | None = None,
+    split: str | None = "test",
+) -> tuple[ComparisonRecord, ...]:
+    """Return artifact metrics in one model/problem-neutral tidy schema."""
+    loaded = tuple(
+        run if isinstance(run, RunArtifacts) else load_run(run)
+        for run in runs
+    )
+    records: list[ComparisonRecord] = []
+    for run in loaded:
+        for row in run.metrics:
+            row_metric = str(row["metric"])
+            row_split = str(row["split"])
+            if metric is not None and row_metric != metric:
+                continue
+            if split is not None and row_split != split:
+                continue
+            records.append(
+                ComparisonRecord(
+                    problem=str(run.manifest["problem_id"]),
+                    model=str(run.manifest["model_id"]),
+                    run_id=run.path.name,
+                    benchmark_protocol=str(
+                        run.manifest["benchmark_protocol_id"]
+                    ),
+                    split=row_split,
+                    metric=row_metric,
+                    value=float(row["value"]),
+                )
+            )
+    return tuple(records)
+
+
+def metric_matrix(
+    runs: Iterable[RunArtifacts | str | Path],
+    *,
+    metric: str = "relative_l2",
+    split: str = "test",
+) -> dict[str, dict[str, float]]:
+    """Arrange a metric as problem rows and model columns.
+
+    A duplicate problem/model cell is rejected so callers cannot silently mix
+    repeated seeds or protocol versions. Select the runs explicitly first.
+    """
+    matrix: dict[str, dict[str, float]] = {}
+    for record in comparison_records(runs, metric=metric, split=split):
+        row = matrix.setdefault(record.problem, {})
+        if record.model in row:
+            raise ValueError(
+                f"Multiple runs populate {record.problem}/{record.model}; "
+                "select one run per matrix cell."
+            )
+        row[record.model] = record.value
+    if not matrix:
+        raise ValueError(f"No {split} {metric} values were found.")
+    return matrix
+
+
+def validate_model_comparison(
+    runs: Iterable[RunArtifacts | str | Path],
+) -> tuple[RunArtifacts, ...]:
+    """Validate that runs differ only by model for a fair within-problem test."""
+    loaded = tuple(
+        run if isinstance(run, RunArtifacts) else load_run(run)
+        for run in runs
+    )
+    if len(loaded) < 2:
+        raise ValueError("At least two runs are required for a comparison.")
+    first = loaded[0].manifest
+    comparable_fields = (
+        "problem_id",
+        "benchmark_protocol_id",
+        "dataset_fingerprints",
+        "fields",
+        "channels",
+        "units",
+        "coordinates",
+        "selected_test_case_ids",
+    )
+    for run in loaded[1:]:
+        mismatches = [
+            name
+            for name in comparable_fields
+            if run.manifest.get(name) != first.get(name)
+        ]
+        if mismatches:
+            raise ValueError(
+                f"Run {run.label} is not directly comparable; mismatched "
+                + ", ".join(mismatches)
+                + "."
+            )
+    return loaded
 
 
 def _read_history(path: Path) -> list[MetricEvent]:

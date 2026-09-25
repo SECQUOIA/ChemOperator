@@ -1,10 +1,10 @@
 from chem_operator.example_paths import ExamplePaths
-from chem_operator.reactors.packed_bed_1D.dataset_generator import PackedBed1DSimulator
+from chem_operator.reactors.packed_bed_1D.dataset_generator import PackedBed1DSim
 from chem_operator.datasets import SimulationDatasetGenerator
 from chem_operator.sampling import Constant, Uniform
 
 # This is run when imported so this can be accessed for simulations during testing
-packed_bed_simulator = PackedBed1DSimulator(
+packed_bed_simulator = PackedBed1DSim(
     parameter_space={
         # sampled inlet and wall parameters, centered near the tutorial case
         "T0": Uniform(660.0, 690.0),

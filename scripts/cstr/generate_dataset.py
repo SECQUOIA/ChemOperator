@@ -52,15 +52,11 @@ if __name__ == "__main__":
     cstr_dataset_generator = SimulationDatasetGenerator(
         cstr_simulator, dataset_path
     )
-    records_splits = cstr_dataset_generator.generate_splits(n_cases=50)
+    records_splits = cstr_dataset_generator.generate_splits(n_cases=80)
     cstr_dataset_generator.save_splits(records_splits, overwrite=True)
 
     cstr_non_isothermal_dataset_generator = SimulationDatasetGenerator(
-        cstr_non_isothermal_simulator,
-        dataset_path,
+        cstr_non_isothermal_simulator, dataset_path
     )
-    records_splits = cstr_non_isothermal_dataset_generator.generate_splits(n_cases=50)
-    cstr_non_isothermal_dataset_generator.save_splits(
-        records_splits,
-        overwrite=False,
-    )
+    records_splits = cstr_non_isothermal_dataset_generator.generate_splits(n_cases=80)
+    cstr_non_isothermal_dataset_generator.save_splits(records_splits, overwrite=True)

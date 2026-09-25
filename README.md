@@ -36,7 +36,7 @@ solver, and more on the way.
 | Lagrangian plug-flow reactor | `PFRLagrangianParticleSim` | `t` | `z`, `T`, `P`, `X`, `velocity` | Cantera constant-pressure reactor |
 | Chain-of-reactors PFR | `PFRChainOfReactorsSim` | `z` | `t`, `T`, `P`, `X`, `velocity`, `residence_time` | Cantera steady reactor chain |
 | Non-isothermal reactor-chain PFR | `PFRNonIsothermalChainOfReactorsSim` | `z` | Same as reactor-chain PFR | Cantera with optional wall heat transfer |
-| Heterogeneous packed bed | `PackedBed1DSimulator` | `z` | `rhou`, `P`, `T`, `Y`, `X`, `Z`, `velocity` | IDA DAE solver and Cantera surface kinetics |
+| Heterogeneous packed bed | `PackedBed1DSim` | `z` | `rhou`, `P`, `T`, `Y`, `X`, `Z`, `velocity` | IDA DAE solver and Cantera surface kinetics |
 | Steady circular-pipe flow | `HagenPoiseuillePipeFlowSim` | `r` | `velocity` | Analytical |
 | Startup circular-pipe flow | `TransientHagenPoiseuillePipeFlowSim` | `t`, `r` | `velocity`, `flow_rate` | Analytical Fourier–Bessel series |
 | Quasi-2D catalytic membrane reactor | `CMRSim` | `z`, `r` | Thermochemical and flow fields | External Q2D executable or bundled tutorial output |
@@ -437,18 +437,15 @@ information.
 ## Included experiments
 
 The scripts are research experiments rather than a unified command-line
-interface. Most settings are module-level constants; the pipe-flow DeepONet
-experiment uses Hydra.
+interface. Direct and POD-DeepONets have separate entrypoints and write
+canonical run directories; pipe-flow's physics-informed study uses Hydra.
 
 | Script | Workflow |
 | --- | --- |
-| [`scripts/cstr/deeponet.py`](scripts/cstr/deeponet.py) | Direct and POD-DeepONet on non-isothermal CSTR trajectories |
-| [`scripts/cstr/plot_deeponet.py`](scripts/cstr/plot_deeponet.py) | Plot a saved CSTR DeepONet comparison |
-| [`scripts/pfr/chain_deeponet.py`](scripts/pfr/chain_deeponet.py) | Ray/Optuna tuning plus direct and POD-DeepONet on PFR data |
-| [`scripts/pfr/plot_deeponet.py`](scripts/pfr/plot_deeponet.py) | Plot a saved PFR-chain DeepONet comparison |
-| [`scripts/packed_bed_1d/deeponet.py`](scripts/packed_bed_1d/deeponet.py) | Direct and POD-DeepONet on heterogeneous packed-bed data |
-| [`scripts/packed_bed_1d/plot_deeponet.py`](scripts/packed_bed_1d/plot_deeponet.py) | Plot a saved packed-bed DeepONet comparison |
-| [`scripts/pipe_flow_transient/deeponet.py`](scripts/pipe_flow_transient/deeponet.py) | Hydra-configured pipe-flow DeepONet and physics-loss study |
+| `scripts/{cstr,packed_bed_1d,pfr,pipe_flow}/deeponet.py` | Tune and train one direct DeepONet |
+| `scripts/{cstr,packed_bed_1d,pfr,pipe_flow}/pod_deeponet.py` | Tune and train one POD-DeepONet |
+| `scripts/{cstr,packed_bed_1d,pfr,pipe_flow}/plot.py` | Compare explicit canonical direct and POD run directories |
+| [`scripts/pipe_flow/physics_deeponet.py`](scripts/pipe_flow/physics_deeponet.py) | Hydra-configured pipe-flow data/physics-loss study |
 | [`scripts/pipe_flow_transient/transient_fno.py`](scripts/pipe_flow_transient/transient_fno.py) | Neuraloperator FNO tuning, training, evaluation, checkpointing, and plots |
 | [`scripts/pipe_flow_transient/transient_nemo_fno.py`](scripts/pipe_flow_transient/transient_nemo_fno.py) | PhysicsNeMo transient pipe-flow FNO workflow |
 | [`scripts/q2d/generate_dataset.py`](scripts/q2d/generate_dataset.py) | Quasi-2D CMR dataset generation and disabled mesh-resolution sweep |
@@ -459,25 +456,39 @@ experiment uses Hydra.
 Examples:
 
 ```bash
-uv run python scripts/cstr/deeponet.py
-uv run python scripts/cstr/plot_deeponet.py
-uv run python scripts/pipe_flow_transient/transient_fno.py
-uv run python scripts/pipe_flow_transient/deeponet.py final.epochs=5
-uv run python scripts/q2d/validate_solver.py
+uv run scripts/cstr/deeponet.py
+uv run scripts/cstr/pod_deeponet.py
+uv run scripts/cstr/plot.py \
+  --deeponet-run artifacts/runs/cstr_non_isothermal/deeponet/<run-id> \
+  --pod-deeponet-run artifacts/runs/cstr_non_isothermal/pod_deeponet/<run-id>
+uv run scripts/pipe_flow_transient/transient_fno.py
+uv run scripts/pipe_flow/physics_deeponet.py final.epochs=5
+uv run scripts/q2d/validate_solver.py
 ```
 
-The CSTR, PFR-chain, and packed-bed DeepONet trainers do not import plotting
-code. They write `metrics.json`, long-form `history.csv`, bounded predictions
-in `reconstructions.npz`, and `ipca_pod_matrix.npz`. Run the corresponding
-`plot_deeponet.py` afterward to generate loss and reconstruction figures.
+The PFR-heat, transient pipe-flow, and Q2D FNO model scripts use
+`--generate` to fill only missing train, validation, and test split files;
+existing HDF5 files are preserved. Run the corresponding
+`generate_dataset.py` script directly when replacing every split is intended.
+
+The DeepONet trainers do not import plotting code. Each model writes a
+versioned canonical run containing its manifest, best configuration, history,
+metrics, checkpoint, tuning trials, and bounded reconstructions. Run the
+corresponding `plot.py` with the two run paths afterward to generate loss and
+reconstruction figures.
 
 Review each script's data paths, run-mode flags, trajectory limits, and compute
 settings before launching it. The tuning scripts can be long-running and use a
 GPU when PyTorch reports one as available. Examples are grouped by physical
-case, with notebooks and configuration beside their runners. Training runners
-write to `scripts/<case>/results/<runner>/`; their plotting entrypoints reuse
-that output directory. Project-level Ray state is written below `.ray/`, while
-tuning results remain inside the training runner's output directory.
+case, with configuration beside their runners. Training runners write below
+`artifacts/runs/<problem>/<model>/<run-id>` by default. Project-level Ray state
+is written below `.ray/`.
+
+The experiment tuning layer defaults `RAY_ENABLE_UV_RUN_RUNTIME_ENV=0` before
+Ray is imported, so local workers reuse the installed environment under
+`uv run` instead of copying the project and reinstalling dependencies into
+Ray's temporary directory. Set this variable to `1` before launching if you
+need Ray's automatic uv environment replication for a distributed deployment.
 
 ## Quasi-2D packed-bed solver
 
@@ -545,7 +556,7 @@ from chem_operator.datasets import CaseParameters, SimulationRecord
 from chem_operator.sampling import ParameterSpec
 
 
-class MySim:
+class MySimulator:
     name = "my_simulator"
 
     def __init__(self, parameter_space):
