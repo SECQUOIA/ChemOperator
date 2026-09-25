@@ -448,6 +448,8 @@ canonical run directories; pipe-flow's physics-informed study uses Hydra.
 | [`scripts/pipe_flow/physics_deeponet.py`](scripts/pipe_flow/physics_deeponet.py) | Hydra-configured pipe-flow data/physics-loss study |
 | [`scripts/pipe_flow_transient/transient_fno.py`](scripts/pipe_flow_transient/transient_fno.py) | Neuraloperator FNO tuning, training, evaluation, checkpointing, and plots |
 | [`scripts/pipe_flow_transient/transient_nemo_fno.py`](scripts/pipe_flow_transient/transient_nemo_fno.py) | PhysicsNeMo transient pipe-flow FNO workflow |
+| [`scripts/pfr_heat/fno.py`](scripts/pfr_heat/fno.py) | Coupled PhysicsNeMo reactor/wall FNO workflow |
+| [`scripts/pfr_heat/deeponet_fno.py`](scripts/pfr_heat/deeponet_fno.py) | Coupled PhysicsNeMo-MLP reactor DeepONet and wall FNO workflow |
 | [`scripts/q2d/generate_dataset.py`](scripts/q2d/generate_dataset.py) | Quasi-2D CMR dataset generation and disabled mesh-resolution sweep |
 | [`scripts/q2d/validate_solver.py`](scripts/q2d/validate_solver.py) | Bundled-reference and Docker-backed Q2D validation plots |
 | [`scripts/q2d/fno.py`](scripts/q2d/fno.py) | Quasi-2D FNO training, superresolution, and break-even analysis |
@@ -463,13 +465,17 @@ uv run scripts/cstr/plot.py \
   --pod-deeponet-run artifacts/runs/cstr_non_isothermal/pod_deeponet/<run-id>
 uv run scripts/pipe_flow_transient/transient_fno.py
 uv run scripts/pipe_flow/physics_deeponet.py final.epochs=5
+uv run scripts/pfr_heat/deeponet_fno.py
 uv run scripts/q2d/validate_solver.py
 ```
 
-The PFR-heat, transient pipe-flow, and Q2D FNO model scripts use
-`--generate` to fill only missing train, validation, and test split files;
-existing HDF5 files are preserved. Run the corresponding
-`generate_dataset.py` script directly when replacing every split is intended.
+The physics-informed FNO entry points accept
+`--variant {data,physics,both}` and default to `physics`. This applies to
+`pipe_flow_transient/transient_nemo_fno.py`, `pfr_heat/fno.py`, and
+`pfr_heat/deeponet_fno.py`. The `physics` variant combines supervised data
+loss with PDE and constraint losses; it is not physics-only training. The
+`both` option runs independent data-only and physics-informed searches, writing
+artifacts under model IDs suffixed with `_data` and `_physics`, respectively.
 
 The DeepONet trainers do not import plotting code. Each model writes a
 versioned canonical run containing its manifest, best configuration, history,
