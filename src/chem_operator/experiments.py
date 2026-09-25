@@ -1,6 +1,7 @@
 """Public facade for reusable experiment infrastructure."""
 
 from chem_operator._experiments import (
+    parse_operator_args, operator_spec, run_operator, evaluate_fields, unwrap_dataset,
     ARTIFACT_SCHEMA_VERSION,
     ArtifactStore,
     ArtifactValidationError,
