@@ -1,8 +1,0 @@
-{
-  "relative_l2": 0.014939341063965874,
-  "rmse": 0.000198215131710164,
-  "parameters": 45473,
-  "training_seconds": 1256.1210582000003,
-  "best_epoch": 10,
-  "best_validation_loss": 0.016086555099114774
-}
