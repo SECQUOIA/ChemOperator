@@ -36,16 +36,8 @@ FNO_SCRIPT = importlib.util.module_from_spec(SCRIPT_SPEC)
 SCRIPT_SPEC.loader.exec_module(FNO_SCRIPT)
 CONSTANT_NAMES = FNO_SCRIPT.CONSTANT_NAMES
 FIELD_NAMES = FNO_SCRIPT.FIELD_NAMES
-evaluate = FNO_SCRIPT.evaluate
 make_adapter = FNO_SCRIPT.make_adapter
-plot_history = FNO_SCRIPT.plot_history
-plot_reconstructions = FNO_SCRIPT.plot_reconstructions
 raw_dataset = FNO_SCRIPT.raw_dataset
-load_checkpoint = FNO_SCRIPT.load_checkpoint
-save_checkpoint = FNO_SCRIPT.save_checkpoint
-train_model = FNO_SCRIPT.train_model
-use_saved_model = FNO_SCRIPT.use_saved_model
-write_history = FNO_SCRIPT.write_history
 
 
 @pytest.fixture(scope="module", name="fno_data_dir")
@@ -127,118 +119,34 @@ def test_fno_adapter_preserves_grid_and_round_trips(
         dataset.close()
 
 
-def test_fno_training_and_plots_smoke(  # pylint: disable=too-many-locals
-    fno_data_dir,
-    fno_normalizer,
-    tmp_path,
-    monkeypatch,
-) -> None:
-    """One CPU epoch produces finite losses, metrics, and both plots."""
-    train_raw, train_data = make_adapter(
-        fno_data_dir, "train", fno_normalizer, maximum=4
-    )
-    valid_raw, valid_data = make_adapter(
-        fno_data_dir, "valid", fno_normalizer, maximum=1
-    )
-    config = {
-        "modes": 2,
-        "hidden_channels": 4,
-        "n_layers": 2,
-        "learning_rate": 1.0e-3,
-        "weight_decay": 1.0e-8,
-        "batch_size": 2,
-    }
+def test_fno_training_and_plots_smoke(fno_data_dir, fno_normalizer, tmp_path):
+    """A canonical CPU run reloads its checkpoint and plots without its data."""
+    from argparse import Namespace
+    from chem_operator.experiments import ExperimentRunner, RunContext, load_run
+    from chem_operator.plotting import plot_operator_runs
+    from chem_operator.normalization import normalizer_from_state_dict
+    raw, train = make_adapter(fno_data_dir, "train", fno_normalizer, 4)
+    valid_raw, valid = make_adapter(fno_data_dir, "valid", fno_normalizer, 1)
+    config = dict(modes=2, hidden_channels=4, n_layers=2, learning_rate=1e-3,
+                  weight_decay=1e-8, batch_size=2, epochs=1)
+    context = RunContext.create(tmp_path / "runs", problem="pipe_flow_transient",
+                               model="transient_fno", run_id="smoke", seed=42)
+    args = Namespace(data_dir=fno_data_dir, samples=1, tune_epochs=1, plot_cases=1, max_cases=1)
     try:
-        model, history, _ = train_model(
-            config,
-            train_data,
-            valid_data,
-            epochs=1,
-            device=torch.device("cpu"),
-        )
-        assert len(history["train_loss"]) == 1
-        assert len(history["valid_loss"]) == 1
-        assert math.isfinite(history["train_loss"][0])
-        assert math.isfinite(history["valid_loss"][0])
-
-        metrics = evaluate(
-            model,
-            valid_data,
-            batch_size=1,
-            device=torch.device("cpu"),
-        )
-        assert np.isfinite(metrics["relative_l2"])
-        assert np.isfinite(metrics["rmse"])
-
-        checkpoint_path = tmp_path / "fno.pt"
-        save_checkpoint(checkpoint_path, model, config, fno_normalizer)
-        loaded_model, loaded_normalizer = load_checkpoint(
-            checkpoint_path,
-            torch.device("cpu"),
-        )
-        loaded_data = FNOAdapter(
-            valid_raw,
-            loaded_normalizer,
-            field_names=FIELD_NAMES,
-            constant_names=CONSTANT_NAMES,
-        )
-        sample = loaded_data[0]
-        with torch.no_grad():
-            expected = model(sample["x"].unsqueeze(0))
-            actual = loaded_model(sample["x"].unsqueeze(0))
-        torch.testing.assert_close(actual, expected)
-
-        history_path = tmp_path / "history.csv"
-        loss_path = tmp_path / "loss.png"
-        reconstruction_path = tmp_path / "reconstruction.png"
-        write_history(history_path, history)
-        plot_history(loss_path, history)
-        extents = []
-        original_imshow = Axes.imshow
-
-        def capture_imshow(axis, values, *args, **kwargs):
-            extents.append(kwargs["extent"])
-            return original_imshow(axis, values, *args, **kwargs)
-
-        monkeypatch.setattr(Axes, "imshow", capture_imshow)
-        plot_reconstructions(
-            reconstruction_path,
-            model,
-            valid_data,
-            cases=1,
-            device=torch.device("cpu"),
-        )
-        plotted_sample = valid_data[0]
-        assert extents[0] == (
-            float(plotted_sample["t"][0]),
-            float(plotted_sample["t"][-1]),
-            float(1.0e3 * plotted_sample["r"][0]),
-            float(1.0e3 * plotted_sample["r"][-1]),
-        )
-
-        monkeypatch.setattr(
-            FNO_SCRIPT,
-            "PATHS",
-            replace(FNO_SCRIPT.PATHS, output=tmp_path, data=fno_data_dir),
-        )
-        monkeypatch.setattr(FNO_SCRIPT, "MAX_TEST_TRAJECTORIES", 1)
-        use_saved_model(torch.device("cpu"), calculate_metrics=False)
-        for path in (
-            checkpoint_path,
-            history_path,
-            loss_path,
-            reconstruction_path,
-        ):
-            assert path.is_file()
-            assert path.stat().st_size > 0
+        trainer = FNO_SCRIPT.make_trainer(config, context, fno_normalizer)
+        result = ExperimentRunner(context, FNO_SCRIPT.experiment_spec(args, "transient_fno")).run(
+            trainer, train, valid, valid, config=config,
+            evaluator=lambda t,d,c: FNO_SCRIPT.evaluate_fields(t,d,c,labels=("velocity",),coordinate_names=("t","r"),cases=1))
+        assert all(math.isfinite(v) for v in result.evaluation.metrics.values())
+        assert result.training.metadata["checkpoint_reload_verified"]
+        saved = torch.load(context.paths.checkpoint(), weights_only=True)
+        normalizer = normalizer_from_state_dict(saved["metadata"]["normalizer"])
+        restored = FNO_SCRIPT.make_trainer(config, context, normalizer)
+        restored.load_checkpoint(context.paths.checkpoint(), context)
+        torch.testing.assert_close(restored.predict(valid,context), trainer.predict(valid,context))
+        assert load_run(context.paths.run_dir).manifest["status"] == "completed"
     finally:
-        train_raw.close()
+        raw.close()
         valid_raw.close()
-
-
-def test_conflicting_python_run_flags_are_rejected(monkeypatch) -> None:
-    """Only one abbreviated run mode may be selected."""
-    monkeypatch.setattr(FNO_SCRIPT, "TRAIN_BEST_CONFIG_ONLY", True)
-    monkeypatch.setattr(FNO_SCRIPT, "PLOT_SAVED_MODEL_ONLY", True)
-    with pytest.raises(ValueError, match="cannot both be true"):
-        FNO_SCRIPT.main()
+    for path in plot_operator_runs([context.paths.run_dir], tmp_path / "plots", cases=1):
+        assert path.stat().st_size > 0

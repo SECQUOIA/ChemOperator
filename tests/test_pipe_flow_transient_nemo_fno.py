@@ -5,6 +5,7 @@ from __future__ import annotations
 import importlib.util
 import math
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 import torch
@@ -83,6 +84,111 @@ def small_config() -> dict[str, float | int]:
         "physics_weight": 1.0e-4,
         "constraint_weight": 1.0e-4,
     }
+
+
+def test_variant_search_spaces_and_data_config(monkeypatch) -> None:
+    """Data mode fixes both physics weights and bypasses training residuals."""
+    data_space = NEMO_FNO.search_space("data")
+    assert {key: data_space[key] for key in NEMO_FNO.PHYSICS_WEIGHT_KEYS} == {
+        "physics_weight": 0.0,
+        "constraint_weight": 0.0,
+    }
+    assert all(
+        NEMO_FNO.search_space("physics")[key] != 0.0
+        for key in NEMO_FNO.PHYSICS_WEIGHT_KEYS
+    )
+
+    monkeypatch.setattr(NEMO_FNO, "make_physics_informer", lambda *args, **kwargs: object())
+    monkeypatch.setattr(
+        NEMO_FNO,
+        "physics_losses",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("data training computed physics losses")
+        ),
+    )
+    class Normalizer:
+        def state_dict(self):
+            return {}
+
+        def denormalize(self, value, _name):
+            return value
+
+    context = SimpleNamespace(device=torch.device("cpu"))
+    trainer = NEMO_FNO.make_trainer(
+        small_config(),
+        context,
+        normalizer=Normalizer(),
+        pde_name="TransientHagenPoiseuille",
+        radial_spacing=0.1,
+        variant="data",
+    )
+    assert all(trainer.config[key] == 0.0 for key in NEMO_FNO.PHYSICS_WEIGHT_KEYS)
+
+    class TrainingModel:
+        training = True
+
+        def __call__(self, inputs):
+            return inputs
+
+    batch = {}
+    trainer.forward_adapter(TrainingModel(), torch.ones(1), batch)
+    assert batch["physics_loss"] == 0.0
+    assert batch["constraint_loss"] == 0.0
+
+
+def test_variant_cli_defaults_to_physics_and_validates_choices(monkeypatch) -> None:
+    """The transient CLI accepts the three variants and defaults compatibly."""
+    monkeypatch.setattr(NEMO_FNO.sys, "argv", [str(SCRIPT_PATH)])
+    assert NEMO_FNO.parse_cli_args().variant == "physics"
+    for variant in ("both", "data", "physics"):
+        monkeypatch.setattr(
+            NEMO_FNO.sys, "argv", [str(SCRIPT_PATH), "--variant", variant]
+        )
+        assert NEMO_FNO.parse_cli_args().variant == variant
+    monkeypatch.setattr(
+        NEMO_FNO.sys, "argv", [str(SCRIPT_PATH), "--variant", "invalid"]
+    )
+    with pytest.raises(SystemExit):
+        NEMO_FNO.parse_cli_args()
+
+
+def test_both_variant_uses_explicit_independent_model_ids(monkeypatch, tmp_path) -> None:
+    """Both mode launches data then physics under distinct artifact IDs."""
+    args = SimpleNamespace(
+        variant="both", data_dir=tmp_path, max_cases=None, plot_cases=2
+    )
+    monkeypatch.setattr(NEMO_FNO, "parse_cli_args", lambda: args)
+    monkeypatch.setattr(NEMO_FNO, "fit_normalizer", lambda path: object())
+
+    class Raw:
+        def close(self):
+            return None
+
+    monkeypatch.setattr(NEMO_FNO, "make_adapter", lambda *args: (Raw(), object()))
+    monkeypatch.setattr(NEMO_FNO, "dataset_pde_name", lambda *args: "TransientHagenPoiseuille")
+    monkeypatch.setattr(NEMO_FNO, "adapter_radial_spacing", lambda data: 0.1)
+    monkeypatch.setattr(
+        NEMO_FNO,
+        "experiment_spec",
+        lambda _args, model_id: SimpleNamespace(model_id=model_id),
+    )
+    calls = []
+    monkeypatch.setattr(
+        NEMO_FNO,
+        "run_operator",
+        lambda _args, _paths, spec, _data, _trainer, space, _evaluator: calls.append(
+            (spec.model_id, space)
+        ),
+    )
+
+    NEMO_FNO.main()
+
+    assert [model_id for model_id, _ in calls] == [
+        "transient_nemo_fno_data",
+        "transient_nemo_fno_physics",
+    ]
+    assert calls[0][1]["physics_weight"] == 0.0
+    assert calls[0][1]["constraint_weight"] == 0.0
 
 
 def test_dataset_pde_resolution_uses_metadata() -> None:
@@ -169,61 +275,27 @@ def test_training_evaluation_and_checkpoint_smoke(  # pylint: disable=too-many-l
     )
     config = small_config()
     pde_name = "TransientHagenPoiseuille"
+    from chem_operator.experiments import RunContext
+    from chem_operator.normalization import normalizer_from_state_dict
+    context = RunContext.create(tmp_path, problem="pipe_flow_transient", model="transient_nemo_fno", run_id="test", seed=42)
+    config["epochs"] = 1
     try:
-        model, history, _ = NEMO_FNO.train_model(
-            config,
-            train_data,
-            valid_data,
-            nemo_normalizer,
-            pde_name=pde_name,
-            epochs=1,
-            device=torch.device("cpu"),
-        )
-        assert set(history) == set(NEMO_FNO.HISTORY_FIELDS)
-        for values in history.values():
-            assert len(values) == 1
-            assert math.isfinite(values[0])
-
         spacing = NEMO_FNO.adapter_radial_spacing(train_data)
-        metrics = NEMO_FNO.evaluate(
-            model,
-            valid_data,
-            nemo_normalizer,
-            pde_name=pde_name,
-            radial_spacing=spacing,
-            batch_size=1,
-            device=torch.device("cpu"),
-        )
-        assert all(math.isfinite(value) for value in metrics.values())
+        trainer = NEMO_FNO.make_trainer(config, context, nemo_normalizer, pde_name=pde_name, radial_spacing=spacing)
+        training = trainer.fit(train_data, valid_data, context)
+        assert {e.metric for e in training.history} >= {"data_loss", "physics_loss", "constraint_loss", "relative_l2"}
+        outcome = NEMO_FNO.evaluate_fields(trainer,valid_data,context,labels=("velocity",),coordinate_names=("t","r"),
+                                          extra_metrics=NEMO_FNO.physics_metrics)
+        assert all(math.isfinite(v) for v in outcome.metrics.values())
+        saved = torch.load(training.checkpoint, weights_only=True)
+        metadata = saved["metadata"]
+        assert metadata["pde_name"] == pde_name
+        assert metadata["radial_spacing"] == pytest.approx(spacing)
+        restored = NEMO_FNO.make_trainer(config,context,normalizer_from_state_dict(metadata["normalizer"]),
+                                        pde_name=metadata["pde_name"], radial_spacing=metadata["radial_spacing"])
+        restored.load_checkpoint(training.checkpoint,context)
+        torch.testing.assert_close(restored.predict(valid_data,context),trainer.predict(valid_data,context))
 
-        checkpoint = tmp_path / "physicsnemo_fno.pt"
-        NEMO_FNO.save_checkpoint(
-            checkpoint,
-            model,
-            config,
-            nemo_normalizer,
-            pde_name,
-            spacing,
-        )
-        loaded, loaded_normalizer, loaded_pde, loaded_spacing = (
-            NEMO_FNO.load_checkpoint(checkpoint, torch.device("cpu"))
-        )
-        assert loaded_pde == pde_name
-        assert loaded_spacing == pytest.approx(spacing)
-        sample = valid_data[0]
-        loaded_data = NEMO_FNO.PhysicsFNOAdapter(
-            valid_raw,
-            loaded_normalizer,
-            input_channels=NEMO_FNO.INPUT_CHANNELS,
-            output_channels=NEMO_FNO.OUTPUT_CHANNELS,
-            coordinate_names=("t", "r"),
-            max_trajectories=1,
-        )
-        loaded_sample = loaded_data[0]
-        with torch.no_grad():
-            expected = model(sample["x"].unsqueeze(0))
-            actual = loaded(loaded_sample["x"].unsqueeze(0))
-        torch.testing.assert_close(actual, expected)
     finally:
         train_raw.close()
         valid_raw.close()
