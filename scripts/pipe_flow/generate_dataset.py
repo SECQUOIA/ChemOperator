@@ -22,5 +22,5 @@ if __name__ == "__main__":
     dataset_generator = SimulationDatasetGenerator(
         pipe_flow_simulator, dataset_path
     )
-    record_splits = dataset_generator.generate_splits(n_cases=10000)
+    record_splits = dataset_generator.generate_splits(n_cases=2000)
     dataset_generator.save_splits(record_splits, overwrite=True)
