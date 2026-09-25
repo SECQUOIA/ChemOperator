@@ -88,8 +88,8 @@ HISTORY_KEYS = (
 )
 
 
-def generate_dataset() -> None:
-    """Load the adjacent generator without relying on the process import path."""
+def generate_missing_data() -> None:
+    """Create absent splits without replacing existing solver output."""
     generator_path = Path(__file__).with_name("generate_dataset.py")
     specification = importlib.util.spec_from_file_location(
         "pfr_heat_generate_dataset", generator_path
@@ -98,7 +98,17 @@ def generate_dataset() -> None:
         raise ImportError(f"Cannot load dataset generator at {generator_path}.")
     generator_module = importlib.util.module_from_spec(specification)
     specification.loader.exec_module(generator_module)
-    generator_module.generate_dataset()
+    from chem_operator.datasets import SimulationDatasetGenerator
+
+    generator = SimulationDatasetGenerator(
+        generator_module.pfr_heat_simulator, PATHS.data, seed=SEED
+    )
+    generated = generator.generate_missing_splits(n_cases=20)
+    print(
+        "Generated splits: " + ", ".join(generated)
+        if generated
+        else "All dataset splits already exist; nothing was overwritten."
+    )
 
 
 def parse_args() -> argparse.Namespace:
@@ -775,7 +785,7 @@ def main() -> None:
     PATHS.output.mkdir(parents=True, exist_ok=True)
     device = resolve_device("auto")
     if args.generate:
-        generate_dataset()
+        generate_missing_data()
     if args.plot and not args.tune and not args.train:
         use_saved_model(device, False, args.plot_cases)
         return

@@ -27,7 +27,7 @@ import torch
 from torch import nn
 from torch.utils.data import DataLoader, Subset
 
-from chem_operator.datasets import ChemOperatorDataset
+from chem_operator.datasets import ChemOperatorDataset, SimulationDatasetGenerator
 from chem_operator.example_paths import ExamplePaths
 from chem_operator.experiments import (
     RayRuntimeConfig,
@@ -44,7 +44,7 @@ from chem_operator.models import (
     fit_fno_zscore_normalizer,
 )
 from chem_operator.normalization import ZScoreNormalizer
-from generate_dataset import generate_dataset
+from generate_dataset import pipe_flow_transient_simulator
 
 
 PATHS = ExamplePaths.from_script(__file__, dataset="pipe_flow_transient")
@@ -90,6 +90,19 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     add_workflow_arguments(parser)
     return parser.parse_args()
+
+
+def generate_missing_data() -> None:
+    """Create absent dataset splits without replacing any existing split."""
+    generator = SimulationDatasetGenerator(
+        pipe_flow_transient_simulator, PATHS.data
+    )
+    generated = generator.generate_missing_splits(n_cases=10_000)
+    print(
+        "Generated splits: " + ", ".join(generated)
+        if generated
+        else "All dataset splits already exist; nothing was overwritten."
+    )
 
 
 def raw_dataset(data_dir: Path, split: str) -> ChemOperatorDataset:
@@ -714,7 +727,7 @@ def main() -> None:
     PATHS.output.mkdir(parents=True, exist_ok=True)
     device = resolve_device("auto")
     if args.generate:
-        generate_dataset()
+        generate_missing_data()
     if args.plot and not args.tune and not args.train:
         use_saved_model(device, calculate_metrics=False, plot_cases=args.plot_cases)
         print(f"Plots written to {PATHS.output}")

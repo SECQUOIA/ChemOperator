@@ -109,7 +109,7 @@ HISTORY_FIELDS = (
 )
 
 
-def _load_generate_dataset():
+def _load_dataset_simulator():
     """Load the sibling generator for direct and importlib-based execution."""
     path = Path(__file__).with_name("generate_dataset.py")
     specification = importlib.util.spec_from_file_location(
@@ -120,10 +120,25 @@ def _load_generate_dataset():
         raise ImportError(f"Cannot load dataset generator at {path}.")
     module = importlib.util.module_from_spec(specification)
     specification.loader.exec_module(module)
-    return module.generate_dataset
+    return module.pipe_flow_transient_simulator
 
 
-generate_dataset = _load_generate_dataset()
+pipe_flow_transient_simulator = _load_dataset_simulator()
+
+
+def generate_missing_data() -> None:
+    """Create absent dataset splits without replacing existing files."""
+    from chem_operator.datasets import SimulationDatasetGenerator
+
+    generator = SimulationDatasetGenerator(
+        pipe_flow_transient_simulator, PATHS.data
+    )
+    generated = generator.generate_missing_splits(n_cases=10_000)
+    print(
+        "Generated splits: " + ", ".join(generated)
+        if generated
+        else "All dataset splits already exist; nothing was overwritten."
+    )
 
 
 def parse_args() -> argparse.Namespace:
@@ -1108,7 +1123,7 @@ def main() -> None:
     PATHS.output.mkdir(parents=True, exist_ok=True)
     device = resolve_device("auto")
     if args.generate:
-        generate_dataset()
+        generate_missing_data()
     if args.plot and not args.tune and not args.train:
         use_saved_model(device, calculate_metrics=False, plot_cases=args.plot_cases)
         print(f"Plots written to {PATHS.output}")

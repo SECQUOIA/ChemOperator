@@ -466,6 +466,11 @@ uv run scripts/pipe_flow/physics_deeponet.py final.epochs=5
 uv run scripts/q2d/validate_solver.py
 ```
 
+The PFR-heat, transient pipe-flow, and Q2D FNO model scripts use
+`--generate` to fill only missing train, validation, and test split files;
+existing HDF5 files are preserved. Run the corresponding
+`generate_dataset.py` script directly when replacing every split is intended.
+
 The DeepONet trainers do not import plotting code. Each model writes a
 versioned canonical run containing its manifest, best configuration, history,
 metrics, checkpoint, tuning trials, and bounded reconstructions. Run the
