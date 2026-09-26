@@ -168,3 +168,30 @@ def test_physics_informer_residual_for_exact_profile() -> None:
         rtol=0.0,
         atol=1.0e-12,
     )
+
+
+def test_physics_deeponet_canonical_run(tmp_path):
+    """Autodiff residuals work in shared training, validation, and saved plots."""
+    from argparse import Namespace
+    from scripts.pipe_flow import physics_deeponet as model_script
+    from scripts.pipe_flow.common import load_physics_split, fit_physics_normalization, PhysicsPipeDataset, physics_experiment_spec
+    from chem_operator.experiments import ExperimentRunner, RunContext, load_run
+    from chem_operator.plotting import plot_operator_runs
+    generator = SimulationDatasetGenerator(HagenPoiseuillePipeFlowSim(), tmp_path / "data")
+    records = [generator.simulator.run_case(generator.simulator.make_case(_params(pressure_drop=p,n_radial_points=8)))
+               for p in (40.,60.,80.)]
+    for split in ("train","valid","test"):
+        generator.save_split(split,records)
+    statistics = fit_physics_normalization(load_physics_split(tmp_path / "data","train",None))
+    data = PhysicsPipeDataset(load_physics_split(tmp_path / "data","train",None).normalized(statistics))
+    config = dict(width=4,depth=1,latent_width=4,activation="tanh",learning_rate=1e-3,
+                  weight_decay=0.,batch_size=2,epochs=1,physics_weight=1e-4)
+    context = RunContext.create(tmp_path / "runs",problem="pipe_flow",model="physics_deeponet",run_id="smoke",seed=42)
+    args = Namespace(data_dir=tmp_path / "data",samples=1,tune_epochs=1,plot_cases=2,max_cases=None)
+    trainer = model_script.make_trainer(config,context,statistics)
+    result = ExperimentRunner(context,physics_experiment_spec(args,"physics_deeponet")).run(
+        trainer,data,data,data,config=config,evaluator=lambda t,d,c: model_script.evaluate_run(t,d,c,statistics,cases=2))
+    assert result.evaluation.metrics["physics_loss"] >= 0
+    assert result.training.metadata["checkpoint_reload_verified"]
+    assert load_run(context.paths.run_dir).manifest["status"] == "completed"
+    assert all(path.is_file() for path in plot_operator_runs([context.paths.run_dir],tmp_path / "plots"))

@@ -20,7 +20,7 @@ pipe_flow_transient_simulator = TransientHagenPoiseuillePipeFlowSim(
     },
 )
 
-def generate_dataset(n_cases: int = 10_000) -> None:
+def generate_dataset(n_cases: int = 2000) -> None:
     """Generate and overwrite all dataset splits."""
     paths = ExamplePaths.from_script(__file__)
     dataset_path = paths.datasets / "pipe_flow_transient"

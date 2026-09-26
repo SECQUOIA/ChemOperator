@@ -446,3 +446,124 @@ __all__ = [
     "plot_experiment_histories",
     "plot_experiment_matrix",
 ]
+
+
+def plot_operator_fields(path, reference, prediction, labels, coordinates, coordinate_names):
+    """Draw channel-first one- or two-dimensional physical fields."""
+    import matplotlib.pyplot as plt
+
+    reference, prediction = np.asarray(reference), np.asarray(prediction)
+    if reference.shape != prediction.shape or reference.shape[0] != len(labels):
+        raise ValueError("Field shapes and labels do not agree.")
+    coordinate_names = [{"r": "Radius [m]", "z": "Axial position [m]", "t": "Time [s]"}.get(str(name), str(name)) for name in coordinate_names]
+    dimensions = reference.ndim - 1
+    if dimensions not in (1, 2) or len(coordinates) != dimensions:
+        raise ValueError("Expected one or two coordinate axes.")
+    if dimensions == 1:
+        fig, axes = plt.subplots(len(labels), 1, squeeze=False, figsize=(8, 3 * len(labels)))
+        for i, label in enumerate(labels):
+            axes[i, 0].plot(coordinates[0], reference[i], label="Reference")
+            axes[i, 0].plot(coordinates[0], prediction[i], "--", label="Prediction")
+            axes[i, 0].set(xlabel=str(coordinate_names[0]), ylabel=str(label))
+            axes[i, 0].legend()
+    else:
+        fig, axes = plt.subplots(len(labels), 3, squeeze=False, figsize=(14, 3.5 * len(labels)))
+        for i, label in enumerate(labels):
+            low = min(reference[i].min(), prediction[i].min())
+            high = max(reference[i].max(), prediction[i].max())
+            for j, (title, field) in enumerate((("Reference", reference[i]), ("Prediction", prediction[i]),
+                                               ("Absolute error", np.abs(prediction[i] - reference[i])))):
+                options = {"vmin": low, "vmax": high} if j < 2 else {"cmap": "magma"}
+                artist = axes[i, j].pcolormesh(coordinates[0], coordinates[1], field.T, shading="auto", **options)
+                axes[i, j].set(title=f"{label}: {title}", xlabel=str(coordinate_names[0]), ylabel=str(coordinate_names[1]))
+                fig.colorbar(artist, ax=axes[i, j])
+    fig.tight_layout()
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(path, dpi=160)
+    plt.close(fig)
+    return path
+
+
+def plot_operator_runs(run_paths, output_dir, *, cases=2):
+    """Plot canonical runs using only their manifest, history, and NPZ arrays."""
+    import matplotlib.pyplot as plt
+
+    if cases < 1:
+        raise ValueError("cases must be positive.")
+    runs = tuple(load_run(path) for path in run_paths)
+    if not runs:
+        raise ValueError("At least one run is required.")
+    if len(runs) > 1:
+        validate_model_comparison(runs)
+        baseline = read_reconstructions(runs[0].path)
+        for run in runs[1:]:
+            other = read_reconstructions(run.path)
+            keys = [key for key in baseline if key in ("case_ids", "reference", "coordinates", "t", "r", "z", "labels")
+                    or key.endswith("_reference") or key.endswith("_labels")]
+            for key in keys:
+                if key not in other or baseline[key].shape != other[key].shape:
+                    raise ValueError(f"Compared runs have different reconstruction {key}.")
+                equal = (np.allclose(baseline[key], other[key], rtol=1e-6, atol=1e-9)
+                         if np.issubdtype(baseline[key].dtype, np.floating)
+                         else np.array_equal(baseline[key], other[key]))
+                if not equal:
+                    raise ValueError(f"Compared runs have different reconstruction {key}.")
+    output = Path(output_dir)
+    output.mkdir(parents=True, exist_ok=True)
+    saved = []
+    for run in runs:
+        destination = output if len(runs) == 1 else output / run.manifest["model_id"] / run.path.name
+        destination.mkdir(parents=True, exist_ok=True)
+        grouped = defaultdict(list)
+        for event in run.history:
+            grouped[(event.split, event.metric)].append((event.epoch, event.value))
+        fig, axes = plt.subplots(1, 2, figsize=(12, 4))
+        for (split, metric), values in grouped.items():
+            if metric in {"relative_l2", "objective"} or metric.endswith("_loss"):
+                axis = axes[0] if metric == "relative_l2" else axes[1]
+                x, y = zip(*values)
+                axis.plot(x, y, label=f"{split}/{metric}")
+        for axis, title in zip(axes, ("Relative L2", "Model objectives")):
+            axis.set(xlabel="Epoch", title=title)
+            axis.legend(fontsize=7)
+            axis.grid(alpha=.25)
+        fig.tight_layout()
+        path = destination / "training_validation_loss.png"
+        fig.savefig(path, dpi=160)
+        plt.close(fig)
+        saved.append(path)
+        data = read_reconstructions(run.path)
+        count = min(cases, len(data["case_ids"]))
+        for index in range(count):
+            if "pfr_reference" in data:
+                groups = (("pfr", ("z",)), ("wall", ("z", "r")))
+                for prefix, axes in groups:
+                    saved.append(plot_operator_fields(destination / f"case_{index:02d}_{prefix}.png",
+                        data[f"{prefix}_reference"][index], data[f"{prefix}_prediction"][index],
+                        data[f"{prefix}_labels"], [data[axis][index] for axis in axes], axes))
+            else:
+                if "coordinate_names" in data:
+                    axes = data["coordinate_names"].tolist()
+                    reference, prediction = data["reference"][index], data["prediction"][index]
+                    coordinates = [data[axis][index] for axis in axes]
+                else:  # Canonical DeepONet arrays have channels last.
+                    axes = list(run.manifest["coordinates"])
+                    reference = np.moveaxis(data["reference"][index], -1, 0)
+                    prediction = np.moveaxis(data["prediction"][index], -1, 0)
+                    coordinates = [data["coordinates"][index].reshape(-1)]
+                saved.append(plot_operator_fields(destination / f"case_{index:02d}.png",
+                    reference, prediction, data["labels"], coordinates, axes))
+    if len(runs) > 1:
+        fig, axis = plt.subplots(figsize=(8, 5))
+        from chem_operator._experiments.comparison import final_metrics
+        values = final_metrics(runs)
+        axis.bar(range(len(values)), list(values.values()))
+        axis.set_xticks(range(len(values)), list(values), rotation=15, ha="right", fontsize=7)
+        axis.set(ylabel="Test relative L2 (physical units)")
+        fig.tight_layout()
+        path = output / "comparison.png"
+        fig.savefig(path, dpi=160)
+        plt.close(fig)
+        saved.append(path)
+    return tuple(saved)

@@ -848,10 +848,14 @@ dependencies = [
     { name = "pandas" },
     { name = "ray", extra = ["tune"] },
     { name = "scikit-learn" },
-    { name = "scikits-odes" },
     { name = "scipy" },
     { name = "torch" },
     { name = "tqdm" },
+]
+
+[package.optional-dependencies]
+sundials = [
+    { name = "scikits-odes" },
 ]
 
 [package.dev-dependencies]
@@ -877,11 +881,12 @@ requires-dist = [
     { name = "pandas", specifier = ">=3.0.3" },
     { name = "ray", extras = ["tune"], specifier = ">=2.56.0" },
     { name = "scikit-learn", specifier = ">=1.9.0" },
-    { name = "scikits-odes", specifier = ">=3.1.1" },
+    { name = "scikits-odes", marker = "extra == 'sundials'", specifier = ">=3.1.1" },
     { name = "scipy", specifier = ">=1.18.0" },
     { name = "torch", specifier = ">=2.12.1" },
     { name = "tqdm", specifier = ">=4.68.3" },
 ]
+provides-extras = ["sundials"]
 
 [package.metadata.requires-dev]
 dev = [

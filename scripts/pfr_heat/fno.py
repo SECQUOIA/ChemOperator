@@ -1,303 +1,58 @@
-"""Train coupled PhysicsNeMo FNOs for a non-isothermal PFR and its wall.
+"""Model definition, scientific losses, and canonical experiment entry point."""
 
-A 1D FNO predicts ``(F_A, F_B, F_C, T_g)(z)``.  Its gas-temperature
-prediction is broadcast across radius and supplied to a 2D FNO predicting
-``T_s(z, r)``.  Supervised, PDE, and boundary losses train both networks.
-"""
-
-# pylint: disable=wrong-import-position,too-many-lines,too-many-locals
-# pylint: disable=missing-function-docstring,missing-class-docstring
-# pylint: disable=too-many-arguments,too-many-positional-arguments,not-callable
-# pylint: disable=import-error,import-outside-toplevel,consider-using-enumerate
 from __future__ import annotations
-
 import argparse
-from collections.abc import Mapping, Sequence
-from copy import deepcopy
-import importlib.util
-import json
-import os
+import sys
 from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from collections.abc import Sequence
 import time
-from typing import Any
-
-os.environ.setdefault("MPLBACKEND", "Agg")
-os.environ.setdefault("MPLCONFIGDIR", "/tmp/matplotlib")
-os.environ.setdefault("RAY_memory_monitor_refresh_ms", "0")
-os.environ.setdefault("WARP_CACHE_PATH", "/tmp/warp")
-
-import matplotlib.pyplot as plt
 from physicsnemo.models.fno import FNO
 from physicsnemo.sym.eq.phy_informer import PhysicsInformer
 from ray import tune
 import torch
 from torch import nn
 from torch.nn import functional as F
-from torch.utils.data import DataLoader, Dataset
-
-from chem_operator.datasets import ChemOperatorDataset
-from chem_operator.example_paths import ExamplePaths
-from chem_operator.experiments import (
-    RayRuntimeConfig,
-    RunContext,
-    RunPaths,
-    Tuner,
-    TuningConfig,
-    add_workflow_arguments,
-    resolve_device,
+from torch.utils.data import DataLoader
+from chem_operator.reactors.pfr_heat.dataset_generator import CylindricalWall, ModelConstants, PlugFlowReactor
+from chem_operator.experiments import CompositeLossTrainer, LossTerm, EvaluationOutcome, StreamingRegressionMetrics
+from chem_operator.experiments import run_operator
+import numpy as np
+from scripts.pfr_heat.common import (
+    PATHS,
+    FILE_STEM,
+    CHECKPOINT,
+    SEED,
+    METRIC,
+    PFR_INPUTS,
+    PFR_OUTPUTS,
+    WALL_CONDITIONS,
+    WALL_GAS,
+    WALL_OUTPUTS,
+    PHYSICS_CONSTANTS,
+    EXPECTED_PDES,
+    TUNE_SAMPLES,
+    TUNE_EPOCHS,
+    FINAL_EPOCHS,
+    EVALUATION_BATCH_SIZE,
+    CPUS_PER_TRIAL,
+    GPUS_PER_TRIAL,
+    MAX_CONCURRENT_TRIALS,
+    HISTORY_KEYS,
+    raw_dataset,
+    complete_field,
+    coordinate,
+    uniform_spacing,
+    validate_sample,
+    Moments,
+    make_normalizer,
+    fit_normalizers,
+    CoupledPFRHeatDataset,
+    make_adapter,
+    PROBLEM_ID,
+    experiment_spec,
+    parse_args,
 )
-from chem_operator.normalization import ZScoreNormalizer, normalizer_from_state_dict
-from chem_operator.reactors.pfr_heat.dataset_generator import (
-    CylindricalWall,
-    ModelConstants,
-    PlugFlowReactor,
-)
-
-PATHS = ExamplePaths.from_script(__file__, dataset="pfr_heat")
-FILE_STEM = "pfr_cylindrical_heat"
-CHECKPOINT = "coupled_fno.pt"
-SEED = 42
-METRIC = "best_valid_relative_l2"
-
-PFR_INPUTS = (
-    "inlet_flow_a", "inlet_concentration_a", "inlet_temperature",
-    "outer_temperature", "volumetric_heat_transfer", "wall_aspect_ratio_sq",
-    "interface_biot", "inner_radius", "outer_radius",
-)
-PFR_OUTPUTS = ("F_A", "F_B", "F_C", "T_gas")
-WALL_CONDITIONS = (
-    "outer_temperature", "wall_aspect_ratio_sq", "interface_biot",
-    "inner_radius", "outer_radius",
-)
-WALL_GAS = "wall_T_gas"
-WALL_OUTPUTS = ("T_solid",)
-PHYSICS_CONSTANTS = PFR_INPUTS + ("flow_scale", "temperature_scale")
-EXPECTED_PDES = {"reactor": "PlugFlowReactor", "solid": "CylindricalWall"}
-
-TUNE_SAMPLES = 6
-TUNE_EPOCHS = 40
-FINAL_EPOCHS = 75
-EVALUATION_BATCH_SIZE = 4
-CPUS_PER_TRIAL = 2
-GPUS_PER_TRIAL = int(torch.cuda.is_available())
-MAX_CONCURRENT_TRIALS = 1
-HISTORY_KEYS = (
-    "data_loss", "species_loss", "gas_loss", "solid_loss", "bc_loss",
-    "total_loss", "valid_relative_l2", "valid_species_loss",
-    "valid_gas_loss", "valid_solid_loss", "valid_bc_loss",
-)
-
-
-def generate_missing_data() -> None:
-    """Create absent splits without replacing existing solver output."""
-    generator_path = Path(__file__).with_name("generate_dataset.py")
-    specification = importlib.util.spec_from_file_location(
-        "pfr_heat_generate_dataset", generator_path
-    )
-    if specification is None or specification.loader is None:
-        raise ImportError(f"Cannot load dataset generator at {generator_path}.")
-    generator_module = importlib.util.module_from_spec(specification)
-    specification.loader.exec_module(generator_module)
-    from chem_operator.datasets import SimulationDatasetGenerator
-
-    generator = SimulationDatasetGenerator(
-        generator_module.pfr_heat_simulator, PATHS.data, seed=SEED
-    )
-    generated = generator.generate_missing_splits(n_cases=20)
-    print(
-        "Generated splits: " + ", ".join(generated)
-        if generated
-        else "All dataset splits already exist; nothing was overwritten."
-    )
-
-
-def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description=__doc__)
-    add_workflow_arguments(parser)
-    return parser.parse_args()
-
-def raw_dataset(data_dir: Path, split: str) -> ChemOperatorDataset:
-    return ChemOperatorDataset(
-        data_dir / f"{FILE_STEM}_{split}.h5",
-        task="field_map", coordinate_name="z",
-        input_fields=("F", "T_gas", "T_solid"),
-        output_fields=("F", "T_gas", "T_solid"),
-        constant_inputs=PHYSICS_CONSTANTS, n_steps_input=1,
-        dtype=torch.float32,
-    )
-
-
-def complete_field(sample: Mapping[str, Any], name: str) -> torch.Tensor:
-    return torch.cat((sample["input_fields"][name], sample["output_fields"][name]))
-
-
-def coordinate(sample: Mapping[str, Any], name: str) -> torch.Tensor:
-    first = sample["input_coordinates"][name].reshape(-1)
-    second = sample["output_coordinates"][name].reshape(-1)
-    if name == "z":
-        return torch.cat((first, second))
-    if first.shape != second.shape or not torch.equal(first, second):
-        raise ValueError(f"Coordinate {name!r} changes within a steady case.")
-    return first
-
-
-def uniform_spacing(values: torch.Tensor, name: str) -> float:
-    if values.ndim != 1 or values.numel() < 5:
-        raise ValueError(f"{name} needs at least five 1D points.")
-    differences = values[1:] - values[:-1]
-    if torch.any(differences <= 0) or not torch.allclose(
-        differences, differences[0].expand_as(differences), rtol=1e-5, atol=1e-7
-    ):
-        raise ValueError(f"{name} must be strictly increasing and uniform.")
-    return float(differences[0])
-
-
-def validate_sample(
-    sample: Mapping[str, Any], expected: tuple[int, int] | None = None
-) -> tuple[int, int]:
-    metadata = sample.get("metadata", {})
-    if metadata.get("physicsnemo_pdes") != EXPECTED_PDES:
-        raise ValueError("Dataset PDE provenance does not match the coupled model.")
-    if tuple(metadata.get("species", ())) != ("A", "B", "C"):
-        raise ValueError("Species metadata must be ordered as A, B, C.")
-    missing = [n for n in PHYSICS_CONSTANTS if n not in sample["constant_inputs"]]
-    if missing:
-        raise KeyError(f"Missing constants: {', '.join(missing)}")
-    z, r = coordinate(sample, "z"), coordinate(sample, "r")
-    uniform_spacing(z, "z")
-    uniform_spacing(r, "r")
-    shape = (z.numel(), r.numel())
-    shapes = {
-        "F": tuple(complete_field(sample, "F").shape),
-        "T_gas": tuple(complete_field(sample, "T_gas").shape),
-        "T_solid": tuple(complete_field(sample, "T_solid").shape),
-    }
-    wanted = {"F": (shape[0], 3), "T_gas": (shape[0],), "T_solid": shape}
-    if shapes != wanted:
-        raise ValueError(f"Invalid coupled field shapes {shapes}; expected {wanted}.")
-    if expected is not None and shape != expected:
-        raise ValueError(f"Expected grid {expected}, received {shape}.")
-    return shape
-
-
-class Moments:
-    def __init__(self) -> None:
-        self.count = 0
-        self.total = torch.tensor(0.0, dtype=torch.float64)
-        self.squares = torch.tensor(0.0, dtype=torch.float64)
-
-    def update(self, value: torch.Tensor) -> None:
-        value = torch.as_tensor(value, dtype=torch.float64).reshape(-1)
-        self.count += value.numel()
-        self.total += value.sum()
-        self.squares += value.square().sum()
-
-    def result(self) -> tuple[torch.Tensor, torch.Tensor]:
-        if not self.count:
-            raise RuntimeError("Cannot normalize an empty field.")
-        mean = self.total / self.count
-        variance = (self.squares / self.count - mean.square()).clamp_min(0)
-        return mean.float(), variance.sqrt().float()
-
-
-def make_normalizer(
-    moments: Mapping[str, Moments], outputs: Sequence[str], inputs: Sequence[str]
-) -> ZScoreNormalizer:
-    pairs = {name: value.result() for name, value in moments.items()}
-    return ZScoreNormalizer(
-        {
-            "mean": {name: value[0] for name, value in pairs.items()},
-            "std": {name: value[1] for name, value in pairs.items()},
-            "mean_delta": {name: torch.tensor(0.0) for name in outputs},
-            "std_delta": {name: torch.tensor(1.0) for name in outputs},
-        }, outputs, inputs,
-    )
-
-
-def fit_normalizers(
-    dataset: ChemOperatorDataset,
-) -> tuple[ZScoreNormalizer, ZScoreNormalizer, tuple[int, int]]:
-    pfr_moments = {name: Moments() for name in PFR_INPUTS + PFR_OUTPUTS}
-    wall_moments = {
-        name: Moments()
-        for name in (WALL_GAS,) + WALL_CONDITIONS + WALL_OUTPUTS
-    }
-    shape = None
-    for index in range(len(dataset)):
-        sample = dataset[index]
-        current = validate_sample(sample, shape)
-        shape = shape or current
-        values = sample["constant_inputs"]
-        flows, gas, solid = (
-            complete_field(sample, "F"), complete_field(sample, "T_gas"),
-            complete_field(sample, "T_solid"),
-        )
-        for name in PFR_INPUTS:
-            pfr_moments[name].update(values[name])
-        for channel, name in enumerate(PFR_OUTPUTS[:3]):
-            pfr_moments[name].update(flows[:, channel])
-        pfr_moments["T_gas"].update(gas)
-        wall_moments[WALL_GAS].update(gas)
-        for name in WALL_CONDITIONS:
-            wall_moments[name].update(values[name])
-        wall_moments["T_solid"].update(solid)
-    if shape is None:
-        raise RuntimeError("Training dataset is empty.")
-    return (
-        make_normalizer(pfr_moments, PFR_OUTPUTS, PFR_INPUTS),
-        make_normalizer(
-            wall_moments, WALL_OUTPUTS, (WALL_GAS,) + WALL_CONDITIONS
-        ),
-        shape,
-    )
-
-
-class CoupledPFRHeatDataset(Dataset):
-    """Normalized, lazy coupled view of a PFR-heat HDF5 split."""
-
-    def __init__(self, dataset, pfr_normalizer, wall_normalizer, shape):
-        self.dataset = dataset
-        self.pfr_normalizer = pfr_normalizer
-        self.wall_normalizer = wall_normalizer
-        self.shape = tuple(shape)
-        for index in range(len(dataset)):
-            validate_sample(dataset[index], self.shape)
-
-    def __len__(self) -> int:
-        return len(self.dataset)
-
-    def __getitem__(self, index: int) -> dict[str, torch.Tensor]:
-        sample = self.dataset[index]
-        n_z, n_r = self.shape
-        constants = sample["constant_inputs"]
-        flows = complete_field(sample, "F")
-        gas = complete_field(sample, "T_gas")
-        solid = complete_field(sample, "T_solid")
-        pfr_x = torch.stack([
-            self.pfr_normalizer.normalize(constants[name], name).expand(n_z)
-            for name in PFR_INPUTS
-        ])
-        pfr_y = torch.stack([
-            self.pfr_normalizer.normalize(value, name)
-            for name, value in zip(
-                PFR_OUTPUTS, (flows[:, 0], flows[:, 1], flows[:, 2], gas),
-                strict=True,
-            )
-        ])
-        wall_conditions = torch.stack([
-            self.wall_normalizer.normalize(constants[name], name).expand(n_z, n_r)
-            for name in WALL_CONDITIONS
-        ])
-        return {
-            "pfr_x": pfr_x, "pfr_y": pfr_y,
-            "wall_conditions": wall_conditions,
-            "wall_y": self.wall_normalizer.normalize(solid, "T_solid").unsqueeze(0),
-            "z": coordinate(sample, "z"), "r": coordinate(sample, "r"),
-            "physics_constants": torch.stack([
-                constants[name].reshape(()) for name in PHYSICS_CONSTANTS
-            ]),
-        }
-
 
 class CoupledFNO(nn.Module):
     """Acyclic PFR-to-wall pair of PhysicsNeMo FNOs."""
@@ -335,10 +90,6 @@ class CoupledFNO(nn.Module):
 
 def model_from_config(config, pfr_normalizer, wall_normalizer, device):
     return CoupledFNO(config, pfr_normalizer, wall_normalizer).to(device)
-
-
-def count_parameters(model: nn.Module) -> int:
-    return sum(parameter.numel() for parameter in model.parameters())
 
 
 class InformerCache:
@@ -435,398 +186,118 @@ def relative_channels(prediction: torch.Tensor, target: torch.Tensor):
     return error / scale
 
 
-def validation_metrics(model, dataset, pfr_normalizer, wall_normalizer, batch_size, device):
-    totals = {name: 0.0 for name in ("relative_l2", "species", "gas", "solid", "bc")}
-    samples, cache = 0, InformerCache(device)
-    model.eval()
+PHYSICS_WEIGHT_KEYS = ("lambda_f", "lambda_g", "lambda_s", "lambda_bc")
+
+
+def search_space(variant="physics"):
+    space = {'pfr_modes': tune.choice([8, 12, 16]), 'wall_modes_z': tune.choice([8, 12, 16]), 'wall_modes_r': tune.choice([4, 6, 8]), 'latent_channels': tune.choice([8, 16, 24]), 'n_layers': tune.choice([3, 4]), 'padding': tune.choice([0, 4]), 'decoder_layers': tune.choice([1, 2]), 'decoder_layer_size': tune.choice([16, 32]), 'learning_rate': tune.loguniform(0.0001, 0.003), 'weight_decay': tune.loguniform(1e-08, 0.0001), 'batch_size': tune.choice([1, 2, 4])}
+    if variant == "data":
+        space.update({key: 0.0 for key in PHYSICS_WEIGHT_KEYS})
+    elif variant == "physics":
+        space.update({
+            key: tune.loguniform(0.0001, 0.1)
+            for key in PHYSICS_WEIGHT_KEYS
+        })
+    else:
+        raise ValueError(f"Unknown variant {variant!r}.")
+    return space
+
+MODEL_IDS = {"data": "fno_data", "physics": "fno_physics"}
+MODEL_ID = MODEL_IDS["physics"]
+
+def make_trainer(config, context, pfr, wall, shape, *, variant="physics"):
+    config = dict(config)
+    if variant == "data":
+        config.update({key: 0.0 for key in PHYSICS_WEIGHT_KEYS})
+    elif variant != "physics":
+        raise ValueError(f"Unknown variant {variant!r}.")
+    physics_active = any(
+        float(config.get(key, 0.0)) > 0.0 for key in PHYSICS_WEIGHT_KEYS
+    )
+    cache = InformerCache(context.device)
+    def adapt(batch, device, dtype):
+        batch = {key: value.to(device=device, dtype=dtype) for key, value in batch.items()}
+        return (batch["pfr_x"], batch["wall_conditions"]), {"pfr": batch["pfr_y"], "wall": batch["wall_y"]}, batch
+    def forward(model, inputs, batch):
+        prediction = model(*inputs)
+        if physics_active or not model.training:
+            batch["physics_losses"] = physics_losses(
+                prediction, batch, pfr, wall, cache
+            )
+        else:
+            zero = prediction["pfr"].new_zeros(())
+            batch["physics_losses"] = {
+                name: zero for name in ("species", "gas", "solid", "bc")
+            }
+        return prediction
+    def metric(p, t, batch):
+        pp, tt = physical_predictions(p, pfr, wall), physical_predictions(t, pfr, wall)
+        return tuple(torch.cat([v.flatten(1) for v in values], dim=1) for values in (pp,tt))
+    terms = [LossTerm("data_loss", lambda p,t,b: supervised_loss(p,b))]
+    for name, key in (("species", "lambda_f"), ("gas", "lambda_g"), ("solid", "lambda_s"), ("bc", "lambda_bc")):
+        terms.append(LossTerm(name + "_loss", lambda p,t,b,n=name: b["physics_losses"][n], float(config[key])))
+    return CompositeLossTrainer(lambda cfg: model_from_config(cfg,pfr,wall,context.device), config,
+        batch_adapter=adapt, forward_adapter=forward, loss_terms=terms, metric_adapter=metric,
+        checkpoint_metadata={"pfr_normalizer": pfr.state_dict(), "wall_normalizer": wall.state_dict(),
+                             "shape": list(shape), "pdes": EXPECTED_PDES})
+
+def evaluate_run(trainer, data, context, pfr, wall, cases=2):
+    scores = StreamingRegressionMetrics()
+    fields = {name: StreamingRegressionMetrics() for name in PFR_OUTPUTS + WALL_OUTPUTS}
+    stored = {name: [] for name in ("pfr_reference", "pfr_prediction", "wall_reference", "wall_prediction", "z", "r")}
+    started = time.perf_counter()
     with torch.no_grad():
-        for batch in DataLoader(dataset, batch_size=batch_size):
-            batch = {k: v.to(device) for k, v in batch.items()}
-            prediction = model(batch["pfr_x"], batch["wall_conditions"])
-            predicted = physical_predictions(prediction, pfr_normalizer, wall_normalizer)
-            target = physical_predictions(
-                {"pfr": batch["pfr_y"], "wall": batch["wall_y"]},
-                pfr_normalizer, wall_normalizer,
-            )
-            p1 = torch.cat((predicted[0], predicted[1][:, None]), dim=1)
-            p2 = torch.cat((target[0], target[1][:, None]), dim=1)
-            errors = torch.cat((
-                relative_channels(p1, p2),
-                relative_channels(predicted[2][:, None], target[2][:, None]),
-            ), dim=1).mean(1)
-            losses = physics_losses(
-                prediction, batch, pfr_normalizer, wall_normalizer, cache
-            )
-            count = p1.shape[0]
-            totals["relative_l2"] += float(errors.sum())
-            for name in losses:
-                totals[name] += float(losses[name]) * count
-            samples += count
-    return {name: value / max(samples, 1) for name, value in totals.items()}
+        for batch in DataLoader(data, batch_size=int(trainer.config["batch_size"])):
+            prediction = trainer.model(batch["pfr_x"].to(context.device), batch["wall_conditions"].to(context.device))
+            pp = tuple(v.cpu() for v in physical_predictions(prediction, pfr, wall))
+            tt = physical_predictions({"pfr": batch["pfr_y"], "wall": batch["wall_y"]}, pfr, wall)
+            pred = torch.cat((pp[0], pp[1][:,None]), dim=1)
+            ref = torch.cat((tt[0], tt[1][:,None]), dim=1)
+            scores.update(torch.cat([v.flatten(1) for v in pp],dim=1), torch.cat([v.flatten(1) for v in tt],dim=1))
+            for i,name in enumerate(PFR_OUTPUTS): fields[name].update(pred[:,i], ref[:,i])
+            fields["T_solid"].update(pp[2],tt[2])
+            count = max(0,min(cases-len(stored["z"]), len(ref)))
+            for i in range(count):
+                for key,value in (("pfr_reference",ref),("pfr_prediction",pred),("wall_reference",tt[2][:,None]),
+                                  ("wall_prediction",pp[2][:,None]),("z",batch["z"]),("r",batch["r"])):
+                    stored[key].append(value[i].numpy())
+    elapsed = time.perf_counter()-started
+    metrics = scores.compute()
+    for name,value in fields.items(): metrics.update({f"{name}/{k}": v for k,v in value.compute().items()})
+    diagnostics = trainer.evaluate_losses(data, context)
+    metrics.update({k: v for k,v in diagnostics.items() if k.endswith("_loss")})
+    return EvaluationOutcome(metrics, {**{k: np.asarray(v) for k,v in stored.items()},
+        "case_ids": np.arange(len(stored["z"])), "pfr_labels": np.asarray(PFR_OUTPUTS), "wall_labels": np.asarray(WALL_OUTPUTS)}, elapsed)
 
 
-def train_model(
-    config, train_data, valid_data, pfr_normalizer, wall_normalizer, *,
-    epochs, device, reporter=None, print_epochs=False,
-):
-    torch.manual_seed(SEED)
-    model = model_from_config(config, pfr_normalizer, wall_normalizer, device)
-    optimizer = torch.optim.AdamW(
-        model.parameters(), lr=float(config["learning_rate"]),
-        weight_decay=float(config["weight_decay"]),
+def parse_cli_args():
+    """Parse the shared workflow arguments plus the loss variant."""
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--variant", choices=("both", "data", "physics"), default="physics"
     )
-    loader = DataLoader(
-        train_data, batch_size=int(config["batch_size"]), shuffle=True,
-        generator=torch.Generator().manual_seed(SEED),
-    )
-    history = {name: [] for name in HISTORY_KEYS}
-    best_error, best_state = float("inf"), deepcopy(model.state_dict())
-    cache, tic = InformerCache(device), time.perf_counter()
-    for epoch in range(1, epochs + 1):
-        model.train()
-        sums = {name: 0.0 for name in HISTORY_KEYS[:6]}
-        samples = 0
-        for batch in loader:
-            batch = {k: v.to(device) for k, v in batch.items()}
-            prediction = model(batch["pfr_x"], batch["wall_conditions"])
-            data = supervised_loss(prediction, batch)
-            physics = physics_losses(
-                prediction, batch, pfr_normalizer, wall_normalizer, cache
-            )
-            total = data + sum(
-                float(config[key]) * physics[name]
-                for key, name in (
-                    ("lambda_f", "species"), ("lambda_g", "gas"),
-                    ("lambda_s", "solid"), ("lambda_bc", "bc"),
-                )
-            )
-            optimizer.zero_grad(set_to_none=True)
-            total.backward()
-            optimizer.step()
-            count = batch["pfr_x"].shape[0]
-            values = {"data_loss": data, "total_loss": total}
-            values.update({f"{name}_loss": value for name, value in physics.items()})
-            for name, value in values.items():
-                sums[name] += float(value.detach()) * count
-            samples += count
-        for name in HISTORY_KEYS[:6]:
-            history[name].append(sums[name] / samples)
-        valid = validation_metrics(
-            model, valid_data, pfr_normalizer, wall_normalizer,
-            int(config["batch_size"]), device,
+    return parse_args(parser=parser)
+
+
+def main():
+    args = parse_cli_args()
+    raw = raw_dataset(args.data_dir,"train")
+    try: pfr,wall,shape = fit_normalizers(raw)
+    finally: raw.close()
+    variants = ("data", "physics") if args.variant == "both" else (args.variant,)
+    for variant in variants:
+        model_id = MODEL_IDS[variant]
+        run_operator(
+            args, PATHS, experiment_spec(args, model_id),
+            lambda split: make_adapter(args.data_dir,split,pfr,wall,shape),
+            lambda config,context,selected=variant: make_trainer(
+                config,context,pfr,wall,shape,variant=selected
+            ),
+            search_space(variant),
+            lambda trainer,data,context: evaluate_run(
+                trainer,data,context,pfr,wall,args.plot_cases
+            ),
         )
-        history["valid_relative_l2"].append(valid["relative_l2"])
-        for name in ("species", "gas", "solid", "bc"):
-            history[f"valid_{name}_loss"].append(valid[name])
-        if valid["relative_l2"] < best_error:
-            best_error, best_state = valid["relative_l2"], deepcopy(model.state_dict())
-        if print_epochs:
-            pde_value = sum(
-                history[name][-1]
-                for name in ("species_loss", "gas_loss", "solid_loss")
-            )
-            print(
-                f"Epoch {epoch:03d}/{epochs}: data={history['data_loss'][-1]:.3e}, "
-                f"physics={pde_value:.3e}, "
-                f"bc={history['bc_loss'][-1]:.3e}, valid={valid['relative_l2']:.3e}"
-            )
-        if reporter is not None:
-            reporter({
-                **{name: history[name][-1] for name in HISTORY_KEYS},
-                METRIC: best_error, "n_params": count_parameters(model),
-            })
-    model.load_state_dict(best_state)
-    return model.eval(), history, time.perf_counter() - tic
-
-
-def make_adapter(data_dir, split, pfr_normalizer, wall_normalizer, shape):
-    raw = raw_dataset(Path(data_dir), split)
-    return raw, CoupledPFRHeatDataset(raw, pfr_normalizer, wall_normalizer, shape)
-
-
-def ray_trial(config, *, data_dir, pfr_state, wall_state, shape, reporter):
-    pfr = normalizer_from_state_dict(pfr_state)
-    wall = normalizer_from_state_dict(wall_state)
-    train_raw, train = make_adapter(data_dir, "train", pfr, wall, shape)
-    valid_raw, valid = make_adapter(data_dir, "valid", pfr, wall, shape)
-    try:
-        train_model(
-            config, train, valid, pfr, wall, epochs=TUNE_EPOCHS,
-            device=resolve_device("auto"), reporter=reporter,
-        )
-    finally:
-        train_raw.close()
-        valid_raw.close()
-
-
-def tune_hyperparameters(data_dir, output_dir, pfr, wall, shape):
-    """Run the local search space using shared Ray/Optuna mechanics."""
-    space = {
-        "pfr_modes": tune.choice([8, 12, 16]),
-        "wall_modes_z": tune.choice([8, 12, 16]),
-        "wall_modes_r": tune.choice([4, 6, 8]),
-        "latent_channels": tune.choice([8, 16, 24]),
-        "n_layers": tune.choice([3, 4]), "padding": tune.choice([0, 4]),
-        "decoder_layers": tune.choice([1, 2]),
-        "decoder_layer_size": tune.choice([16, 32]),
-        "learning_rate": tune.loguniform(1e-4, 3e-3),
-        "weight_decay": tune.loguniform(1e-8, 1e-4),
-        "batch_size": tune.choice([1, 2, 4]),
-        "lambda_f": tune.loguniform(1e-4, 1e-1),
-        "lambda_g": tune.loguniform(1e-4, 1e-1),
-        "lambda_s": tune.loguniform(1e-4, 1e-1),
-        "lambda_bc": tune.loguniform(1e-4, 1e-1),
-    }
-    storage = (output_dir / "ray_results").resolve()
-    pfr_state, wall_state = pfr.state_dict(), wall.state_dict()
-
-    def objective(config, _train, _validation, _context, report):
-        return ray_trial(
-            config,
-            data_dir=str(data_dir.resolve()),
-            pfr_state=pfr_state,
-            wall_state=wall_state,
-            shape=shape,
-            reporter=report,
-        )
-
-    tuner = Tuner.from_objective(
-        objective,
-        space,
-        config=TuningConfig(
-            metric=METRIC,
-            mode="min",
-            num_samples=TUNE_SAMPLES,
-            max_epochs=TUNE_EPOCHS,
-            resources_per_trial={"cpu": CPUS_PER_TRIAL, "gpu": GPUS_PER_TRIAL},
-            max_concurrent_trials=MAX_CONCURRENT_TRIALS,
-            grace_period=TUNE_EPOCHS // 3,
-            optuna_seed=SEED,
-            optuna_startup_trials=3,
-            ray_runtime=RayRuntimeConfig(temp_dir=PATHS.ray.resolve()),
-        ),
-    )
-    context = RunContext(
-        RunPaths(output_dir), SEED, torch.float32, resolve_device("auto")
-    )
-    return tuner.fit(
-        None,
-        None,
-        context,
-        storage_path=storage,
-        experiment_name="pfr_heat_coupled_physicsnemo_fno",
-    )
-
-
-def save_checkpoint(path, model, config, pfr, wall, shape):
-    torch.save({
-        "state_dict": {k: v.detach().cpu() for k, v in model.state_dict().items()},
-        "model_config": dict(config), "pfr_normalization": pfr.state_dict(),
-        "wall_normalization": wall.state_dict(), "pfr_input_names": PFR_INPUTS,
-        "pfr_output_names": PFR_OUTPUTS,
-        "wall_input_names": (WALL_GAS,) + WALL_CONDITIONS,
-        "wall_output_names": WALL_OUTPUTS, "coordinate_names": ("z", "r"),
-        "training_shape": tuple(shape), "physicsnemo_pdes": EXPECTED_PDES,
-    }, path)
-
-
-def load_checkpoint(path, device):
-    checkpoint = torch.load(path, map_location=device, weights_only=True)
-    expected = {
-        "pfr_input_names": PFR_INPUTS, "pfr_output_names": PFR_OUTPUTS,
-        "wall_input_names": (WALL_GAS,) + WALL_CONDITIONS,
-        "wall_output_names": WALL_OUTPUTS, "coordinate_names": ("z", "r"),
-    }
-    for key, value in expected.items():
-        if tuple(checkpoint.get(key, ())) != value:
-            raise ValueError(f"Checkpoint {key} does not match this workflow.")
-    if checkpoint.get("physicsnemo_pdes") != EXPECTED_PDES:
-        raise ValueError("Checkpoint PDE provenance does not match this workflow.")
-    shape = tuple(int(value) for value in checkpoint["training_shape"])
-    if len(shape) != 2 or min(shape) < 5:
-        raise ValueError("Checkpoint training shape is invalid.")
-    pfr = normalizer_from_state_dict(checkpoint["pfr_normalization"])
-    wall = normalizer_from_state_dict(checkpoint["wall_normalization"])
-    config = dict(checkpoint["model_config"])
-    model = model_from_config(config, pfr, wall, device)
-    model.load_state_dict(checkpoint["state_dict"], strict=True)
-    return model.eval(), pfr, wall, shape, config
-
-
-def train_best_config(config, pfr, wall, shape, device):
-    train_raw, train = make_adapter(PATHS.data, "train", pfr, wall, shape)
-    valid_raw, valid = make_adapter(PATHS.data, "valid", pfr, wall, shape)
-    try:
-        model, history, elapsed = train_model(
-            config, train, valid, pfr, wall, epochs=FINAL_EPOCHS,
-            device=device, print_epochs=True,
-        )
-    finally:
-        train_raw.close()
-        valid_raw.close()
-    save_checkpoint(PATHS.output / CHECKPOINT, model, config, pfr, wall, shape)
-    with (PATHS.output / "history.json").open("w", encoding="utf-8") as file:
-        json.dump(history, file, indent=2)
-    return history, elapsed
-
-
-def evaluate(model, dataset, pfr, wall, device):
-    """Calculate per-channel physical relative errors and physics metrics."""
-    totals = {name: 0.0 for name in PFR_OUTPUTS + WALL_OUTPUTS}
-    samples = 0
-    with torch.no_grad():
-        for batch in DataLoader(dataset, batch_size=EVALUATION_BATCH_SIZE):
-            batch = {k: v.to(device) for k, v in batch.items()}
-            predicted = physical_predictions(
-                model(batch["pfr_x"], batch["wall_conditions"]), pfr, wall
-            )
-            target = physical_predictions(
-                {"pfr": batch["pfr_y"], "wall": batch["wall_y"]}, pfr, wall
-            )
-            pfr_errors = relative_channels(
-                torch.cat((predicted[0], predicted[1][:, None]), 1),
-                torch.cat((target[0], target[1][:, None]), 1),
-            )
-            wall_errors = relative_channels(
-                predicted[2][:, None], target[2][:, None]
-            )
-            for i, name in enumerate(PFR_OUTPUTS):
-                totals[name] += float(pfr_errors[:, i].sum())
-            totals["T_solid"] += float(wall_errors.sum())
-            samples += pfr_errors.shape[0]
-    metrics = {f"relative_l2_{k}": v / samples for k, v in totals.items()}
-    metrics["relative_l2"] = sum(metrics.values()) / len(totals)
-    physics = validation_metrics(
-        model, dataset, pfr, wall, EVALUATION_BATCH_SIZE, device
-    )
-    metrics.update({f"{k}_loss": v for k, v in physics.items() if k != "relative_l2"})
-    return metrics
-
-
-def plot_history(history):
-    figure, axes = plt.subplots(1, 2, figsize=(13, 5), constrained_layout=True)
-    for name in ("data_loss", "total_loss", "valid_relative_l2"):
-        axes[0].plot(history[name], label=name)
-    for name in ("species", "gas", "solid", "bc"):
-        axes[1].plot(history[f"valid_{name}_loss"], label=name)
-    for axis in axes:
-        axis.set_yscale("log")
-        axis.set_xlabel("Epoch")
-        axis.legend()
-    figure.savefig(PATHS.output / "training_history.png", dpi=180)
-    plt.close(figure)
-
-
-def plot_cases(model, dataset, pfr, wall, count, device):
-    for case in range(min(count, len(dataset))):
-        sample = dataset[case]
-        with torch.no_grad():
-            prediction = physical_predictions(model(
-                sample["pfr_x"][None].to(device),
-                sample["wall_conditions"][None].to(device),
-            ), pfr, wall)
-            target = physical_predictions({
-                "pfr": sample["pfr_y"][None].to(device),
-                "wall": sample["wall_y"][None].to(device),
-            }, pfr, wall)
-        z, r = sample["z"].numpy(), sample["r"].numpy()
-        predicted_pfr = torch.cat((prediction[0], prediction[1][:, None]), 1)[0].cpu()
-        target_pfr = torch.cat((target[0], target[1][:, None]), 1)[0].cpu()
-        figure, axes = plt.subplots(2, 2, figsize=(12, 8), constrained_layout=True)
-        for axis, i, name in zip(axes.flat, range(4), PFR_OUTPUTS, strict=True):
-            axis.plot(z, target_pfr[i], label="truth")
-            axis.plot(z, predicted_pfr[i], "--", label="FNO")
-            axis.set_title(name)
-            axis.legend()
-        figure.savefig(PATHS.output / f"case_{case:02d}_pfr.png", dpi=180)
-        plt.close(figure)
-        truth, estimate = target[2][0].cpu().numpy(), prediction[2][0].cpu().numpy()
-        figure, axes = plt.subplots(1, 3, figsize=(16, 4.5), constrained_layout=True)
-        for axis, field, title in zip(
-            axes, (truth, estimate, estimate - truth), ("Truth", "FNO", "Error"),
-            strict=True,
-        ):
-            image = axis.pcolormesh(z, r, field.T, shading="auto")
-            axis.set_title(title)
-            figure.colorbar(image, ax=axis)
-        figure.savefig(PATHS.output / f"case_{case:02d}_wall.png", dpi=180)
-        plt.close(figure)
-
-
-def load_json(path: Path) -> dict[str, Any]:
-    if not path.is_file():
-        raise FileNotFoundError(f"Configuration not found at {path}.")
-    with path.open("r", encoding="utf-8") as file:
-        value = json.load(file)
-    if not isinstance(value, dict):
-        raise TypeError(f"{path} must contain a JSON object.")
-    return value
-
-
-def use_saved_model(device, calculate_metrics, cases):
-    model, pfr, wall, shape, _ = load_checkpoint(PATHS.output / CHECKPOINT, device)
-    raw, dataset = make_adapter(PATHS.data, "test", pfr, wall, shape)
-    try:
-        metrics = (
-            evaluate(model, dataset, pfr, wall, device)
-            if calculate_metrics else {}
-        )
-        plot_cases(model, dataset, pfr, wall, cases, device)
-    finally:
-        raw.close()
-    history_path = PATHS.output / "history.json"
-    if history_path.is_file():
-        plot_history(load_json(history_path))
-    return metrics
-
-
-def main() -> None:
-    args = parse_args()
-    PATHS.output.mkdir(parents=True, exist_ok=True)
-    device = resolve_device("auto")
-    if args.generate:
-        generate_missing_data()
-    if args.plot and not args.tune and not args.train:
-        use_saved_model(device, False, args.plot_cases)
-        return
-    raw = raw_dataset(PATHS.data, "train")
-    try:
-        pfr, wall, shape = fit_normalizers(raw)
-    finally:
-        raw.close()
-    print(f"Validated coupled grid {shape[0]}x{shape[1]}.")
-    config_path = PATHS.output / "best_config.json"
-    config, tuning_seconds = None, 0.0
-    if args.tune:
-        (PATHS.output / "ray_results").mkdir(parents=True, exist_ok=True)
-        PATHS.ray.mkdir(parents=True, exist_ok=True)
-        tuning = tune_hyperparameters(PATHS.data, PATHS.output, pfr, wall, shape)
-        config = dict(tuning.best_config)
-        tuning_seconds = tuning.tuning_seconds
-        with config_path.open("w", encoding="utf-8") as file:
-            json.dump(config, file, indent=2)
-    history, training_seconds = None, 0.0
-    if args.train:
-        selected = config_path if args.train_config == "best" else Path(args.train_config)
-        config = config or load_json(selected)
-        history, training_seconds = train_best_config(config, pfr, wall, shape, device)
-    if args.plot:
-        metrics = use_saved_model(device, args.train, args.plot_cases)
-        if history is not None:
-            model, _, _, _, _ = load_checkpoint(PATHS.output / CHECKPOINT, device)
-            metrics.update({
-                "parameters": count_parameters(model),
-                "training_seconds": training_seconds,
-                "tuning_seconds": tuning_seconds,
-                "best_epoch": int(torch.tensor(history["valid_relative_l2"]).argmin()) + 1,
-                "best_validation_relative_l2": min(history["valid_relative_l2"]),
-                "training_shape": list(shape),
-            })
-            with (PATHS.output / "metrics.json").open("w", encoding="utf-8") as file:
-                json.dump(metrics, file, indent=2)
-            print(json.dumps(metrics, indent=2))
-    print(f"Selected stages completed in {PATHS.output}")
-
 
 if __name__ == "__main__":
     main()

@@ -237,7 +237,13 @@ def test_experiment_runner_publishes_complete_run(tmp_path: Path) -> None:
             inference_seconds=started,
         )
 
-    result = ExperimentRunner(run_context, spec).run(
+    runner = ExperimentRunner(run_context, spec)
+    runner.start(timings={"tuning_seconds": 2.5})
+    from dataclasses import replace
+    changed = replace(spec, dataset_fingerprints={**spec.dataset_fingerprints, "train": "sha256:changed"})
+    with pytest.raises(ValueError, match="dataset_fingerprints"):
+        ExperimentRunner(run_context, changed).start()
+    result = runner.run(
         trainer,
         TinyFields(),
         TinyFields(),
@@ -247,6 +253,7 @@ def test_experiment_runner_publishes_complete_run(tmp_path: Path) -> None:
     )
     ArtifactStore(result.context).validate_complete()
     loaded = load_run(result.context.paths.run_dir)
+    assert loaded.manifest["timings"]["tuning_seconds"] == 2.5
     assert loaded.manifest["parameter_count"] == 2
     assert loaded.metrics[0]["metric"] == "relative_l2"
 

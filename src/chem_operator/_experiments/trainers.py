@@ -76,13 +76,24 @@ def _cpu_state_dict(model: torch.nn.Module) -> dict[str, torch.Tensor]:
     return {
         name: value.detach().to(device="cpu").clone()
         for name, value in model.state_dict().items()
+        if name != "_metadata"  # NeuralOperator reconstructs callable metadata from config.
     }
+
+
+def _move_operator_model(model: torch.nn.Module, device, dtype) -> torch.nn.Module:
+    """Match execution precision without discarding Fourier weights' imaginary parts."""
+    complex_dtype = torch.complex128 if dtype == torch.float64 else torch.complex64
+    return model._apply(lambda value: value.to(
+        device=device,
+        dtype=complex_dtype if value.is_complex() else dtype if value.is_floating_point() else value.dtype,
+    ))
 
 
 def _verify_state_dict(
     expected: Mapping[str, torch.Tensor],
     actual: Mapping[str, torch.Tensor],
 ) -> None:
+    actual = {name: value for name, value in actual.items() if name != "_metadata"}
     if expected.keys() != actual.keys():
         raise RuntimeError("Reloaded checkpoint has different state-dict keys.")
     for name in expected:
@@ -491,7 +502,12 @@ def _concatenate_batches(values: Sequence[Any]) -> Any:
 
 
 class FNOTrainer:
-    """Model-factory-driven FNO trainer with optional composite loss terms."""
+    """Model-factory-driven operator trainer with optional composite losses.
+
+    ``forward_adapter`` can compute model-dependent residuals once per batch
+    and attach them to the adapted batch for named loss terms. Autodiff PDEs
+    opt into ``validation_requires_grad``; prediction stays gradient-free.
+    """
 
     CHECKPOINT_VERSION = 1
 
@@ -512,7 +528,11 @@ class FNOTrainer:
         pin_memory: bool = False,
         reporter: Reporter | None = None,
         checkpoint_metadata: Mapping[str, Any] | None = None,
+        forward_adapter: Callable[[torch.nn.Module, Any, Mapping[str, Any]], Any] | None = None,
+        validation_requires_grad: bool = False,
     ) -> None:
+        self.forward_adapter = forward_adapter
+        self.validation_requires_grad = validation_requires_grad
         self.model_factory = model_factory
         self.config = dict(config)
         self.loss_terms = tuple(loss_terms or (LossTerm("data_loss", mse_loss_term),))
@@ -550,10 +570,7 @@ class FNOTrainer:
             raise ValueError("FNO config requires positive epochs and batch_size.")
         device = resolve_device(context.device)
         seed_worker(context.seed)
-        model = self.model_factory(self.config).to(
-            device=device,
-            dtype=context.dtype,
-        )
+        model = _move_operator_model(self.model_factory(self.config), device, context.dtype)
         self.model = model
         optimizer = torch.optim.AdamW(
             model.parameters(),
@@ -657,6 +674,14 @@ class FNOTrainer:
             metrics={f"validation_{self.selection_metric}": best_metric},
         )
 
+    def evaluate_losses(self, data: Any, context: RunContext) -> dict[str, float]:
+        """Evaluate named objectives and shared metrics, including PDE residuals."""
+        return self._epoch(
+            self._loader(data, batch_size=int(self.config["batch_size"]),
+                         shuffle=False, seed=context.seed),
+            device=resolve_device(context.device), dtype=context.dtype, optimizer=None,
+        )
+
     def _epoch(
         self,
         loader: DataLoader,
@@ -673,13 +698,17 @@ class FNOTrainer:
         objective_total = 0.0
         samples = 0
         shared = StreamingRegressionMetrics()
-        gradient_context = torch.enable_grad() if training else torch.no_grad()
+        gradient_context = (torch.enable_grad() if training or self.validation_requires_grad else torch.no_grad())
         with gradient_context:
             for raw_batch in loader:
                 inputs, target, batch = self.batch_adapter(raw_batch, device, dtype)
                 if optimizer is not None:
                     optimizer.zero_grad(set_to_none=True)
-                prediction = _call_model(self.model, inputs)
+                prediction = (
+                    _call_model(self.model, inputs)
+                    if self.forward_adapter is None
+                    else self.forward_adapter(self.model, inputs, batch)
+                )
                 count = self.batch_size(target, batch)
                 objective = _first_tensor(prediction).new_zeros(())
                 for term in self.loss_terms:
@@ -741,7 +770,7 @@ class FNOTrainer:
         if self.model is None:
             raise RuntimeError("Fit or load an FNO checkpoint before prediction.")
         device = resolve_device(context.device)
-        self.model.to(device=device, dtype=context.dtype).eval()
+        _move_operator_model(self.model, device, context.dtype).eval()
         loader = self._loader(
             data,
             batch_size=int(self.config["batch_size"]),
@@ -790,7 +819,7 @@ class FNOTrainer:
     ) -> torch.nn.Module:
         if payload.get("checkpoint_version") != self.CHECKPOINT_VERSION:
             raise ValueError("Unsupported FNO checkpoint version.")
-        model = self.model_factory(payload["config"]).to(device=device, dtype=dtype)
+        model = _move_operator_model(self.model_factory(payload["config"]), device, dtype)
         model.load_state_dict(payload["state_dict"], strict=True)
         return model
 

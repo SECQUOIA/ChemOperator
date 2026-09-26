@@ -8,10 +8,12 @@ from __future__ import annotations
 import importlib.util
 import os
 from pathlib import Path
+from types import SimpleNamespace
 
 os.environ.setdefault("WARP_CACHE_PATH", "/tmp/warp")
 
 import torch
+import pytest
 from physicsnemo.sym.eq.phy_informer import PhysicsInformer
 
 from chem_operator.datasets import SimulationDatasetGenerator
@@ -27,15 +29,25 @@ SCRIPT_SPEC = importlib.util.spec_from_file_location("pfr_heat_fno", SCRIPT_PATH
 assert SCRIPT_SPEC is not None and SCRIPT_SPEC.loader is not None
 FNO_SCRIPT = importlib.util.module_from_spec(SCRIPT_SPEC)
 SCRIPT_SPEC.loader.exec_module(FNO_SCRIPT)
+HYBRID_SCRIPT_PATH = (
+    Path(__file__).resolve().parents[1]
+    / "scripts"
+    / "pfr_heat"
+    / "deeponet_fno.py"
+)
+HYBRID_SCRIPT_SPEC = importlib.util.spec_from_file_location(
+    "pfr_heat_deeponet_fno", HYBRID_SCRIPT_PATH
+)
+assert HYBRID_SCRIPT_SPEC is not None and HYBRID_SCRIPT_SPEC.loader is not None
+HYBRID_SCRIPT = importlib.util.module_from_spec(HYBRID_SCRIPT_SPEC)
+HYBRID_SCRIPT_SPEC.loader.exec_module(HYBRID_SCRIPT)
 CoupledPFRHeatDataset = FNO_SCRIPT.CoupledPFRHeatDataset
 InformerCache = FNO_SCRIPT.InformerCache
 PFR_OUTPUTS = FNO_SCRIPT.PFR_OUTPUTS
 fit_normalizers = FNO_SCRIPT.fit_normalizers
-load_checkpoint = FNO_SCRIPT.load_checkpoint
 model_from_config = FNO_SCRIPT.model_from_config
 physics_losses = FNO_SCRIPT.physics_losses
 raw_dataset = FNO_SCRIPT.raw_dataset
-save_checkpoint = FNO_SCRIPT.save_checkpoint
 
 
 def _small_case(simulator: PFRHeatSim):
@@ -78,6 +90,155 @@ def _small_config() -> dict[str, float | int]:
         "lambda_s": 0.0,
         "lambda_bc": 0.0,
     }
+
+
+def _small_hybrid_config() -> dict[str, float | int | str]:
+    return {
+        "branch_width": 8,
+        "trunk_width": 8,
+        "depth": 2,
+        "latent_width": 4,
+        "activation": "silu",
+        "wall_modes_z": 3,
+        "wall_modes_r": 2,
+        "wall_latent_channels": 4,
+        "wall_n_layers": 2,
+        "wall_padding": 0,
+        "wall_decoder_layers": 1,
+        "wall_decoder_layer_size": 8,
+        "learning_rate": 1.0e-3,
+        "weight_decay": 0.0,
+        "batch_size": 1,
+        "lambda_f": 0.0,
+        "lambda_g": 0.0,
+        "lambda_s": 0.0,
+        "lambda_bc": 0.0,
+    }
+
+
+def test_variant_search_spaces_zero_all_data_weights() -> None:
+    """Both PFR-heat architectures expose fixed-zero data-only spaces."""
+    for module in (FNO_SCRIPT, HYBRID_SCRIPT):
+        data_space = module.search_space("data")
+        assert all(
+            data_space[key] == 0.0 for key in FNO_SCRIPT.PHYSICS_WEIGHT_KEYS
+        )
+        physics_space = module.search_space("physics")
+        assert all(
+            physics_space[key] != 0.0 for key in FNO_SCRIPT.PHYSICS_WEIGHT_KEYS
+        )
+
+
+def test_pfr_heat_variant_clis_default_to_physics(monkeypatch) -> None:
+    """Both PFR-heat entry points expose the same validated variant CLI."""
+    for module in (FNO_SCRIPT, HYBRID_SCRIPT):
+        monkeypatch.setattr(module.sys, "argv", [str(SCRIPT_PATH)])
+        assert module.parse_cli_args().variant == "physics"
+        for variant in ("both", "data", "physics"):
+            monkeypatch.setattr(
+                module.sys,
+                "argv",
+                [str(SCRIPT_PATH), "--variant", variant],
+            )
+            assert module.parse_cli_args().variant == variant
+        monkeypatch.setattr(
+            module.sys,
+            "argv",
+            [str(SCRIPT_PATH), "--variant", "invalid"],
+        )
+        with pytest.raises(SystemExit):
+            module.parse_cli_args()
+
+
+def test_data_trainers_force_zero_weights_and_skip_residuals(monkeypatch) -> None:
+    """Explicit configs cannot enable residual work in data-only training."""
+
+    class Normalizer:
+        def state_dict(self):
+            return {}
+
+    class TrainingModel:
+        training = True
+
+        def __call__(self, *inputs):
+            del inputs
+            return {"pfr": torch.ones(1), "wall": torch.ones(1)}
+
+    context = SimpleNamespace(device=torch.device("cpu"))
+    normalizer = Normalizer()
+    for module, config in (
+        (FNO_SCRIPT, _small_config()),
+        (HYBRID_SCRIPT, _small_hybrid_config()),
+    ):
+        config.update({key: 0.1 for key in FNO_SCRIPT.PHYSICS_WEIGHT_KEYS})
+        monkeypatch.setattr(
+            module,
+            "physics_losses",
+            lambda *args, **kwargs: (_ for _ in ()).throw(
+                AssertionError("data training computed physics losses")
+            ),
+        )
+        trainer = module.make_trainer(
+            config,
+            context,
+            normalizer,
+            normalizer,
+            (9, 7),
+            variant="data",
+        )
+        assert all(
+            trainer.config[key] == 0.0 for key in FNO_SCRIPT.PHYSICS_WEIGHT_KEYS
+        )
+        batch = {}
+        trainer.forward_adapter(TrainingModel(), (), batch)
+        assert all(value == 0.0 for value in batch["physics_losses"].values())
+
+
+def test_both_variant_uses_explicit_pfr_heat_model_ids(monkeypatch, tmp_path) -> None:
+    """Each PFR-heat runner launches independent, explicitly named variants."""
+
+    class Raw:
+        def close(self):
+            return None
+
+    class Normalizer:
+        pass
+
+    expected = {
+        FNO_SCRIPT: ("fno_data", "fno_physics"),
+        HYBRID_SCRIPT: ("deeponet_fno_data", "deeponet_fno_physics"),
+    }
+    for module, model_ids in expected.items():
+        args = SimpleNamespace(
+            variant="both", data_dir=tmp_path, plot_cases=2
+        )
+        monkeypatch.setattr(module, "parse_cli_args", lambda: args)
+        monkeypatch.setattr(module, "raw_dataset", lambda *args: Raw())
+        monkeypatch.setattr(
+            module,
+            "fit_normalizers",
+            lambda raw: (Normalizer(), Normalizer(), (9, 7)),
+        )
+        monkeypatch.setattr(
+            module,
+            "experiment_spec",
+            lambda _args, model_id: SimpleNamespace(model_id=model_id),
+        )
+        calls = []
+        monkeypatch.setattr(
+            module,
+            "run_operator",
+            lambda _args, _paths, spec, _data, _trainer, space, _evaluator: calls.append(
+                (spec.model_id, space)
+            ),
+        )
+
+        module.main()
+
+        assert tuple(model_id for model_id, _ in calls) == model_ids
+        assert all(
+            calls[0][1][key] == 0.0 for key in FNO_SCRIPT.PHYSICS_WEIGHT_KEYS
+        )
 
 
 def test_simulated_solution_has_near_zero_physics_loss() -> None:
@@ -204,6 +365,7 @@ def test_coupled_fno_adapter_shapes_and_wall_gradient(tmp_path) -> None:
         )
         sample = dataset[0]
         assert sample["pfr_x"].shape == (9, 9)
+        assert sample["pfr_branch"].shape == (9,)
         assert sample["pfr_y"].shape == (4, 9)
         assert sample["wall_conditions"].shape == (5, 9, 7)
         assert sample["wall_y"].shape == (1, 9, 7)
@@ -241,6 +403,55 @@ def test_coupled_fno_adapter_shapes_and_wall_gradient(tmp_path) -> None:
         raw.close()
 
 
+def test_coupled_deeponet_fno_shapes_physics_and_wall_gradient(tmp_path) -> None:
+    """The wall FNO consumes reactor DeepONet predictions end to end."""
+    simulator = PFRHeatSim()
+    generator = SimulationDatasetGenerator(simulator, tmp_path)
+    generator.save_split("train", [_small_case(simulator)])
+    raw = raw_dataset(tmp_path, "train")
+    try:
+        pfr_normalizer, wall_normalizer, shape = fit_normalizers(raw)
+        dataset = CoupledPFRHeatDataset(
+            raw, pfr_normalizer, wall_normalizer, shape
+        )
+        sample = dataset[0]
+        model = HYBRID_SCRIPT.model_from_config(
+            _small_hybrid_config(),
+            pfr_normalizer,
+            wall_normalizer,
+            torch.device("cpu"),
+        )
+        prediction = model(
+            sample["pfr_branch"].unsqueeze(0),
+            sample["z"].unsqueeze(0),
+            sample["wall_conditions"].unsqueeze(0),
+        )
+        assert prediction["pfr"].shape == (1, 4, 9)
+        assert prediction["wall"].shape == (1, 1, 9, 7)
+        assert model.pfr_bias.shape == (4,)
+
+        batch = {name: value.unsqueeze(0) for name, value in sample.items()}
+        losses = physics_losses(
+            prediction,
+            batch,
+            pfr_normalizer,
+            wall_normalizer,
+            InformerCache(torch.device("cpu")),
+        )
+        assert set(losses) == {"species", "gas", "solid", "bc"}
+        assert all(torch.isfinite(value) for value in losses.values())
+
+        prediction["wall"].square().mean().backward()
+        gradient = sum(
+            float(parameter.grad.abs().sum())
+            for parameter in model.branch.parameters()
+            if parameter.grad is not None
+        )
+        assert gradient > 0.0
+    finally:
+        raw.close()
+
+
 def test_coupled_fno_checkpoint_round_trip(tmp_path) -> None:
     """One checkpoint restores both branches and their normalization state."""
     simulator = PFRHeatSim()
@@ -258,18 +469,20 @@ def test_coupled_fno_checkpoint_round_trip(tmp_path) -> None:
         model = model_from_config(
             config, pfr_normalizer, wall_normalizer, torch.device("cpu")
         ).eval()
-        checkpoint = tmp_path / "coupled.pt"
-        save_checkpoint(
-            checkpoint,
-            model,
-            config,
-            pfr_normalizer,
-            wall_normalizer,
-            shape,
-        )
-        restored, _, _, restored_shape, _ = load_checkpoint(
-            checkpoint, torch.device("cpu")
-        )
+        from chem_operator.experiments import RunContext
+        context = RunContext.create(tmp_path,problem="pfr_heat",model="fno",run_id="test",seed=42)
+        config.update(epochs=1,batch_size=1,learning_rate=1e-3,weight_decay=0,
+                      lambda_f=1e-4,lambda_g=1e-4,lambda_s=1e-4,lambda_bc=1e-4)
+        trainer = FNO_SCRIPT.make_trainer(config,context,pfr_normalizer,wall_normalizer,shape)
+        training = trainer.fit(dataset,dataset,context)
+        model = trainer.model
+        restored_trainer = FNO_SCRIPT.make_trainer(config,context,pfr_normalizer,wall_normalizer,shape)
+        restored_trainer.load_checkpoint(training.checkpoint,context)
+        restored = restored_trainer.model
+        restored_shape = tuple(restored_trainer.checkpoint_metadata["shape"])
+        outcome = FNO_SCRIPT.evaluate_run(trainer,dataset,context,pfr_normalizer,wall_normalizer,cases=1)
+        assert outcome.reconstructions["wall_prediction"].shape == (1,1,9,7)
+        assert "solid_loss" in outcome.metrics
         with torch.no_grad():
             expected = model(
                 sample["pfr_x"].unsqueeze(0),
@@ -280,6 +493,73 @@ def test_coupled_fno_checkpoint_round_trip(tmp_path) -> None:
                 sample["wall_conditions"].unsqueeze(0),
             )
         assert restored_shape == shape
+        assert torch.equal(actual["pfr"], expected["pfr"])
+        assert torch.equal(actual["wall"], expected["wall"])
+    finally:
+        raw.close()
+
+
+def test_coupled_deeponet_fno_checkpoint_round_trip(tmp_path) -> None:
+    """The hybrid checkpoint restores both components and evaluation metadata."""
+    simulator = PFRHeatSim()
+    data_path = tmp_path / "data"
+    generator = SimulationDatasetGenerator(simulator, data_path)
+    generator.save_split("train", [_small_case(simulator)])
+    raw = raw_dataset(data_path, "train")
+    try:
+        pfr_normalizer, wall_normalizer, shape = fit_normalizers(raw)
+        dataset = CoupledPFRHeatDataset(
+            raw, pfr_normalizer, wall_normalizer, shape
+        )
+        sample = dataset[0]
+        config = _small_hybrid_config()
+        config["epochs"] = 1
+        from chem_operator.experiments import RunContext
+
+        context = RunContext.create(
+            tmp_path,
+            problem="pfr_heat",
+            model="deeponet_fno",
+            run_id="test",
+            seed=42,
+        )
+        trainer = HYBRID_SCRIPT.make_trainer(
+            config, context, pfr_normalizer, wall_normalizer, shape
+        )
+        training = trainer.fit(dataset, dataset, context)
+        restored_trainer = HYBRID_SCRIPT.make_trainer(
+            config, context, pfr_normalizer, wall_normalizer, shape
+        )
+        restored_trainer.load_checkpoint(training.checkpoint, context)
+        assert restored_trainer.checkpoint_metadata["components"] == {
+            "reactor": "PhysicsNeMo FullyConnected DeepONet",
+            "wall": "PhysicsNeMo FNO",
+        }
+        outcome = HYBRID_SCRIPT.evaluate_run(
+            trainer,
+            dataset,
+            context,
+            pfr_normalizer,
+            wall_normalizer,
+            cases=1,
+        )
+        assert outcome.reconstructions["pfr_prediction"].shape == (1, 4, 9)
+        assert outcome.reconstructions["wall_prediction"].shape == (1, 1, 9, 7)
+        assert {
+            "data_loss",
+            "species_loss",
+            "gas_loss",
+            "solid_loss",
+            "bc_loss",
+        }.issubset(outcome.metrics)
+        with torch.no_grad():
+            inputs = (
+                sample["pfr_branch"].unsqueeze(0),
+                sample["z"].unsqueeze(0),
+                sample["wall_conditions"].unsqueeze(0),
+            )
+            expected = trainer.model(*inputs)
+            actual = restored_trainer.model(*inputs)
         assert torch.equal(actual["pfr"], expected["pfr"])
         assert torch.equal(actual["wall"], expected["wall"])
     finally:

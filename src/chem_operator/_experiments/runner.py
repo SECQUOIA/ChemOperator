@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
+import json
 from pathlib import Path
 from typing import Any
 
@@ -79,6 +80,10 @@ class ExperimentRunner:
             for name in ("problem_id", "model_id", "benchmark_protocol_id"):
                 if manifest[name] != getattr(self.spec, name):
                     raise ValueError(f"Existing manifest has a different {name}.")
+            for name in ("dataset_fingerprints", "fields", "channels", "units", "coordinates", "selected_test_case_ids"):
+                expected = json.loads(json.dumps(getattr(self.spec, name)))
+                if manifest[name] != expected:
+                    raise ValueError(f"Existing manifest has a different {name}.")
             if manifest["status"] == "completed":
                 raise FileExistsError(
                     f"Completed run already exists at {self.context.paths.run_dir}."
@@ -142,7 +147,7 @@ class ExperimentRunner:
             if tuning is None:
                 if not self.artifacts.paths.tuning_trials.is_file():
                     self.artifacts.write_tuning_trials(())
-                tuning_seconds = 0.0
+                tuning_seconds = float(self.artifacts.read_manifest()["timings"].get("tuning_seconds") or 0.0)
             else:
                 self.artifacts.write_tuning_trials(tuning.trials)
                 tuning_seconds = tuning.tuning_seconds
