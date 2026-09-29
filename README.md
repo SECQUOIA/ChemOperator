@@ -51,12 +51,40 @@ solver, and more on the way.
   [`pyproject.toml`](pyproject.toml)
 - System SUNDIALS/IDA support may be needed when building `scikits-odes`
 
-Full install from fresh WSL:
+### Linux
+
+Install [uv](https://docs.astral.sh/uv/) and clone the repository:
 ```bash
-sudo apt update && sudo apt upgrade -y
-sudo apt install -y build-essential gfortran cmake pkg-config git curl python3-dev libsundials-dev libopenblas-dev liblapack-dev
+sudo apt update
+sudo apt install -y git curl
 curl -LsSf https://astral.sh/uv/install.sh | sh
-source $HOME/.local/bin/env
+source "$HOME/.local/bin/env"
+git clone https://github.com/SECQUOIA/ChemOperator.git
+cd ChemOperator
+```
+
+To use `packed_bed_1d`, install its native dependencies and the optional Python extra:
+```bash
+sudo apt install -y build-essential gfortran libsundials-dev libopenblas-dev liblapack-dev
+test -f /usr/include/sundials/sundials_errors.h
+uv sync --extra sundials
+```
+
+If apt is not available but module (ex: on an HPC cluster) is:
+```bash
+module load conda
+conda create -y -p "$HOME/sundials-7" -c conda-forge "sundials=7.*"
+export SUNDIALS_INST="$HOME/sundials-7"
+test -f "$SUNDIALS_INST/include/sundials/sundials_errors.h"
+export LD_LIBRARY_PATH="$SUNDIALS_INST/lib:${LD_LIBRARY_PATH:-}"
+uv sync --extra sundials
+```
+
+### Windows (still in development)
+
+```bash
+powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
+$env:Path = "C:\Users\{put user here}\.local\bin;$env:Path"
 git clone https://github.com/SECQUOIA/ChemOperator.git
 cd ChemOperator
 uv sync
