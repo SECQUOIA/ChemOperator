@@ -49,7 +49,7 @@ def test_non_isothermal_dataset_prefixes():
     assert NonIsothermalCSTRSim.run_case is CSTRSim.run_case
     assert (
         PFRNonIsothermalChainOfReactorsSim.name
-        == "pfr_non_isothermal_chain_of_reactors"
+        == "pfr_non_isothermal_chain"
     )
 
 
