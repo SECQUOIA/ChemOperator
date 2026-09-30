@@ -57,7 +57,7 @@ def plot_pfr_profiles(run_path, output_dir, *, cases=2):
                 label=f"{label} prediction",
             )
         axes[0].set(
-            xlabel="Axial position [m]",
+            xlabel="Axial position z/L",
             ylabel="Molar flow rate [mol/s]",
             title="Species flow rates",
         )
