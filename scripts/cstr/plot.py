@@ -12,7 +12,7 @@ os.environ.setdefault("MPLCONFIGDIR", "/tmp/matplotlib")
 import cantera as ct
 
 from chem_operator.example_paths import ExamplePaths
-from chem_operator.plotting import plot_deeponet_runs
+from chem_operator.plotting import plot_deeponet_run_set
 
 
 PATHS = ExamplePaths.from_script(__file__)
@@ -22,8 +22,8 @@ PLOT_CASES = 2
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--deeponet-run", type=Path, required=True)
-    parser.add_argument("--pod-deeponet-run", type=Path, required=True)
+    parser.add_argument("--run", type=Path, action="append", required=True,
+                        help="Canonical run directory; repeat to compare compatible models.")
     parser.add_argument(
         "--output-dir",
         type=Path,
@@ -32,9 +32,8 @@ def main() -> None:
     parser.add_argument("--cases", type=int, default=PLOT_CASES)
     args = parser.parse_args()
     fuel_index = ct.Solution(MECHANISM).species_index("NC7H16")
-    paths = plot_deeponet_runs(
-        args.deeponet_run,
-        args.pod_deeponet_run,
+    paths = plot_deeponet_run_set(
+        args.run,
         selected_labels=("T", "P", f"X[{fuel_index}]"),
         coordinate_label="Time [s]",
         output_dir=args.output_dir,

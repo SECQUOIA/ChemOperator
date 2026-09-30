@@ -144,9 +144,9 @@ def model_from_config(
 def search_space(variant="physics") -> dict[str, Any]:
     """Return the independent DeepONet, wall-FNO, and loss search space."""
     space = {
-        "branch_width": tune.choice([64, 128]),
+        "branch_width": tune.choice([64, 128, 256]),
         "trunk_width": tune.choice([64, 128]),
-        "depth": tune.choice([2, 3]),
+        "depth": tune.choice([2, 3, 4]),
         "latent_width": tune.choice([16, 32]),
         "activation": tune.choice(["silu", "gelu", "tanh"]),
         "wall_modes_z": tune.choice([8, 12, 16]),

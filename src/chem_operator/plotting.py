@@ -5,6 +5,8 @@ from __future__ import annotations
 import csv
 from collections import defaultdict
 from collections.abc import Iterable, Sequence
+from dataclasses import dataclass
+from fnmatch import fnmatchcase
 from pathlib import Path
 
 import numpy as np
@@ -14,7 +16,6 @@ from chem_operator._experiments.comparison import (
     load_run,
     metric_matrix,
     read_reconstructions,
-    shared_history,
     validate_model_comparison,
 )
 
@@ -26,6 +27,38 @@ MODEL_STYLES = {
     "deeponet": ("tab:blue", "--"),
     "pod_deeponet": ("tab:orange", ":"),
 }
+
+
+@dataclass(frozen=True, slots=True)
+class HistoryPanel:
+    """Select and label history metrics for one shared plot panel.
+
+    Metric patterns may use glob wildcards, such as ``"*_loss"`` to match
+    loss terms. Set ``splits`` to ``None`` to include every recorded split.
+    """
+
+    metrics: tuple[str, ...]
+    title: str
+    splits: tuple[str, ...] | None = None
+    yscale: str | None = None
+
+    def __post_init__(self) -> None:
+        if not self.metrics or any(not metric for metric in self.metrics):
+            raise ValueError("HistoryPanel metrics cannot be empty.")
+        if not self.title:
+            raise ValueError("HistoryPanel title cannot be empty.")
+        if self.yscale not in {None, "auto", "linear", "log"}:
+            raise ValueError(
+                "HistoryPanel yscale must be None, 'auto', 'linear', or 'log'."
+            )
+
+
+def _matches_metric(metric: str, patterns: Sequence[str]) -> bool:
+    return any(fnmatchcase(metric, pattern) for pattern in patterns)
+
+
+def _is_validation_split(split: str) -> bool:
+    return split in {"val", "valid", "validation"}
 
 
 def _read_history(
@@ -67,7 +100,7 @@ def _plot_history(artifact_dir: Path, output_dir: Path) -> Path:
             epochs,
             values,
             color=color,
-            linestyle="-" if split == "train" else "--",
+            linestyle="--" if _is_validation_split(split) else "-",
             label=f"{MODEL_LABELS[model_id]} {split}",
         )
     loss_labels = {
@@ -343,6 +376,37 @@ def plot_deeponet_runs(
             + ", ".join(model_ids)
             + "."
         )
+    return plot_deeponet_run_set(
+        runs,
+        selected_labels=selected_labels,
+        coordinate_label=coordinate_label,
+        output_dir=output_dir,
+        cases=cases,
+    )
+
+
+def plot_deeponet_run_set(
+    run_paths: Iterable[RunArtifacts | str | Path],
+    *,
+    selected_labels: Sequence[str],
+    coordinate_label: str,
+    output_dir: str | Path,
+    cases: int = 2,
+) -> tuple[Path, Path]:
+    """Plot one DeepONet run or compare compatible direct and POD runs."""
+
+    runs = tuple(
+        run if isinstance(run, RunArtifacts) else load_run(run)
+        for run in run_paths
+    )
+    if not runs:
+        raise ValueError("At least one run is required.")
+    if len(runs) > 1:
+        validate_model_comparison(runs)
+    model_ids = tuple(str(run.manifest["model_id"]) for run in runs)
+    unknown = sorted(set(model_ids) - MODEL_STYLES.keys())
+    if unknown:
+        raise ValueError("Expected DeepONet runs; got " + ", ".join(unknown) + ".")
     output = Path(output_dir)
     output.mkdir(parents=True, exist_ok=True)
     history = plot_experiment_histories(
@@ -365,25 +429,123 @@ def plot_experiment_histories(
     runs: Iterable[RunArtifacts | str | Path],
     *,
     output: str | Path,
-    metric: str = "relative_l2",
-    split: str = "val",
+    metric: str | None = "relative_l2",
+    split: str | None = "val",
+    panels: Sequence[HistoryPanel] | None = None,
+    yscale: str = "auto",
 ) -> Path:
-    """Plot one shared learning metric using only canonical run artifacts."""
+    """Plot configurable history metrics from one or more canonical runs.
+
+    By default, overlay the selected ``metric`` and ``split`` across runs.
+    Provide ``panels`` to select several metrics/splits and show them in
+    separate panels. A panel's ``yscale`` overrides the function-level scale.
+    ``auto`` uses a log scale only when every plotted value in that panel is
+    positive.
+    """
     import matplotlib.pyplot as plt
 
-    series = shared_history(runs, metric=metric, split=split)
-    figure, axis = plt.subplots(figsize=(7.5, 4.5))
-    for item in series:
-        axis.plot(
-            [event.epoch for event in item.events],
-            [event.value for event in item.events],
-            label=item.label,
+    if yscale not in {"auto", "linear", "log"}:
+        raise ValueError("yscale must be 'auto', 'linear', or 'log'.")
+    loaded = tuple(
+        run if isinstance(run, RunArtifacts) else load_run(run)
+        for run in runs
+    )
+    if not loaded:
+        raise ValueError("At least one run is required to plot history.")
+    if panels is None:
+        if metric is None or split is None:
+            raise ValueError("metric and split are required when panels are omitted.")
+        panels = (HistoryPanel((metric,), f"{split} {metric}", (split,), yscale),)
+    elif not panels:
+        raise ValueError("At least one history panel is required.")
+    if len(loaded) > 1 and any(
+        _matches_metric("objective", panel.metrics) for panel in panels
+    ):
+        raise ValueError(
+            "Raw objectives are model-specific and cannot be overlaid directly."
         )
-    if all(event.value > 0 for item in series for event in item.events):
-        axis.set_yscale("log")
-    axis.set(xlabel="Epoch", ylabel=f"{split} {metric}")
-    axis.grid(alpha=0.25)
-    axis.legend(fontsize=8)
+
+    figure, axes = plt.subplots(
+        1,
+        len(panels),
+        squeeze=False,
+        figsize=(7.5 * len(panels), 4.5),
+    )
+    any_values = False
+    for axis, panel in zip(axes[0], panels):
+        panel_values: list[float] = []
+        colors = plt.rcParams["axes.prop_cycle"].by_key().get("color", ["C0"])
+        curve_colors: dict[tuple[int, str], str] = {}
+        for run_index, run in enumerate(loaded):
+            events = [
+                event
+                for event in run.history
+                if _matches_metric(event.metric, panel.metrics)
+                and (
+                    panel.splits is None
+                    or event.split in panel.splits
+                    or (
+                        event.split == "validation"
+                        and "val" in panel.splits
+                    )
+                    or (
+                        event.split == "val"
+                        and "validation" in panel.splits
+                    )
+                )
+            ]
+            if not events:
+                continue
+            grouped: defaultdict[tuple[str, str], list] = defaultdict(list)
+            for event in events:
+                grouped[(event.split, event.metric)].append(event)
+            for (event_split, event_metric), series in grouped.items():
+                series.sort(key=lambda event: event.epoch)
+                color_key = (run_index, event_metric)
+                if color_key not in curve_colors:
+                    curve_colors[color_key] = colors[len(curve_colors) % len(colors)]
+                label = (
+                    f"{run.label} {event_split}/{event_metric}"
+                    if len(loaded) > 1
+                    else f"{event_split}/{event_metric}"
+                )
+                axis.plot(
+                    [event.epoch for event in series],
+                    [event.value for event in series],
+                    color=curve_colors[color_key],
+                    linestyle="--" if _is_validation_split(event_split) else "-",
+                    label=label,
+                )
+                panel_values.extend(event.value for event in series)
+        if not panel_values:
+            axis.set(xlabel="Epoch", title=panel.title)
+            axis.text(
+                0.5,
+                0.5,
+                "No matching history data",
+                ha="center",
+                va="center",
+                transform=axis.transAxes,
+            )
+            axis.grid(alpha=0.25)
+            continue
+        any_values = True
+        effective_yscale = panel.yscale or yscale
+        if effective_yscale == "auto":
+            effective_yscale = (
+                "log" if all(value > 0 for value in panel_values) else "linear"
+            )
+        if effective_yscale == "log" and any(value <= 0 for value in panel_values):
+            raise ValueError(
+                f"Cannot use a log y-scale for {panel.title}: values must be positive."
+            )
+        axis.set_yscale(effective_yscale)
+        axis.set(xlabel="Epoch", ylabel=panel.title, title=panel.title)
+        axis.grid(alpha=0.25)
+        axis.legend(fontsize=8)
+    if not any_values:
+        plt.close(figure)
+        raise ValueError("No history values matched the requested panels.")
     figure.tight_layout()
     destination = Path(output)
     destination.parent.mkdir(parents=True, exist_ok=True)
@@ -441,10 +603,13 @@ def plot_experiment_matrix(
 
 
 __all__ = [
+    "HistoryPanel",
     "plot_deeponet_artifacts",
     "plot_deeponet_runs",
+    "plot_deeponet_run_set",
     "plot_experiment_histories",
     "plot_experiment_matrix",
+    "plot_operator_runs",
 ]
 
 
@@ -515,23 +680,15 @@ def plot_operator_runs(run_paths, output_dir, *, cases=2):
     for run in runs:
         destination = output if len(runs) == 1 else output / run.manifest["model_id"] / run.path.name
         destination.mkdir(parents=True, exist_ok=True)
-        grouped = defaultdict(list)
-        for event in run.history:
-            grouped[(event.split, event.metric)].append((event.epoch, event.value))
-        fig, axes = plt.subplots(1, 2, figsize=(12, 4))
-        for (split, metric), values in grouped.items():
-            if metric in {"relative_l2", "objective"} or metric.endswith("_loss"):
-                axis = axes[0] if metric == "relative_l2" else axes[1]
-                x, y = zip(*values)
-                axis.plot(x, y, label=f"{split}/{metric}")
-        for axis, title in zip(axes, ("Relative L2", "Model objectives")):
-            axis.set(xlabel="Epoch", title=title)
-            axis.legend(fontsize=7)
-            axis.grid(alpha=.25)
-        fig.tight_layout()
         path = destination / "training_validation_loss.png"
-        fig.savefig(path, dpi=160)
-        plt.close(fig)
+        plot_experiment_histories(
+            (run,),
+            output=path,
+            panels=(
+                HistoryPanel(("relative_l2",), "Relative L2", yscale="auto"),
+                HistoryPanel(("objective", "*_loss"), "Model objectives", yscale="auto"),
+            ),
+        )
         saved.append(path)
         data = read_reconstructions(run.path)
         count = min(cases, len(data["case_ids"]))
