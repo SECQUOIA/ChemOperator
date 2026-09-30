@@ -271,7 +271,7 @@ def parse_cli_args():
     parser.add_argument(
         "--variant", choices=("both", "data", "physics"), default="physics"
     )
-    return parse_args(epochs=15, tune_epochs=10, samples=3, parser=parser)
+    return parse_args(epochs=20, tune_epochs=15, samples=8, parser=parser)
 
 
 def main():
