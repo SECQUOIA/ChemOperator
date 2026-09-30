@@ -33,9 +33,9 @@ WALL_OUTPUTS = ("T_solid",)
 PHYSICS_CONSTANTS = PFR_INPUTS + ("flow_scale", "temperature_scale")
 EXPECTED_PDES = {"reactor": "PlugFlowReactor", "solid": "CylindricalWall"}
 
-TUNE_SAMPLES = 8
-TUNE_EPOCHS = 40
-FINAL_EPOCHS = 50
+TUNE_SAMPLES = 10
+TUNE_EPOCHS = 50
+FINAL_EPOCHS = 60
 EVALUATION_BATCH_SIZE = 4
 CPUS_PER_TRIAL = 2
 GPUS_PER_TRIAL = int(torch.cuda.is_available())
