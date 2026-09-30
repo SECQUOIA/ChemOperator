@@ -144,21 +144,21 @@ def model_from_config(
 def search_space(variant="physics") -> dict[str, Any]:
     """Return the independent DeepONet, wall-FNO, and loss search space."""
     space = {
-        "branch_width": tune.choice([64, 128, 256]),
-        "trunk_width": tune.choice([64, 128]),
-        "depth": tune.choice([2, 3, 4]),
+        "branch_width": tune.choice([128, 256]),
+        "trunk_width": tune.choice([128, 256]),
+        "depth": tune.choice([2, 3, 4, 5]),
         "latent_width": tune.choice([16, 32]),
-        "activation": tune.choice(["silu", "gelu", "tanh"]),
+        "activation": tune.choice(["gelu", "tanh"]),
         "wall_modes_z": tune.choice([8, 12, 16]),
-        "wall_modes_r": tune.choice([4, 6, 8]),
+        "wall_modes_r": tune.choice([4, 6]),
         "wall_latent_channels": tune.choice([8, 16, 24]),
-        "wall_n_layers": tune.choice([3, 4]),
-        "wall_padding": tune.choice([0, 4]),
+        "wall_n_layers": 3, #tune.choice([3, 4]),
+        "wall_padding": 4,
         "wall_decoder_layers": tune.choice([1, 2]),
         "wall_decoder_layer_size": tune.choice([16, 32]),
         "learning_rate": tune.loguniform(1.0e-4, 3.0e-3),
         "weight_decay": tune.loguniform(1.0e-8, 1.0e-4),
-        "batch_size": tune.choice([1, 2, 4]),
+        "batch_size": tune.choice([4, 8]),
     }
     if variant == "data":
         space.update({key: 0.0 for key in PHYSICS_WEIGHT_KEYS})

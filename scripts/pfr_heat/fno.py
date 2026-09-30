@@ -190,12 +190,24 @@ PHYSICS_WEIGHT_KEYS = ("lambda_f", "lambda_g", "lambda_s", "lambda_bc")
 
 
 def search_space(variant="physics"):
-    space = {'pfr_modes': tune.choice([8, 12, 16]), 'wall_modes_z': tune.choice([8, 12, 16]), 'wall_modes_r': tune.choice([4, 6, 8]), 'latent_channels': tune.choice([8, 16, 24]), 'n_layers': tune.choice([3, 4]), 'padding': tune.choice([0, 4]), 'decoder_layers': tune.choice([1, 2]), 'decoder_layer_size': tune.choice([16, 32]), 'learning_rate': tune.loguniform(0.0001, 0.003), 'weight_decay': tune.loguniform(1e-08, 0.0001), 'batch_size': tune.choice([1, 2, 4])}
+    space = {
+        'pfr_modes': tune.choice([8, 12, 16]), 
+        'wall_modes_z': tune.choice([8, 12, 16]), 
+        'wall_modes_r': tune.choice([4, 6]), 
+        'latent_channels': tune.choice([8, 16, 24]), 
+        'n_layers': 3, # tune.choice([3, 4]), 
+        'padding': 4, #tune.choice([0, 4]), 
+        'decoder_layers': tune.choice([1, 2]), 
+        'decoder_layer_size': tune.choice([16, 32]), 
+        'learning_rate': tune.loguniform(1.0e-4, 3.0e-3), 
+        'weight_decay': tune.loguniform(1.0e-8, 1.0e-4), 
+        'batch_size': tune.choice([4, 8])
+    }
     if variant == "data":
         space.update({key: 0.0 for key in PHYSICS_WEIGHT_KEYS})
     elif variant == "physics":
         space.update({
-            key: tune.loguniform(0.0001, 0.1)
+            key: tune.loguniform(1.0e-4, 1.0e-1)
             for key in PHYSICS_WEIGHT_KEYS
         })
     else:
