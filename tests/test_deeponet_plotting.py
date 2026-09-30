@@ -15,7 +15,11 @@ from chem_operator.experiments import (
     RunContext,
     build_manifest,
 )
-from chem_operator.plotting import plot_deeponet_artifacts, plot_deeponet_runs
+from chem_operator.plotting import (
+    plot_deeponet_artifacts,
+    plot_deeponet_run_set,
+    plot_deeponet_runs,
+)
 
 
 def write_artifacts(directory: Path) -> None:
@@ -157,6 +161,31 @@ def test_plot_deeponet_runs_round_trip(tmp_path: Path) -> None:
     assert reconstruction == tmp_path / "plots" / "test_reconstructions.png"
     assert history.stat().st_size > 0
     assert reconstruction.stat().st_size > 0
+
+
+def test_plot_deeponet_run_set_accepts_one_run_and_reversed_pair(tmp_path: Path) -> None:
+    direct = write_run(tmp_path / "runs", "deeponet")
+    pod = write_run(tmp_path / "runs", "pod_deeponet")
+
+    for name, runs in (("single", (direct,)), ("pair", (pod, direct))):
+        history, reconstruction = plot_deeponet_run_set(
+            runs,
+            selected_labels=("T", "X[0]"),
+            coordinate_label="Time [s]",
+            output_dir=tmp_path / name,
+        )
+        assert history.is_file()
+        assert reconstruction.is_file()
+
+
+def test_plot_deeponet_run_set_requires_a_run(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="At least one run"):
+        plot_deeponet_run_set(
+            (),
+            selected_labels=("T",),
+            coordinate_label="Time [s]",
+            output_dir=tmp_path / "plots",
+        )
 
 
 def test_plot_deeponet_runs_rejects_mismatched_references(tmp_path: Path) -> None:

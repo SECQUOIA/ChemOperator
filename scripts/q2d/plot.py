@@ -481,25 +481,30 @@ def plot_mesh_wall_time(
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--run", type=Path, required=True)
+    parser.add_argument("--run", type=Path, action="append", required=True,
+                        help="Canonical run directory; repeat to compare compatible models.")
     parser.add_argument("--output-dir", type=Path, default=Path(__file__).parent / "results" / "fno")
     parser.add_argument("--cases", type=int, default=2)
     args = parser.parse_args()
-    run = load_run(args.run)
-    plot_operator_runs([args.run],args.output_dir,cases=args.cases)
-    benchmark = args.run / "mesh_benchmark.csv"
-    if benchmark.exists():
+    plot_operator_runs(args.run,args.output_dir,cases=args.cases)
+    for run_path in args.run:
+        run = load_run(run_path)
+        output_dir = (args.output_dir if len(args.run) == 1 else
+                      args.output_dir / run.manifest["model_id"] / run.path.name)
+        benchmark = run.path / "mesh_benchmark.csv"
+        if not benchmark.exists():
+            continue
         frame = pd.read_csv(benchmark)
-        cost = json.loads((args.run / "cost_model.json").read_text())
+        cost = json.loads((run.path / "cost_model.json").read_text())
         shape = tuple(run.manifest["benchmark_metadata"]["training_shape"])
-        plot_mesh_l2(args.output_dir / "mesh_l2_vs_points.png",frame,shape)
-        plot_mesh_wall_time(args.output_dir / "mesh_wall_time_vs_points.png",frame,shape,cost)
-        plot_cumulative_break_even(args.output_dir / "cumulative_break_even.png",cost)
-        plot_amortized_pareto(args.output_dir / "amortized_pareto_frontiers.png",cost)
-        plot_break_even_map(args.output_dir / "break_even_speedup_map.png",cost)
-        with np.load(args.run / "superresolution.npz",allow_pickle=False) as arrays:
+        plot_mesh_l2(output_dir / "mesh_l2_vs_points.png",frame,shape)
+        plot_mesh_wall_time(output_dir / "mesh_wall_time_vs_points.png",frame,shape,cost)
+        plot_cumulative_break_even(output_dir / "cumulative_break_even.png",cost)
+        plot_amortized_pareto(output_dir / "amortized_pareto_frontiers.png",cost)
+        plot_break_even_map(output_dir / "break_even_speedup_map.png",cost)
+        with np.load(run.path / "superresolution.npz",allow_pickle=False) as arrays:
             for prefix in ("coarse","fine"):
-                plot_operator_fields(args.output_dir / f"{prefix}_superresolution.png",
+                plot_operator_fields(output_dir / f"{prefix}_superresolution.png",
                     arrays[f"{prefix}_reference"],arrays[f"{prefix}_prediction"],arrays["labels"],
                     [arrays[f"{prefix}_z"],arrays[f"{prefix}_r"]],["z","r"])
 
