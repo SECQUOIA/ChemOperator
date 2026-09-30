@@ -489,8 +489,8 @@ Examples:
 uv run scripts/cstr/deeponet.py
 uv run scripts/cstr/pod_deeponet.py
 uv run scripts/cstr/plot.py \
-  --deeponet-run artifacts/runs/cstr_non_isothermal/deeponet/<run-id> \
-  --pod-deeponet-run artifacts/runs/cstr_non_isothermal/pod_deeponet/<run-id>
+  --run artifacts/runs/cstr_non_isothermal/deeponet/<run-id> \
+  --run artifacts/runs/cstr_non_isothermal/pod_deeponet/<run-id>
 uv run scripts/pipe_flow_transient/transient_fno.py
 uv run scripts/pipe_flow/physics_deeponet.py final.epochs=5
 uv run scripts/pfr_heat/deeponet_fno.py
