@@ -102,6 +102,34 @@ def test_dataset_script_exports_shared_simulator_configuration() -> None:
     assert q2d_simulator.use_reference_if_no_solver is False
 
 
+def test_dataset_script_defines_resolution_and_tolerance_sweeps() -> None:
+    """Q2D generation exposes fixed meshes and paired tolerance cases."""
+    from chem_operator.sampling import Constant, Grid
+
+    assert GENERATE_DATASET.RESOLUTIONS == (
+        (14, 6),
+        (14, 10),
+        (14, 14),
+        (14, 20),
+    )
+    spaces = GENERATE_DATASET.q2d_multiresolution_parameter_space
+    assert set(spaces) == set(GENERATE_DATASET.RESOLUTIONS)
+    for (n_z, n_r), space in spaces.items():
+        assert isinstance(space["mesh_points"], Constant)
+        assert isinstance(space["lumen_points"], Constant)
+        assert space["mesh_points"].value == n_z
+        assert space["lumen_points"].value == n_r
+        assert space["refine"].value is False
+
+    for space in (
+        GENERATE_DATASET.q2d_tolerance_parameter_space,
+        GENERATE_DATASET.q2d_tolerance_interp_parameter_space,
+    ):
+        assert isinstance(space["rtol_ss"], Grid)
+        assert tuple(space["rtol_ss"].values) == GENERATE_DATASET.STEADY_RTOLS
+        assert space["refine"].value is False
+
+
 def test_q2d_canonical_training_benchmark_and_plotting(tmp_path, monkeypatch):
     """A small synthetic grid verifies the whole FNO artifact and mesh contract."""
     from argparse import Namespace
