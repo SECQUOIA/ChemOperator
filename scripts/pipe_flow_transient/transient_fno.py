@@ -66,7 +66,7 @@ def make_trainer(config, context, normalizer):
                              "output_channels": list(FIELD_NAMES)})
 
 def main():
-    args = parse_args(epochs=10, tune_epochs=6, samples=12)
+    args = parse_args(epochs=12, tune_epochs=8, samples=12)
     normalizer = fit_normalizer(args.data_dir)
     run_operator(args, PATHS, experiment_spec(args, MODEL_ID),
         lambda split: make_adapter(args.data_dir, split, normalizer, args.max_cases),
