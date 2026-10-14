@@ -5,6 +5,7 @@ from chem_operator._datasets.operator import (ChemOperatorDataset,
                                               raw_steps_to_possible_sample_t0s)
 from chem_operator._datasets.records import (CaseParameters, CaseSimulator,
                                              SimulationRecord)
+from chem_operator._datasets.resampling import TrajectoryResamplingDataset
 from chem_operator.dataset_processing import (DataProcessor, FieldPacker,
                                               NormalizationConfig,
                                               PackedFieldLayout,
@@ -36,6 +37,7 @@ __all__ = [
     "SimulationDatasetGenerator",
     "SimulationRecord",
     "TargetTransformConfig",
+    "TrajectoryResamplingDataset",
     "ZScoreNormalization",
     "ZScoreNormalizer",
     "normalizer_from_state_dict",
