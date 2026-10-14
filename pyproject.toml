@@ -17,6 +17,7 @@ dependencies = [
     "nvidia-physicsnemo>=2.1.1",
     "optuna>=4.9.0",
     "pandas>=3.0.3",
+    "pyqt6>=6.11.0",
     "ray[tune]>=2.56.0",
     "scikit-learn>=1.9.0",
     "scipy>=1.18.0",
