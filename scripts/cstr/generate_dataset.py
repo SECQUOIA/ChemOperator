@@ -7,8 +7,8 @@ from chem_operator.sampling import Constant, Uniform
 cstr_simulator = CSTRSim(
     parameter_space={
         # sampled physical parameters
-        "phi": Uniform(0.5, 2.0),
-        "reactive_fraction": Uniform(0.02, 0.08),
+        "phi": Uniform(1.0, 2.0), # phi = 2 from tutorial example. phi < 1 is lean, phi > 1 is rich
+        "reactive_fraction": Uniform(0.02, 0.05), # 0.0325 from tutorial example
         # constants
         "T0": Constant(925.0), # Kelvin
         "P0": Constant(1.046138 * ct.one_atm), # atm -> Pa. equals 1.06 bars
@@ -25,8 +25,8 @@ cstr_simulator = CSTRSim(
 cstr_non_isothermal_simulator = NonIsothermalCSTRSim(
     parameter_space={
         # sampled physical parameters
-        "phi": Uniform(0.5, 2.0),
-        "reactive_fraction": Uniform(0.02, 0.08),
+        "phi": Uniform(1.0, 2.0),
+        "reactive_fraction": Uniform(0.02, 0.05),
         # constants
         "T0": Constant(925.0),
         "P0": Constant(1.046138 * ct.one_atm),
@@ -39,9 +39,8 @@ cstr_non_isothermal_simulator = NonIsothermalCSTRSim(
         "wall_area": Constant(1.0e-2),
         "heat_transfer_coefficient": Uniform(0.001, 2.0),
         # solver controls
-        "t_final": Constant(50.0),
-        "dt": Constant(2e-2),
-        "adaptive": Constant(False),
+        "t_final": Constant(100.0),
+        "adaptive": Constant(True),
     }
 )
 
@@ -49,14 +48,14 @@ if __name__ == "__main__":
     paths = ExamplePaths.from_script(__file__)
     dataset_path = paths.datasets / "cstr"
 
-    cstr_dataset_generator = SimulationDatasetGenerator(
-        cstr_simulator, dataset_path
-    )
-    records_splits = cstr_dataset_generator.generate_splits(n_cases=80)
-    cstr_dataset_generator.save_splits(records_splits, overwrite=True)
+    # cstr_dataset_generator = SimulationDatasetGenerator(
+    #     cstr_simulator, dataset_path
+    # )
+    # records_splits = cstr_dataset_generator.generate_splits(n_cases=80)
+    # cstr_dataset_generator.save_splits(records_splits, overwrite=True)
 
     cstr_non_isothermal_dataset_generator = SimulationDatasetGenerator(
         cstr_non_isothermal_simulator, dataset_path
     )
-    records_splits = cstr_non_isothermal_dataset_generator.generate_splits(n_cases=80)
+    records_splits = cstr_non_isothermal_dataset_generator.generate_splits(n_cases=90)
     cstr_non_isothermal_dataset_generator.save_splits(records_splits, overwrite=True)

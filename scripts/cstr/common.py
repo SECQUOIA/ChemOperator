@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import argparse
 from contextlib import contextmanager
+import hashlib
+import json
 import os
 from typing import Iterator
 
@@ -12,6 +14,7 @@ os.environ.setdefault("MPLBACKEND", "Agg")
 os.environ.setdefault("MPLCONFIGDIR", "/tmp/matplotlib")
 os.environ.setdefault("RAY_memory_monitor_refresh_ms", "0")
 
+import numpy as np
 import torch
 from torch.utils.data import DataLoader, Dataset, Subset
 
@@ -21,6 +24,7 @@ from chem_operator.datasets import (
     FieldPacker,
     NormalizationConfig,
     TargetTransformConfig,
+    TrajectoryResamplingDataset,
 )
 from chem_operator.example_paths import ExamplePaths
 from chem_operator.experiments import (
@@ -43,12 +47,16 @@ from chem_operator.normalization import ZScoreNormalizer
 PATHS = ExamplePaths.from_script(__file__, dataset="cstr")
 DATASET_NAME = "cstr_non_isothermal"
 PROBLEM_ID = "cstr_non_isothermal"
-PROTOCOL_ID = "operator-cartesian-v1"
+PROTOCOL_ID = "operator-cartesian-logtime-v1"
 FIELDS = ("T", "P", "X")
 CONSTANTS = ("heat_transfer_coefficient",)
 UNITS = {"T": "K", "P": "Pa", "X": "-"}
 
-COORDINATE_STRIDE = 5
+COORDINATE_STRIDE = 1
+LOG_TIME_POINTS = 501
+LOG_TIME_FINAL = 100.0
+LOG_TIME_SCALE = 1.0e-2
+CACHE_RESAMPLED_TRAJECTORIES = True
 SEED = 42
 RECONSTRUCTION_CASES = 2
 MAX_TRAJECTORIES: int | None = None
@@ -74,8 +82,18 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def raw_dataset(split: str) -> ChemOperatorDataset:
-    return ChemOperatorDataset(
+def log_time_grid() -> np.ndarray:
+    normalized = np.linspace(0.0, 1.0, LOG_TIME_POINTS)
+    grid = LOG_TIME_SCALE * np.expm1(
+        normalized * np.log1p(LOG_TIME_FINAL / LOG_TIME_SCALE)
+    )
+    grid[0] = 0.0
+    grid[-1] = LOG_TIME_FINAL
+    return grid
+
+
+def raw_dataset(split: str) -> TrajectoryResamplingDataset:
+    raw = ChemOperatorDataset(
         PATHS.data / f"{DATASET_NAME}_{split}.h5",
         task="operator_cartesian",
         coordinate_name="t",
@@ -86,6 +104,12 @@ def raw_dataset(split: str) -> ChemOperatorDataset:
         n_steps_output=1,
         index_stride=COORDINATE_STRIDE,
         dtype=torch.float32,
+    )
+    return TrajectoryResamplingDataset(
+        raw,
+        coordinate_name="t",
+        target_coordinate=log_time_grid(),
+        cache=CACHE_RESAMPLED_TRAJECTORIES,
     )
 
 
@@ -112,7 +136,24 @@ def adapter(dataset: Dataset, normalizer: ZScoreNormalizer) -> DeepONetAdapter:
         format="cartesian_product",
         coordinate_name="t",
         include_constants=True,
+        coordinate_mode="log1p",
+        coordinate_scale=LOG_TIME_SCALE,
     )
+
+
+def resampled_dataset_fingerprint(split: str) -> str:
+    source = fingerprint_path(PATHS.data / f"{DATASET_NAME}_{split}.h5")
+    payload = {
+        "source": source,
+        "method": "linear",
+        "coordinate": "t",
+        "points": LOG_TIME_POINTS,
+        "final": LOG_TIME_FINAL,
+        "scale": LOG_TIME_SCALE,
+        "trunk_transform": "log1p",
+    }
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+    return hashlib.sha256(encoded).hexdigest()
 
 
 def prepare_normalizer() -> ZScoreNormalizer:
@@ -166,7 +207,7 @@ def experiment_spec(model_id: str) -> ExperimentSpec:
         model_id=model_id,
         benchmark_protocol_id=PROTOCOL_ID,
         dataset_fingerprints={
-            name: fingerprint_path(PATHS.data / f"{DATASET_NAME}_{split}.h5")
+            name: resampled_dataset_fingerprint(split)
             for name, split in (
                 ("train", "train"),
                 ("validation", "valid"),
