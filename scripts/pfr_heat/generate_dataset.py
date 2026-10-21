@@ -16,7 +16,7 @@ pfr_heat_simulator = PFRHeatSim(
         "wall_aspect_ratio_sq": Constant(0.20),
         "interface_biot": Constant(1.5),
         "inner_radius": Constant(1.0),
-        "outer_radius": Constant(2.0),
+        "outer_radius": Constant(1.25),
         "n_axial_points": Constant(101),
         "n_radial_points": Constant(21),
         "tolerance": Constant(1.0e-4),

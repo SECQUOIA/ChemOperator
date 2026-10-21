@@ -8,7 +8,7 @@ cstr_simulator = CSTRSim(
     parameter_space={
         # sampled physical parameters
         "phi": Uniform(1.0, 2.0), # phi = 2 from tutorial example. phi < 1 is lean, phi > 1 is rich
-        "reactive_fraction": Uniform(0.02, 0.05), # 0.0325 from tutorial example
+        "reactive_fraction": Uniform(0.02, 0.04), # 0.0325 from tutorial example
         # constants
         "T0": Constant(925.0), # Kelvin
         "P0": Constant(1.046138 * ct.one_atm), # atm -> Pa. equals 1.06 bars
@@ -26,7 +26,7 @@ cstr_non_isothermal_simulator = NonIsothermalCSTRSim(
     parameter_space={
         # sampled physical parameters
         "phi": Uniform(1.0, 2.0),
-        "reactive_fraction": Uniform(0.02, 0.05),
+        "reactive_fraction": Uniform(0.02, 0.04),
         # constants
         "T0": Constant(925.0),
         "P0": Constant(1.046138 * ct.one_atm),
@@ -57,5 +57,5 @@ if __name__ == "__main__":
     cstr_non_isothermal_dataset_generator = SimulationDatasetGenerator(
         cstr_non_isothermal_simulator, dataset_path
     )
-    records_splits = cstr_non_isothermal_dataset_generator.generate_splits(n_cases=90)
+    records_splits = cstr_non_isothermal_dataset_generator.generate_splits(n_cases=100)
     cstr_non_isothermal_dataset_generator.save_splits(records_splits, overwrite=True)

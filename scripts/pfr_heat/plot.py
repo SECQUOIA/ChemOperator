@@ -71,7 +71,7 @@ def plot_pfr_profiles(run_path, output_dir, *, cases=2):
             label="Prediction",
         )
         axes[1].set(
-            xlabel="Axial position [m]",
+            xlabel="Axial position z/L",
             ylabel="Temperature [K]",
             title="Gas temperature",
         )
