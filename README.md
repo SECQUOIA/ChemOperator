@@ -188,19 +188,19 @@ model-specific transformations:
 parameter specs
       │
       ▼
-CaseSimulator.make_case(params) ──► CaseParameters
+CaseSimulator.make_case(params)       ──► CaseParameters
       │
       ▼
-CaseSimulator.run_case(case)   ──► SimulationRecord
+CaseSimulator.run_case(case)          ──► SimulationRecord
       │
       ▼
-SimulationDatasetGenerator     ──► <simulator>_{train,valid,test}.h5
+SimulationDatasetGenerator            ──► <simulator>_{train,valid,test}.h5
       │
       ▼
-ChemOperatorDataset            ──► raw dictionaries of PyTorch tensors
+ChemOperatorDataset / dataset adapter ──► raw dictionaries of PyTorch tensors
       │
       ▼
-DataProcessor / model adapter  ──► model-ready x, y, constants, coordinates
+DataProcessor / model adapter         ──► model-ready x, y, constants, coordinates
 ```
 
 ### Parameter sampling
