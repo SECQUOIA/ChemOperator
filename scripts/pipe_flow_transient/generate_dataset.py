@@ -10,17 +10,17 @@ from chem_operator.sampling import Constant, Uniform
 pipe_flow_transient_simulator = TransientHagenPoiseuillePipeFlowSim(
     parameter_space={
         "radius": Uniform(0.5e-3, 1.5e-3),
-        "length": Uniform(0.5, 2.0),
         "dynamic_viscosity": Uniform(0.8e-3, 1.2e-3),
         "pressure_drop": Uniform(10.0, 100.0),
+        "length": Constant(1.0),
         "density": Constant(1000.0),
-        "n_time_points": Constant(128),
-        "n_radial_points": Constant(128),
+        "n_time_points": Constant(64),
+        "n_radial_points": Constant(64),
         "max_fourier_number": Constant(2.0),
     },
 )
 
-def generate_dataset(n_cases: int = 2000) -> None:
+def generate_dataset(n_cases: int = 500) -> None:
     """Generate and overwrite all dataset splits."""
     paths = ExamplePaths.from_script(__file__)
     dataset_path = paths.datasets / "pipe_flow_transient"

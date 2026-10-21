@@ -100,7 +100,7 @@ class CSTRSim(CaseSimulator):
             controls=controls,
             solver_parameters={
                 "t_final": params["t_final"],
-                "dt": params["dt"],
+                "dt": params.get("dt"),
                 "adaptive": params["adaptive"],
             },
             mechanism_parameters={

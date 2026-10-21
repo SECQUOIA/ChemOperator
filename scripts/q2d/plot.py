@@ -1,4 +1,4 @@
-"""Plot Q2D run artifacts without loading a model or dataset."""
+"""Plot Q2D run artifacts and optional tolerance-sweep comparisons."""
 from __future__ import annotations
 import sys
 from pathlib import Path
@@ -12,9 +12,166 @@ import pandas as pd
 import matplotlib.pyplot as plt
 from matplotlib.ticker import LogLocator, LogFormatterMathtext, NullFormatter
 from matplotlib.colors import LogNorm
+from scipy.interpolate import RegularGridInterpolator
 from chem_operator.plotting import plot_operator_runs, plot_operator_fields
 from chem_operator.experiments import load_run
 SLIDE_DPI = 220
+
+
+def _interpolate_fields(
+    fields: np.ndarray,
+    source_z: np.ndarray,
+    source_r: np.ndarray,
+    target_z: np.ndarray,
+    target_r: np.ndarray,
+) -> np.ndarray:
+    """Interpolate channel-first cell-centre fields on physical coordinates."""
+    z, r = np.meshgrid(target_z, target_r, indexing="ij")
+    # The meshes store cell centres, so edge centres can fall just outside the
+    # other mesh. Hold the nearest value there instead of extrapolating it.
+    points = np.column_stack((
+        np.clip(z.ravel(), source_z[0], source_z[-1]),
+        np.clip(r.ravel(), source_r[0], source_r[-1]),
+    ))
+    interpolator = RegularGridInterpolator(
+        (source_z, source_r), np.moveaxis(fields, 0, -1), method="linear"
+    )
+    return np.moveaxis(
+        interpolator(points).reshape(len(target_z), len(target_r), -1), -1, 0
+    )
+
+
+def _relative_field_errors(prediction: np.ndarray, reference: np.ndarray) -> np.ndarray:
+    """Return physical relative L2 errors, one per output channel."""
+    difference = (prediction - reference).reshape(len(reference), -1)
+    truth = reference.reshape(len(reference), -1)
+    return np.linalg.norm(difference, axis=1) / np.maximum(
+        np.linalg.norm(truth, axis=1), 1.0e-8
+    )
+
+
+def plot_tolerance_superresolution(
+    path: Path,
+    run_path: Path,
+    data_dir: Path,
+    *,
+    target_shape: tuple[int, int] = (14, 20),
+) -> None:
+    """Compare coarse interpolation and FNO against the 1e-6 fine solution."""
+    import torch
+
+    from chem_operator.normalization import normalizer_from_state_dict
+    from scripts.q2d.common import OUTPUT_CHANNELS, make_adapter
+    from scripts.q2d.fno import (
+        _complete_fno_evaluation,
+        inference_latency,
+        model_from_config,
+    )
+
+    checkpoint = torch.load(run_path / "checkpoint.pt", map_location="cpu", weights_only=True)
+    metadata = checkpoint["metadata"]
+    training_shape = tuple(metadata["training_shape"])
+    if training_shape != (14, 6):
+        raise ValueError(f"Tolerance comparison requires a 14x6 FNO, got {training_shape}.")
+    normalizer = normalizer_from_state_dict(metadata["normalizer"])
+    geometry = tuple(metadata["geometry"])
+    fine_path = data_dir / "q2d_cmr_tolerance_20_10_test.h5"
+    coarse_path = data_dir / "q2d_cmr_tolerance_14_6_test.h5"
+    fine_raw, fine = make_adapter(fine_path, normalizer, geometry)
+    try:
+        coarse_raw, coarse = make_adapter(coarse_path, normalizer, geometry)
+    except Exception:
+        fine_raw.close()
+        raise
+    try:
+        fine_cases = {
+            float(fine.physical_item(index)["metadata"]["params"]["rtol_ss"]): index
+            for index in range(len(fine))
+        }
+        if 1.0e-6 not in fine_cases:
+            raise ValueError(f"{fine_path.name} has no rtol=1e-6 reference case.")
+        reference_item = fine.physical_item(fine_cases[1.0e-6])
+        fine_sample = fine[fine_cases[1.0e-6]]
+        target_z = (np.arange(target_shape[0]) + 0.5) * geometry[0] / target_shape[0]
+        target_r = (np.arange(target_shape[1]) + 0.5) * geometry[1] / target_shape[1]
+        reference = _interpolate_fields(
+            reference_item["y"].numpy(),
+            fine_sample["z"].numpy(), fine_sample["r"].numpy(),
+            target_z, target_r,
+        )
+        rows = []
+        for index in range(len(coarse)):
+            item = coarse.physical_item(index)
+            sample = coarse[index]
+            case_metadata = item["metadata"]
+            if any(
+                not math.isclose(float(case_metadata["params"][key]),
+                                 float(reference_item["metadata"]["params"][key]))
+                for key in ("T0", "P0", "sccm")
+            ):
+                raise ValueError("Tolerance sweep cases do not share physical controls.")
+            interpolated = _interpolate_fields(
+                item["y"].numpy(), sample["z"].numpy(), sample["r"].numpy(),
+                target_z, target_r,
+            )
+            rows.append((
+                float(case_metadata["params"]["rtol_ss"]),
+                float(case_metadata["wall_time"]),
+                _relative_field_errors(interpolated, reference),
+            ))
+        model = model_from_config(checkpoint["config"], torch.device("cpu"))
+        model.load_state_dict(checkpoint["state_dict"])
+        model.eval()
+        physical_input = coarse.physical_item(0)["x"]
+        with torch.no_grad():
+            prediction = _complete_fno_evaluation(
+                model, physical_input, coarse,
+                training_shape, target_shape, device=torch.device("cpu"),
+            ).numpy()
+        fno_seconds = inference_latency(
+            model, physical_input, coarse,
+            training_shape, target_shape, device=torch.device("cpu"),
+        )
+    finally:
+        coarse_raw.close()
+        fine_raw.close()
+
+    rows.sort(key=lambda row: row[0])
+    rtols = np.asarray([row[0] for row in rows])
+    seconds = np.asarray([row[1] for row in rows])
+    errors = np.stack([row[2] for row in rows])
+    fno_errors = _relative_field_errors(prediction, reference)
+    figure, axes = plt.subplots(1, len(OUTPUT_CHANNELS), figsize=(17, 5),
+                               constrained_layout=True)
+    colors = plt.get_cmap("viridis")
+    norm = LogNorm(vmin=rtols.min(), vmax=rtols.max())
+    for index, (axis, channel) in enumerate(zip(axes, OUTPUT_CHANNELS)):
+        axis.scatter(seconds, errors[:, index], c=rtols, cmap=colors, norm=norm,
+                     s=85, edgecolor="black", linewidth=0.5, label="14×6 + interpolation")
+        axis.scatter([fno_seconds], [fno_errors[index]], marker="*", s=210,
+                     color="tab:red", edgecolor="black", linewidth=0.5,
+                     label="FNO superresolution")
+        axis.set_xscale("log")
+        axis.set_yscale("log")
+        axis.set_title(channel.display_name)
+        axis.set_xlabel("Wall time per case [s]")
+        axis.grid(alpha=0.25)
+    axes[0].set_ylabel("Relative L2 error on target grid")
+    axes[-1].legend(loc="best")
+    figure.colorbar(plt.cm.ScalarMappable(norm=norm, cmap=colors), ax=axes,
+                    label="Solver rtol")
+    figure.suptitle(
+        f"Tolerance and FNO superresolution on {target_shape[0]}×{target_shape[1]} grid "
+        "(20×10, rtol=1e-6 reference)"
+    )
+    path.parent.mkdir(parents=True, exist_ok=True)
+    figure.savefig(path, dpi=SLIDE_DPI)
+    # import matplotlib
+    # matplotlib.use('Qt5Agg')
+    # plt.show()
+    plt.close(figure)
+
+
 def _grouped_summary(
     frame: pd.DataFrame,
     column: str,
@@ -481,25 +638,39 @@ def plot_mesh_wall_time(
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--run", type=Path, required=True)
+    parser.add_argument("--run", type=Path, action="append", required=True,
+                        help="Canonical run directory; repeat to compare compatible models.")
     parser.add_argument("--output-dir", type=Path, default=Path(__file__).parent / "results" / "fno")
     parser.add_argument("--cases", type=int, default=2)
+    parser.add_argument("--tolerance-comparison", action="store_true",
+                        help="Plot coarse interpolation and FNO error versus wall time.")
+    parser.add_argument("--data-dir", type=Path,
+                        default=Path(__file__).resolve().parents[2] / "datasets" / "q2d_cmr")
     args = parser.parse_args()
-    run = load_run(args.run)
-    plot_operator_runs([args.run],args.output_dir,cases=args.cases)
-    benchmark = args.run / "mesh_benchmark.csv"
-    if benchmark.exists():
+    plot_operator_runs(args.run,args.output_dir,cases=args.cases)
+    for run_path in args.run:
+        run = load_run(run_path)
+        output_dir = (args.output_dir if len(args.run) == 1 else
+                      args.output_dir / run.manifest["model_id"] / run.path.name)
+        if args.tolerance_comparison:
+            plot_tolerance_superresolution(
+                output_dir / "tolerance_superresolution_error_vs_time.png",
+                run.path, args.data_dir,
+            )
+        benchmark = run.path / "mesh_benchmark.csv"
+        if not benchmark.exists():
+            continue
         frame = pd.read_csv(benchmark)
-        cost = json.loads((args.run / "cost_model.json").read_text())
+        cost = json.loads((run.path / "cost_model.json").read_text())
         shape = tuple(run.manifest["benchmark_metadata"]["training_shape"])
-        plot_mesh_l2(args.output_dir / "mesh_l2_vs_points.png",frame,shape)
-        plot_mesh_wall_time(args.output_dir / "mesh_wall_time_vs_points.png",frame,shape,cost)
-        plot_cumulative_break_even(args.output_dir / "cumulative_break_even.png",cost)
-        plot_amortized_pareto(args.output_dir / "amortized_pareto_frontiers.png",cost)
-        plot_break_even_map(args.output_dir / "break_even_speedup_map.png",cost)
-        with np.load(args.run / "superresolution.npz",allow_pickle=False) as arrays:
+        plot_mesh_l2(output_dir / "mesh_l2_vs_points.png",frame,shape)
+        plot_mesh_wall_time(output_dir / "mesh_wall_time_vs_points.png",frame,shape,cost)
+        plot_cumulative_break_even(output_dir / "cumulative_break_even.png",cost)
+        plot_amortized_pareto(output_dir / "amortized_pareto_frontiers.png",cost)
+        plot_break_even_map(output_dir / "break_even_speedup_map.png",cost)
+        with np.load(run.path / "superresolution.npz",allow_pickle=False) as arrays:
             for prefix in ("coarse","fine"):
-                plot_operator_fields(args.output_dir / f"{prefix}_superresolution.png",
+                plot_operator_fields(output_dir / f"{prefix}_superresolution.png",
                     arrays[f"{prefix}_reference"],arrays[f"{prefix}_prediction"],arrays["labels"],
                     [arrays[f"{prefix}_z"],arrays[f"{prefix}_r"]],["z","r"])
 

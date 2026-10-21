@@ -65,9 +65,39 @@ def test_deeponet_adapter_exposes_model_independent_reference() -> None:
         "include_initial": True,
         "resample_points": None,
         "coordinate_mode": "physical",
+        "coordinate_scale": None,
         "max_trajectories": 1,
         "dtype": "float32",
     }
+
+
+def test_deeponet_adapter_log1p_trunk_keeps_physical_reference() -> None:
+    processor = DataProcessor(
+        field_packer=FieldPacker(
+            channel_axis="last",
+            variable_field_order=("u",),
+            constant_field_order=("forcing",),
+        )
+    )
+    adapter = DeepONetAdapter(
+        _TrajectoryDataset(),
+        processor,
+        coordinate_name="t",
+        include_constants=True,
+        coordinate_mode="log1p",
+        coordinate_scale=0.01,
+    )
+
+    expected_coordinate = torch.tensor([0.0, 1.0, 2.0])
+    torch.testing.assert_close(
+        adapter[0]["trunk"].flatten(),
+        torch.log1p(expected_coordinate / 0.01),
+    )
+    torch.testing.assert_close(
+        adapter.reference_item(0).coordinates.flatten(),
+        expected_coordinate,
+    )
+    assert adapter.checkpoint_config()["coordinate_scale"] == 0.01
 
 
 def test_deeponet_adapter_can_use_constants_only_as_branch_input() -> None:

@@ -11,6 +11,20 @@ Pass `--help` to a model or plotting entry point to see its effective CLI.
 Generated datasets are written below `datasets/`; canonical model runs are
 written below `artifacts/runs/` unless `--runs-root` is supplied.
 
+Each workflow keeps separate entry points for dataset generation, model runs,
+and artifact plotting:
+
+| Task | Command |
+| --- | --- |
+| Generate data | `uv run python scripts/<folder>/generate_dataset.py` |
+| Tune and train | `uv run python scripts/<folder>/<model>.py` |
+| Plot saved runs | `uv run python scripts/<folder>/plot.py --run PATH [--run PATH ...]` |
+
+Plotters require at least one `--run`. Repeat it to compare compatible runs;
+`--output-dir PATH` selects the plot directory and `--cases N` limits plotted
+test cases. Use `uv run python scripts/plot_all.py` to plot the newest available
+runs across workflows.
+
 ## Common model options
 
 The direct and POD DeepONet scripts accept these options:
@@ -24,10 +38,6 @@ The direct and POD DeepONet scripts accept these options:
 | `--device DEVICE` | `auto` | Select `auto`, `cpu`, `cuda`, or another PyTorch device. |
 | `--plot-cases N` | `2` | Number of test reconstructions to store. |
 | `--train-config CONFIG` | `best` | Select the final configuration; these scripts currently require `best`. |
-
-They also expose `--generate` and `--plot` compatibility switches, but reject
-them when enabled. Use each folder's `generate_dataset.py` and `plot.py`
-instead.
 
 The FNO and physics workflow scripts additionally accept:
 
@@ -85,8 +95,8 @@ Compare saved direct and POD runs:
 
 ```bash
 uv run python scripts/cstr/plot.py \
-  --deeponet-run artifacts/runs/cstr_non_isothermal/deeponet/<run-id> \
-  --pod-deeponet-run artifacts/runs/cstr_non_isothermal/pod_deeponet/<run-id> \
+  --run artifacts/runs/cstr_non_isothermal/deeponet/<run-id> \
+  --run artifacts/runs/cstr_non_isothermal/pod_deeponet/<run-id> \
   --output-dir scripts/cstr/results/deeponet_comparison \
   --cases 2
 ```
@@ -116,8 +126,8 @@ Compare their saved runs with:
 
 ```bash
 uv run python scripts/pfr/plot.py \
-  --deeponet-run artifacts/runs/pfr_chain/deeponet/<run-id> \
-  --pod-deeponet-run artifacts/runs/pfr_chain/pod_deeponet/<run-id> \
+  --run artifacts/runs/pfr_chain/deeponet/<run-id> \
+  --run artifacts/runs/pfr_chain/pod_deeponet/<run-id> \
   --output-dir scripts/pfr/results/deeponet_comparison \
   --cases 2
 ```
@@ -144,8 +154,8 @@ Compare saved runs:
 
 ```bash
 uv run python scripts/packed_bed_1d/plot.py \
-  --deeponet-run artifacts/runs/packed_bed_1d/deeponet/<run-id> \
-  --pod-deeponet-run artifacts/runs/packed_bed_1d/pod_deeponet/<run-id> \
+  --run artifacts/runs/packed_bed_1d/deeponet/<run-id> \
+  --run artifacts/runs/packed_bed_1d/pod_deeponet/<run-id> \
   --output-dir scripts/packed_bed_1d/results/deeponet_comparison \
   --cases 2
 ```
@@ -210,13 +220,12 @@ Or compare the standard direct/POD pair:
 
 ```bash
 uv run python scripts/pipe_flow/plot.py \
-  --deeponet-run artifacts/runs/pipe_flow/deeponet/<run-id> \
-  --pod-deeponet-run artifacts/runs/pipe_flow/pod_deeponet/<run-id> \
+  --run artifacts/runs/pipe_flow/deeponet/<run-id> \
+  --run artifacts/runs/pipe_flow/pod_deeponet/<run-id> \
   --cases 3
 ```
 
-Do not combine `--run` with the paired DeepONet options. `common.py` provides
-both the standard and physics-specific data contracts.
+`common.py` provides both the standard and physics-specific data contracts.
 
 ## `scripts/pipe_flow_transient`
 
@@ -271,7 +280,7 @@ uv run python scripts/pfr_heat/fno.py
 
 The model uses a 1-D FNO for species flows and gas temperature, then feeds the
 predicted wall-side gas temperature into a 2-D cylindrical-wall FNO. Its
-defaults are 6 trials, 40 tuning epochs, and 75 final epochs. It accepts all
+defaults are 10 trials, 50 tuning epochs, and 60 final epochs. It accepts all
 common FNO options.
 
 Tune and train the coupled reactor-DeepONet/wall-FNO model:
@@ -289,8 +298,8 @@ Plot one or more saved runs:
 
 ```bash
 uv run python scripts/pfr_heat/plot.py \
-  --run artifacts/runs/pfr_heat/fno/<run-id> \
-  --run artifacts/runs/pfr_heat/deeponet_fno/<run-id> \
+  --run artifacts/runs/pfr_heat/fno_physics/<run-id> \
+  --run artifacts/runs/pfr_heat/deeponet_fno_physics/<run-id> \
   --output-dir scripts/pfr_heat/results/comparison \
   --cases 2
 ```
