@@ -10,17 +10,21 @@ from chem_operator.reactors.q2d.dataset_generator import (
 )
 from chem_operator.sampling import Constant, Grid, ParameterSpec, Uniform
 
-
-RESOLUTIONS = ((14, 6), (14, 10), (14, 14), (14, 20))
-STEADY_RTOLS = (1e-1, 1e-2, 1e-3, 1e-4, 1e-5, 1e-6)
+# axial x radial
+RESOLUTIONS = tuple(
+    (n_z, n_r)
+    for n_z in range(14, 20, 2)
+    for n_r in range(6, 10, 2)
+)
+STEADY_RTOLS = (1.0, 5e-1, 1e-1, 1e-2, 1e-3, 1e-4, 1e-5, 1e-6)
 
 q2d_parameter_space = {
     "annular_channel": Constant(False),
     "T0": Uniform(1150.0, 1240.0),
     "sccm": Uniform(470.0, 530.0),
     "P0": Constant(1.0e6),
-    "lumen_points": Constant(6),
     "mesh_points": Constant(14),
+    "lumen_points": Constant(6),
     "refine": Constant(False),
     "rtol_ss": Constant(1e-3),
 }
@@ -38,8 +42,8 @@ q2d_tolerance_parameter_space = {
     "T0": Constant(1173.0),
     "P0": Constant(1e6),
     "sccm": Constant(500.0),
-    "mesh_points": Constant(14),
-    "lumen_points": Constant(20),
+    "mesh_points": Constant(20),
+    "lumen_points": Constant(10),
     "refine": Constant(False),
     "rtol_ss": Grid(STEADY_RTOLS),
 }
@@ -48,8 +52,8 @@ q2d_tolerance_interp_parameter_space = {
     "T0": Constant(1173.0),
     "P0": Constant(1e6),
     "sccm": Constant(500.0),
-    "mesh_points": Constant(6),
-    "lumen_points": Constant(14),
+    "mesh_points": Constant(14),
+    "lumen_points": Constant(6),
     "refine": Constant(False),
     "rtol_ss": Grid(STEADY_RTOLS),
 }
@@ -104,19 +108,19 @@ def generate_tolerance_datasets() -> None:
     """Generate paired target-grid and coarse-grid tolerance test files."""
     _generate_tolerance_test(
         q2d_tolerance_parameter_space,
-        "q2d_cmr_tolerance_14_20",
+        "q2d_cmr_tolerance_20_10",
     )
     _generate_tolerance_test(
         q2d_tolerance_interp_parameter_space,
-        "q2d_cmr_tolerance_6_14",
+        "q2d_cmr_tolerance_14_6",
     )
 
 
 def generate_all_datasets(n_cases: int = 80) -> None:
     """Generate the canonical, resolution-sweep, and tolerance datasets."""
-    generate_dataset(n_cases=n_cases)
-    generate_multiresolution_datasets()
+    # generate_multiresolution_datasets()
     generate_tolerance_datasets()
+    # generate_dataset(n_cases=n_cases)
 
 
 if __name__ == "__main__":

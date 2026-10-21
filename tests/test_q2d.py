@@ -130,6 +130,23 @@ def test_dataset_script_defines_resolution_and_tolerance_sweeps() -> None:
         assert space["refine"].value is False
 
 
+def test_q2d_tolerance_interpolation_uses_physical_coordinates() -> None:
+    """A linear field remains exact on a different cell-centre mesh."""
+    from scripts.q2d.plot import _interpolate_fields, _relative_field_errors
+
+    z = np.array([0.5, 1.5, 2.5])
+    r = np.array([0.25, 0.75, 1.25])
+    target_z = np.array([0.75, 1.25, 2.0])
+    target_r = np.array([0.5, 1.0])
+    field = (2 * z[:, None] + 3 * r[None, :])[None]
+    expected = (2 * target_z[:, None] + 3 * target_r[None, :])[None]
+
+    prediction = _interpolate_fields(field, z, r, target_z, target_r)
+
+    np.testing.assert_allclose(prediction, expected)
+    np.testing.assert_allclose(_relative_field_errors(prediction, expected), [0.0])
+
+
 def test_q2d_canonical_training_benchmark_and_plotting(tmp_path, monkeypatch):
     """A small synthetic grid verifies the whole FNO artifact and mesh contract."""
     from argparse import Namespace
