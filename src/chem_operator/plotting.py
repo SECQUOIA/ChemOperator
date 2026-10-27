@@ -10,6 +10,7 @@ from fnmatch import fnmatchcase
 from pathlib import Path
 
 import numpy as np
+import matplotlib.pyplot as plt
 
 from chem_operator._experiments.comparison import (
     RunArtifacts,
@@ -28,6 +29,10 @@ MODEL_STYLES = {
     "pod_deeponet": ("tab:orange", ":"),
 }
 
+STYLE_PATH = Path(__file__).parent / "styles" / "publication.mplstyle"
+
+def use_publication_style() -> None:
+    plt.style.use(STYLE_PATH)
 
 @dataclass(frozen=True, slots=True)
 class HistoryPanel:
@@ -84,8 +89,6 @@ def _read_history(
 
 
 def _plot_history(artifact_dir: Path, output_dir: Path) -> Path:
-    import matplotlib.pyplot as plt
-
     history = _read_history(artifact_dir / "history.csv")
     figure, axis = plt.subplots(figsize=(7.5, 4.5))
     metrics: set[str] = set()
@@ -130,8 +133,6 @@ def _plot_reconstructions(
     coordinate_label: str,
     cases: int,
 ) -> Path:
-    import matplotlib.pyplot as plt
-
     if not selected_labels:
         raise ValueError("selected_labels cannot be empty.")
     if cases < 1:
@@ -253,8 +254,6 @@ def _plot_deeponet_run_reconstructions(
     coordinate_label: str,
     cases: int,
 ) -> Path:
-    import matplotlib.pyplot as plt
-
     if not selected_labels:
         raise ValueError("selected_labels cannot be empty.")
     if cases < 1:
@@ -442,8 +441,6 @@ def plot_experiment_histories(
     ``auto`` uses a log scale only when every plotted value in that panel is
     positive.
     """
-    import matplotlib.pyplot as plt
-
     if yscale not in {"auto", "linear", "log"}:
         raise ValueError("yscale must be 'auto', 'linear', or 'log'.")
     loaded = tuple(
@@ -562,8 +559,6 @@ def plot_experiment_matrix(
     split: str = "test",
 ) -> Path:
     """Plot problem-by-model test values from canonical metrics tables."""
-    import matplotlib.pyplot as plt
-
     loaded = tuple(
         run if isinstance(run, RunArtifacts) else load_run(run)
         for run in runs
@@ -615,8 +610,6 @@ __all__ = [
 
 def plot_operator_fields(path, reference, prediction, labels, coordinates, coordinate_names):
     """Draw channel-first one- or two-dimensional physical fields."""
-    import matplotlib.pyplot as plt
-
     reference, prediction = np.asarray(reference), np.asarray(prediction)
     if reference.shape != prediction.shape or reference.shape[0] != len(labels):
         raise ValueError("Field shapes and labels do not agree.")
@@ -652,8 +645,6 @@ def plot_operator_fields(path, reference, prediction, labels, coordinates, coord
 
 def plot_operator_runs(run_paths, output_dir, *, cases=2):
     """Plot canonical runs using only their manifest, history, and NPZ arrays."""
-    import matplotlib.pyplot as plt
-
     if cases < 1:
         raise ValueError("cases must be positive.")
     runs = tuple(load_run(path) for path in run_paths)
