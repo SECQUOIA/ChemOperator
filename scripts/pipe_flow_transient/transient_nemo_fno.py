@@ -200,7 +200,6 @@ def relative_l2_batch(  # pylint: disable=not-callable
 
 PHYSICS_WEIGHT_KEYS = ("physics_weight", "constraint_weight")
 
-
 def search_space(variant="physics"):
     space = {'modes': tune.choice([6, 8, 10]), 'latent_channels': tune.choice([8, 16]), 'n_layers': tune.choice([3, 4]), 'padding': tune.choice([0, 4, 8]), 'decoder_layers': tune.choice([1, 2]), 'decoder_layer_size': tune.choice([8, 16, 32]), 'learning_rate': tune.loguniform(0.0001, 0.003), 'weight_decay': tune.loguniform(1e-08, 0.0001), 'batch_size': tune.choice([2, 4, 8])}
     if variant == "data":
@@ -271,7 +270,7 @@ def parse_cli_args():
     parser.add_argument(
         "--variant", choices=("both", "data", "physics"), default="physics"
     )
-    return parse_args(epochs=15, tune_epochs=10, samples=3, parser=parser)
+    return parse_args(epochs=20, tune_epochs=15, samples=8, parser=parser)
 
 
 def main():

@@ -35,8 +35,6 @@ def parse_operator_args(paths, *, epochs, tune_epochs, samples, description=None
     parser.add_argument("--samples", type=int, default=samples)
     parser.add_argument("--max-cases", type=int, default=None)
     args = parser.parse_args()
-    if args.generate or args.plot:
-        parser.error("Use generate_dataset.py or plot.py as separate entry points.")
     if min(args.epochs, args.tune_epochs, args.samples, args.plot_cases) < 1:
         parser.error("Epochs, samples, and plot cases must be positive.")
     if args.max_cases is not None and args.max_cases < 1:

@@ -33,6 +33,11 @@ class DeepONetAdapter(Dataset):
         If set, interpolate every trajectory onto a shared grid. Relative
         coordinates are useful for adaptively stepped trajectories. Resampling
         is only defined for one-dimensional trajectories.
+    coordinate_mode:
+        Transform coordinates supplied to the trunk. ``"physical"`` leaves
+        them unchanged, ``"relative"`` scales each trajectory to ``[0, 1]``,
+        and ``"log1p"`` applies ``log1p(coordinate / coordinate_scale)`` while
+        retaining physical coordinates in references and reconstructions.
     coordinate_names:
         Ordered coordinate names for a tensor-product spatial grid. The first
         coordinate must be the leading step dimension used by
@@ -57,7 +62,8 @@ class DeepONetAdapter(Dataset):
         include_input_state: bool = True,
         include_initial: bool = True,
         resample_points: int | None = None,
-        coordinate_mode: Literal["physical", "relative"] = "physical",
+        coordinate_mode: Literal["physical", "relative", "log1p"] = "physical",
+        coordinate_scale: float | None = None,
         indices: Sequence[int] | None = None,
         max_trajectories: int | None = None,
         dtype: np.dtype | type = np.float32,
@@ -66,8 +72,24 @@ class DeepONetAdapter(Dataset):
             raise ValueError(
                 "format must be 'cartesian_product' or 'pointwise'."
             )
-        if coordinate_mode not in {"physical", "relative"}:
-            raise ValueError("coordinate_mode must be 'physical' or 'relative'.")
+        if coordinate_mode not in {"physical", "relative", "log1p"}:
+            raise ValueError(
+                "coordinate_mode must be 'physical', 'relative', or 'log1p'."
+            )
+        if coordinate_mode == "log1p":
+            if coordinate_scale is None or coordinate_scale <= 0.0:
+                raise ValueError(
+                    "coordinate_scale must be positive for log1p coordinates."
+                )
+            if resample_points is not None:
+                raise ValueError(
+                    "Use a shared-grid dataset wrapper rather than "
+                    "resample_points with log1p coordinates."
+                )
+        elif coordinate_scale is not None:
+            raise ValueError(
+                "coordinate_scale is only valid with coordinate_mode='log1p'."
+            )
         if resample_points is not None and resample_points < 2:
             raise ValueError("resample_points must be at least two.")
         if coordinate_name is not None and coordinate_names is not None:
@@ -116,6 +138,7 @@ class DeepONetAdapter(Dataset):
         self.include_initial = include_initial
         self.resample_points = resample_points
         self.coordinate_mode = coordinate_mode
+        self.coordinate_scale = coordinate_scale
         if indices is None:
             selected = tuple(range(len(dataset)))
         else:
@@ -141,6 +164,7 @@ class DeepONetAdapter(Dataset):
             "include_initial": self.include_initial,
             "resample_points": self.resample_points,
             "coordinate_mode": self.coordinate_mode,
+            "coordinate_scale": self.coordinate_scale,
             "max_trajectories": len(self.indices),
             "dtype": self.dtype.name,
         }
@@ -359,6 +383,11 @@ class DeepONetAdapter(Dataset):
             if np.any(span <= 0):
                 raise ValueError("Cannot normalize a zero-width coordinate.")
             values = (values - minimum) / span
+        elif self.coordinate_mode == "log1p":
+            assert self.coordinate_scale is not None
+            if np.any(values < 0):
+                raise ValueError("log1p coordinates must be non-negative.")
+            values = np.log1p(values / self.coordinate_scale)
         return np.asarray(values, dtype=self.dtype)
 
     def _load_trajectory(self, index: int) -> _Trajectory:

@@ -1,15 +1,46 @@
-# Model usage
+# Model Usage
 
-Run commands from the repository root. The examples below use `uv` so that
-the project environment and dependencies are selected automatically:
+Be sure to run all commands from the repository root directory.
 
+## Environment Setup
+
+Activate your virtual environment before executing any commands:
+* **Bash / Zsh:**
 ```bash
-uv run python scripts/<folder>/<script>.py [options]
+source .venv/bin/activate
+```
+
+* **PowerShell:**
+```PowerShell
+.venv\Scripts\Activate.ps1
+```
+
+> You can use `uv run` instead of `python` to automatically handle environment selection and dependencies.
+
+## Running Scripts
+
+Execute your scripts using the following standard format:
+```bash
+python scripts/<folder>/<script>.py [options]
 ```
 
 Pass `--help` to a model or plotting entry point to see its effective CLI.
 Generated datasets are written below `datasets/`; canonical model runs are
 written below `artifacts/runs/` unless `--runs-root` is supplied.
+
+Each workflow keeps separate entry points for dataset generation, model runs,
+and artifact plotting:
+
+| Task | Command |
+| --- | --- |
+| Generate data | `python scripts/<folder>/generate_dataset.py` |
+| Tune and train | `python scripts/<folder>/<model>.py` |
+| Plot saved runs | `python scripts/<folder>/plot.py --run PATH [--run PATH ...]` |
+
+Plotters require at least one `--run`. Repeat it to compare compatible runs;
+`--output-dir PATH` selects the plot directory and `--cases N` limits plotted
+test cases. Use `python scripts/plot_all.py` to plot the newest available
+runs across workflows.
 
 ## Common model options
 
@@ -24,10 +55,6 @@ The direct and POD DeepONet scripts accept these options:
 | `--device DEVICE` | `auto` | Select `auto`, `cpu`, `cuda`, or another PyTorch device. |
 | `--plot-cases N` | `2` | Number of test reconstructions to store. |
 | `--train-config CONFIG` | `best` | Select the final configuration; these scripts currently require `best`. |
-
-They also expose `--generate` and `--plot` compatibility switches, but reject
-them when enabled. Use each folder's `generate_dataset.py` and `plot.py`
-instead.
 
 The FNO and physics workflow scripts additionally accept:
 
@@ -47,14 +74,14 @@ For example:
 
 ```bash
 # Tune and train.
-uv run python scripts/pfr/deeponet.py --run-id pfr_direct_01
+python scripts/pfr/deeponet.py --run-id pfr_direct_01
 
 # Tune only, then train that run in a later invocation.
-uv run python scripts/pfr/deeponet.py --run-id pfr_direct_02 --no-train
-uv run python scripts/pfr/deeponet.py --run-id pfr_direct_02 --no-tune
+python scripts/pfr/deeponet.py --run-id pfr_direct_02 --no-train
+python scripts/pfr/deeponet.py --run-id pfr_direct_02 --no-tune
 
 # Small FNO smoke run.
-uv run python scripts/pipe_flow_transient/transient_fno.py \
+python scripts/pipe_flow_transient/transient_fno.py \
   --device cpu --max-cases 8 --samples 1 --tune-epochs 1 --epochs 1 \
   --plot-cases 1
 ```
@@ -65,28 +92,28 @@ Generate the isothermal and non-isothermal CSTR splits. This generates 80
 cases for each simulator and overwrites existing splits:
 
 ```bash
-uv run python scripts/cstr/generate_dataset.py
+python scripts/cstr/generate_dataset.py
 ```
 
 Tune and train the direct DeepONet for non-isothermal CSTR temperature,
 pressure, and composition trajectories:
 
 ```bash
-uv run python scripts/cstr/deeponet.py
+python scripts/cstr/deeponet.py
 ```
 
 Fit the training-only POD basis, then tune and train POD-DeepONet:
 
 ```bash
-uv run python scripts/cstr/pod_deeponet.py
+python scripts/cstr/pod_deeponet.py
 ```
 
 Compare saved direct and POD runs:
 
 ```bash
-uv run python scripts/cstr/plot.py \
-  --deeponet-run artifacts/runs/cstr_non_isothermal/deeponet/<run-id> \
-  --pod-deeponet-run artifacts/runs/cstr_non_isothermal/pod_deeponet/<run-id> \
+python scripts/cstr/plot.py \
+  --run artifacts/runs/cstr_non_isothermal/deeponet/<run-id> \
+  --run artifacts/runs/cstr_non_isothermal/pod_deeponet/<run-id> \
   --output-dir scripts/cstr/results/deeponet_comparison \
   --cases 2
 ```
@@ -101,23 +128,23 @@ chain-of-reactors cases, and 300 non-isothermal chain cases, overwriting the
 corresponding splits:
 
 ```bash
-uv run python scripts/pfr/generate_dataset.py
+python scripts/pfr/generate_dataset.py
 ```
 
 Tune and train the direct or POD-compressed chain-of-reactors model:
 
 ```bash
-uv run python scripts/pfr/deeponet.py
-uv run python scripts/pfr/pod_deeponet.py
+python scripts/pfr/deeponet.py
+python scripts/pfr/pod_deeponet.py
 ```
 
 Both predict temperature, pressure, composition, and velocity along `z`.
 Compare their saved runs with:
 
 ```bash
-uv run python scripts/pfr/plot.py \
-  --deeponet-run artifacts/runs/pfr_chain/deeponet/<run-id> \
-  --pod-deeponet-run artifacts/runs/pfr_chain/pod_deeponet/<run-id> \
+python scripts/pfr/plot.py \
+  --run artifacts/runs/pfr_chain/deeponet/<run-id> \
+  --run artifacts/runs/pfr_chain/pod_deeponet/<run-id> \
   --output-dir scripts/pfr/results/deeponet_comparison \
   --cases 2
 ```
@@ -130,22 +157,22 @@ Generate 1,000 one-dimensional ammonia packed-bed/membrane cases, overwriting
 existing splits:
 
 ```bash
-uv run python scripts/packed_bed_1d/generate_dataset.py
+python scripts/packed_bed_1d/generate_dataset.py
 ```
 
 Tune and train the direct or POD-compressed DeepONet:
 
 ```bash
-uv run python scripts/packed_bed_1d/deeponet.py
-uv run python scripts/packed_bed_1d/pod_deeponet.py
+python scripts/packed_bed_1d/deeponet.py
+python scripts/packed_bed_1d/pod_deeponet.py
 ```
 
 Compare saved runs:
 
 ```bash
-uv run python scripts/packed_bed_1d/plot.py \
-  --deeponet-run artifacts/runs/packed_bed_1d/deeponet/<run-id> \
-  --pod-deeponet-run artifacts/runs/packed_bed_1d/pod_deeponet/<run-id> \
+python scripts/packed_bed_1d/plot.py \
+  --run artifacts/runs/packed_bed_1d/deeponet/<run-id> \
+  --run artifacts/runs/packed_bed_1d/pod_deeponet/<run-id> \
   --output-dir scripts/packed_bed_1d/results/deeponet_comparison \
   --cases 2
 ```
@@ -158,28 +185,28 @@ Generate 10,000 steady Hagen--Poiseuille pipe-flow cases, overwriting existing
 splits:
 
 ```bash
-uv run python scripts/pipe_flow/generate_dataset.py
+python scripts/pipe_flow/generate_dataset.py
 ```
 
 Tune and train the standard direct or POD DeepONet:
 
 ```bash
-uv run python scripts/pipe_flow/deeponet.py
-uv run python scripts/pipe_flow/pod_deeponet.py
+python scripts/pipe_flow/deeponet.py
+python scripts/pipe_flow/pod_deeponet.py
 ```
 
 Run the PhysicsNeMo DeepONet comparison:
 
 ```bash
 # Tune a data-only baseline and then its physics-informed counterpart.
-uv run python scripts/pipe_flow/physics_deeponet.py --variant both
+python scripts/pipe_flow/physics_deeponet.py --variant both
 
 # Run only one variant.
-uv run python scripts/pipe_flow/physics_deeponet.py --variant data
-uv run python scripts/pipe_flow/physics_deeponet.py --variant physics
+python scripts/pipe_flow/physics_deeponet.py --variant data
+python scripts/pipe_flow/physics_deeponet.py --variant physics
 
 # Use another experiment configuration.
-uv run python scripts/pipe_flow/physics_deeponet.py \
+python scripts/pipe_flow/physics_deeponet.py \
   --config path/to/physics_deeponet.yaml \
   --variant both --physics-samples 4
 ```
@@ -200,7 +227,7 @@ tunes the physics-loss weight.
 Plot one or more canonical physics/operator runs:
 
 ```bash
-uv run python scripts/pipe_flow/plot.py \
+python scripts/pipe_flow/plot.py \
   --run artifacts/runs/pipe_flow/physics_deeponet_data/<run-id> \
   --run artifacts/runs/pipe_flow/physics_deeponet/<run-id> \
   --output-dir scripts/pipe_flow/results/comparison --cases 3
@@ -209,14 +236,13 @@ uv run python scripts/pipe_flow/plot.py \
 Or compare the standard direct/POD pair:
 
 ```bash
-uv run python scripts/pipe_flow/plot.py \
-  --deeponet-run artifacts/runs/pipe_flow/deeponet/<run-id> \
-  --pod-deeponet-run artifacts/runs/pipe_flow/pod_deeponet/<run-id> \
+python scripts/pipe_flow/plot.py \
+  --run artifacts/runs/pipe_flow/deeponet/<run-id> \
+  --run artifacts/runs/pipe_flow/pod_deeponet/<run-id> \
   --cases 3
 ```
 
-Do not combine `--run` with the paired DeepONet options. `common.py` provides
-both the standard and physics-specific data contracts.
+`common.py` provides both the standard and physics-specific data contracts.
 
 ## `scripts/pipe_flow_transient`
 
@@ -224,27 +250,38 @@ Generate 10,000 transient Hagen--Poiseuille cases on time/radius grids,
 overwriting existing splits:
 
 ```bash
-uv run python scripts/pipe_flow_transient/generate_dataset.py
+python scripts/pipe_flow_transient/generate_dataset.py
 ```
 
 Tune and train the data-only NeuralOperator FNO:
 
 ```bash
-uv run python scripts/pipe_flow_transient/transient_fno.py
+python scripts/pipe_flow_transient/transient_fno.py
 ```
 
 Tune and train the PhysicsNeMo FNO with data, PDE-residual, and constraint losses:
 
 ```bash
-uv run python scripts/pipe_flow_transient/transient_nemo_fno.py
+python scripts/pipe_flow_transient/transient_nemo_fno.py
 ```
 
 Both models predict the velocity field over time and radius and accept all common FNO options listed above.
 
+Tune and train data-only DeepXDE models that predict one radial profile at a time:
+
+```bash
+python scripts/pipe_flow_transient/deeponet.py
+python scripts/pipe_flow_transient/pod_deeponet.py
+```
+
+The POD basis is fitted on training next-step profiles. Both runs report
+teacher-forced one-step and recursive rollout metrics and can be compared with
+the existing PhysicsNeMo rollout DeepONet using `plot.py` and repeated `--run`.
+
 Compare any number of saved runs by repeating `--run`:
 
 ```bash
-uv run python scripts/pipe_flow_transient/plot.py \
+python scripts/pipe_flow_transient/plot.py \
   --run artifacts/runs/pipe_flow_transient/transient_fno/<run-id> \
   --run artifacts/runs/pipe_flow_transient/transient_nemo_fno/<run-id> \
   --output-dir scripts/pipe_flow_transient/results/comparison \
@@ -260,24 +297,24 @@ Generate 1,000 coupled three-species PFR/cylindrical-wall cases, overwriting
 existing splits:
 
 ```bash
-uv run python scripts/pfr_heat/generate_dataset.py
+python scripts/pfr_heat/generate_dataset.py
 ```
 
 Tune and train the coupled PhysicsNeMo model:
 
 ```bash
-uv run python scripts/pfr_heat/fno.py
+python scripts/pfr_heat/fno.py
 ```
 
 The model uses a 1-D FNO for species flows and gas temperature, then feeds the
 predicted wall-side gas temperature into a 2-D cylindrical-wall FNO. Its
-defaults are 6 trials, 40 tuning epochs, and 75 final epochs. It accepts all
+defaults are 10 trials, 50 tuning epochs, and 60 final epochs. It accepts all
 common FNO options.
 
 Tune and train the coupled reactor-DeepONet/wall-FNO model:
 
 ```bash
-uv run python scripts/pfr_heat/deeponet_fno.py
+python scripts/pfr_heat/deeponet_fno.py
 ```
 
 This variant uses PhysicsNeMo MLPs for a four-output DeepONet over the axial
@@ -288,9 +325,9 @@ wall, and boundary losses.
 Plot one or more saved runs:
 
 ```bash
-uv run python scripts/pfr_heat/plot.py \
-  --run artifacts/runs/pfr_heat/fno/<run-id> \
-  --run artifacts/runs/pfr_heat/deeponet_fno/<run-id> \
+python scripts/pfr_heat/plot.py \
+  --run artifacts/runs/pfr_heat/fno_physics/<run-id> \
+  --run artifacts/runs/pfr_heat/deeponet_fno_physics/<run-id> \
   --output-dir scripts/pfr_heat/results/comparison \
   --cases 2
 ```
@@ -303,7 +340,7 @@ normalizers, and experiment configuration.
 Generate 100 quasi-two-dimensional catalytic membrane reactor cases:
 
 ```bash
-uv run python scripts/q2d/generate_dataset.py
+python scripts/q2d/generate_dataset.py
 ```
 
 This invokes the configured external/Docker solver, overwrites the base
@@ -312,7 +349,7 @@ splits, and leaves the source-code resolution sweep disabled.
 Tune, train, and benchmark the axial/radial NeuralOperator FNO:
 
 ```bash
-uv run python scripts/q2d/fno.py
+python scripts/q2d/fno.py
 ```
 
 It accepts the common FNO options and one additional Boolean option:
@@ -324,13 +361,13 @@ It accepts the common FNO options and one additional Boolean option:
 For example, train without the post-training benchmark:
 
 ```bash
-uv run python scripts/q2d/fno.py --no-benchmark
+python scripts/q2d/fno.py --no-benchmark
 ```
 
 Plot a saved run and, when present, its benchmark artifacts:
 
 ```bash
-uv run python scripts/q2d/plot.py \
+python scripts/q2d/plot.py \
   --run artifacts/runs/q2d_cmr/fno/<run-id> \
   --output-dir scripts/q2d/results/fno \
   --cases 1
@@ -339,13 +376,13 @@ uv run python scripts/q2d/plot.py \
 Validate the bundled tutorial/reference cases and create field plots:
 
 ```bash
-uv run python scripts/q2d/validate_solver.py
+python scripts/q2d/validate_solver.py
 ```
 
 Run Docker-backed radial-grid validation instead:
 
 ```bash
-uv run python scripts/q2d/validate_solver.py \
+python scripts/q2d/validate_solver.py \
   --radial-grid --lumen-points 4
 ```
 
@@ -354,13 +391,27 @@ uv run python scripts/q2d/validate_solver.py \
 discovery, and experiment configuration. `fields.ipynb` is an interactive
 field-inspection notebook, and `TODO_fno.md` contains development notes.
 
+Compare completed Q2D FNO, TFNO, and UNO runs with:
+
+```bash
+scripts/q2d/plot.py \
+  --run artifacts/runs/q2d_cmr/fno/<fno-run-id> \
+  --run artifacts/runs/q2d_cmr/tfno/<tfno-run-id> \
+  --run artifacts/runs/q2d_cmr/uno/<uno-run-id>
+```
+
+The TFNO and UNO entry points save training, evaluation, and checkpoint artifacts.
+Mesh benchmarks, superresolution artifacts, and cost models are produced by the FNO
+entry point only. The Q2D plotter's `--tolerance-comparison` option supports FNO runs only.
+
+
 ## `scripts/diagnostics`
 
 Smoke-test one processed batch and target-reconstruction round trip for the
 configured reactor datasets, then write `scripts/diagnostics/processing.png`:
 
 ```bash
-uv run python scripts/diagnostics/processing.py
+python scripts/diagnostics/processing.py
 ```
 
 This script has no command-line options and does not train a model.
