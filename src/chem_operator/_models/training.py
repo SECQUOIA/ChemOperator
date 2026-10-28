@@ -86,7 +86,7 @@ def train_deeponet_lazy(
     if initial_state_dict is not None:
         model.load_state_dict(initial_state_dict, strict=True)
     parameter_counts = deeponet_parameter_counts(model)
-    optimizer = torch.optim.Adam(
+    optimizer = torch.optim.AdamW(
         model.parameters(),
         lr=config.learning_rate,
         weight_decay=config.weight_decay,
