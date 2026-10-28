@@ -250,6 +250,17 @@ uv run python scripts/pipe_flow_transient/transient_nemo_fno.py
 
 Both models predict the velocity field over time and radius and accept all common FNO options listed above.
 
+Tune and train data-only DeepXDE models that predict one radial profile at a time:
+
+```bash
+uv run python scripts/pipe_flow_transient/deeponet.py
+uv run python scripts/pipe_flow_transient/pod_deeponet.py
+```
+
+The POD basis is fitted on training next-step profiles. Both runs report
+teacher-forced one-step and recursive rollout metrics and can be compared with
+the existing PhysicsNeMo rollout DeepONet using `plot.py` and repeated `--run`.
+
 Compare any number of saved runs by repeating `--run`:
 
 ```bash
@@ -362,6 +373,20 @@ uv run python scripts/q2d/validate_solver.py \
 `common.py` supplies Q2D channels, geometry handling, normalization, mesh-file
 discovery, and experiment configuration. `fields.ipynb` is an interactive
 field-inspection notebook, and `TODO_fno.md` contains development notes.
+
+Compare completed Q2D FNO, TFNO, and UNO runs with:
+
+```bash
+uv run scripts/q2d/plot.py \
+  --run artifacts/runs/q2d_cmr/fno/<fno-run-id> \
+  --run artifacts/runs/q2d_cmr/tfno/<tfno-run-id> \
+  --run artifacts/runs/q2d_cmr/uno/<uno-run-id>
+```
+
+The TFNO and UNO entry points save training, evaluation, and checkpoint artifacts.
+Mesh benchmarks, superresolution artifacts, and cost models are produced by the FNO
+entry point only. The Q2D plotter's `--tolerance-comparison` option supports FNO runs only.
+
 
 ## `scripts/diagnostics`
 
