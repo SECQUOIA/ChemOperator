@@ -88,7 +88,7 @@ python scripts/pipe_flow_transient/transient_fno.py \
 
 ## `scripts/cstr`
 
-Generate the isothermal and non-isothermal CSTR splits. This generates 80
+Generate the isothermal and non-isothermal CSTR splits. This generates 100
 cases for each simulator and overwrites existing splits:
 
 ```bash
@@ -102,18 +102,28 @@ pressure, and composition trajectories:
 python scripts/cstr/deeponet.py
 ```
 
+Tune and train the NeuralOperator FNO on the same log-time grid,
+initial state, and full output state:
+
+```bash
+python scripts/cstr/fno.py
+```
+Use `--no-train` and `--no-tune`
+with the same `--run-id` to split the two stages across invocations.
+
 Fit the training-only POD basis, then tune and train POD-DeepONet:
 
 ```bash
 python scripts/cstr/pod_deeponet.py
 ```
 
-Compare saved direct and POD runs:
+Compare saved direct DeepONet, POD-DeepONet, and FNO runs:
 
 ```bash
 python scripts/cstr/plot.py \
   --run artifacts/runs/cstr_non_isothermal/deeponet/<run-id> \
   --run artifacts/runs/cstr_non_isothermal/pod_deeponet/<run-id> \
+  --run artifacts/runs/cstr_non_isothermal/fno/<run-id> \
   --output-dir scripts/cstr/results/deeponet_comparison \
   --cases 2
 ```
