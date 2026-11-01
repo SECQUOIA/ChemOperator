@@ -39,6 +39,7 @@ where = ["src"]
 
 [tool.setuptools.package-data]
 "chem_operator.example_data" = ["*.yaml", "README.md"]
+chem_operator = ["styles/*.mplstyle"]
 
 [tool.uv]
 config-settings-package = { scikits-odes-daepack = { setup-args = "-Dc_std=c17" } }
