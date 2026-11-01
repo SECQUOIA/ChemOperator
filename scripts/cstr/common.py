@@ -72,8 +72,8 @@ PIN_MEMORY = bool(GPUS_PER_TRIAL)
 RAY_OBJECT_STORE_BYTES = 100 * 1024**2
 
 
-def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description=__doc__)
+def parse_args(*, description: str | None = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description=description or __doc__)
     add_workflow_arguments(parser)
     add_run_arguments(
         parser,

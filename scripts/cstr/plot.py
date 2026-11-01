@@ -14,8 +14,9 @@ import h5py
 import numpy as np
 
 from chem_operator.example_paths import ExamplePaths
-from chem_operator.plotting import plot_deeponet_run_set
+from chem_operator.plotting import plot_deeponet_run_set, use_publication_style
 
+use_publication_style()
 PATHS = ExamplePaths.from_script(__file__)
 MECHANISM = "n-heptane-NUIG-2016.yaml"
 PLOT_CASES = 2
