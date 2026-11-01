@@ -640,13 +640,17 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--run", type=Path, action="append", required=True,
                         help="Canonical run directory; repeat to compare compatible models.")
-    parser.add_argument("--output-dir", type=Path, default=Path(__file__).parent / "results" / "fno")
+    parser.add_argument("--output-dir", type=Path, default=Path(__file__).parent / "results" / "models")
     parser.add_argument("--cases", type=int, default=2)
     parser.add_argument("--tolerance-comparison", action="store_true",
-                        help="Plot coarse interpolation and FNO error versus wall time.")
+                        help="For FNO runs only: plot coarse interpolation and FNO error versus wall time.")
     parser.add_argument("--data-dir", type=Path,
                         default=Path(__file__).resolve().parents[2] / "datasets" / "q2d_cmr")
     args = parser.parse_args()
+    if args.tolerance_comparison:
+        for run_path in args.run:
+            if load_run(run_path).manifest["model_id"] != "fno":
+                parser.error("--tolerance-comparison supports FNO runs only.")
     plot_operator_runs(args.run,args.output_dir,cases=args.cases)
     for run_path in args.run:
         run = load_run(run_path)

@@ -9,17 +9,14 @@ import json
 import math
 import time
 from typing import Any
-from neuralop.losses import LpLoss
 from neuralop.models import FNO
 import numpy as np
 import pandas as pd
 from ray import tune
 import torch
 from torch.nn import functional as torch_functional
-from torch.utils.data import DataLoader
 from chem_operator.models import FNOAdapter
 from chem_operator.normalization import ZScoreNormalizer
-from chem_operator.experiments import FNOTrainer, LossTerm
 from chem_operator.experiments import run_operator, evaluate_fields
 from scripts.q2d.common import (
     PATHS,
@@ -53,6 +50,10 @@ from scripts.q2d.common import (
     PROBLEM_ID,
     experiment_spec,
     parse_args,
+    evaluate,
+    make_trainer as make_model_trainer,
+    relative_l2_per_field as _relative_l2_per_field,
+    relative_l2_per_sample as _relative_l2_per_sample,
 )
 
 from scripts.q2d.common import _case_controls
@@ -70,60 +71,6 @@ def model_from_config(
         positional_embedding="grid",
         domain_padding=float(config.get("domain_padding", 0.0)),
     ).to(device)
-
-
-def _relative_l2_per_sample(
-    prediction: torch.Tensor,
-    target: torch.Tensor,
-) -> torch.Tensor:
-    difference = (prediction - target).flatten(start_dim=1)
-    reference = target.flatten(start_dim=1)
-    return torch.linalg.vector_norm(difference, dim=1) / torch.linalg.vector_norm(
-        reference, dim=1
-    ).clamp_min(RELATIVE_L2_EPS)
-
-
-def _relative_l2_per_field(
-    prediction: torch.Tensor,
-    target: torch.Tensor,
-) -> torch.Tensor:
-    difference = (prediction - target).flatten(start_dim=2)
-    reference = target.flatten(start_dim=2)
-    return torch.linalg.vector_norm(difference, dim=2) / torch.linalg.vector_norm(
-        reference, dim=2
-    ).clamp_min(RELATIVE_L2_EPS)
-
-
-def evaluate(
-    model: FNO,
-    dataset: FNOAdapter,
-    *,
-    batch_size: int,
-    device: torch.device,
-) -> dict[str, float]:
-    """Evaluate mean per-case normalized relative L2."""
-    loader = DataLoader(dataset, batch_size=batch_size, shuffle=False)
-    global_values: list[torch.Tensor] = []
-    field_values: list[torch.Tensor] = []
-    model.eval()
-    with torch.no_grad():
-        for batch in loader:
-            target = batch["y"].to(device)
-            prediction = model(batch["x"].to(device))
-            global_values.append(
-                _relative_l2_per_sample(prediction, target).detach().cpu()
-            )
-            field_values.append(
-                _relative_l2_per_field(prediction, target).detach().cpu()
-            )
-    global_tensor = torch.cat(global_values)
-    fields_tensor = torch.cat(field_values)
-    metrics = {"normalized_relative_l2": float(global_tensor.mean())}
-    for index, spec in enumerate(OUTPUT_CHANNELS):
-        metrics[f"normalized_relative_l2_{spec.label}"] = float(
-            fields_tensor[:, index].mean()
-        )
-    return metrics
 
 
 def resize_model_input(
@@ -474,16 +421,7 @@ def search_space():
 MODEL_ID = "fno"
 
 def make_trainer(config, context, normalizer, geometry, shape):
-    loss = LpLoss(d=2,p=2,reduction="mean")
-    def physical(value):
-        return torch.stack([normalizer.denormalize(value[:,i],channel.label)
-                            for i,channel in enumerate(OUTPUT_CHANNELS)],dim=1)
-    return FNOTrainer(lambda cfg: model_from_config(cfg,context.device),config,
-        loss_terms=[LossTerm("data_loss", lambda p,t,b: loss(p,t))], selection_metric="data_loss",
-        metric_adapter=lambda p,t,b: (physical(p),physical(t)),
-        checkpoint_metadata={"normalizer": normalizer.state_dict(), "geometry": list(geometry),
-                             "training_shape": list(shape), "input_channels": [c.label for c in INPUT_CHANNELS],
-                             "output_channels": [c.label for c in OUTPUT_CHANNELS]})
+    return make_model_trainer(model_from_config, config, context, normalizer, geometry, shape)
 
 def save_benchmarks(trainer, result, *, data_dir, normalizer, geometry, shape):
     from chem_operator.experiments import ArtifactStore, fingerprint_path
