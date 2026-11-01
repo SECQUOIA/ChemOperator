@@ -46,6 +46,7 @@ config-settings-package = { scikits-odes-daepack = { setup-args = "-Dc_std=c17" 
 
 [dependency-groups]
 dev = [
+    "huggingface-hub>=1.24.0",
     "pylint>=4.0.6",
     "pytest>=9.1.1",
     "pytest-cov>=7.1.0",

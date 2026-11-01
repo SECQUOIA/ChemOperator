@@ -861,6 +861,7 @@ sundials = [
 
 [package.dev-dependencies]
 dev = [
+    { name = "huggingface-hub" },
     { name = "pylint" },
     { name = "pytest" },
     { name = "pytest-cov" },
@@ -892,6 +893,7 @@ provides-extras = ["sundials"]
 
 [package.metadata.requires-dev]
 dev = [
+    { name = "huggingface-hub", specifier = ">=1.24.0" },
     { name = "pylint", specifier = ">=4.0.6" },
     { name = "pytest", specifier = ">=9.1.1" },
     { name = "pytest-cov", specifier = ">=7.1.0" },
