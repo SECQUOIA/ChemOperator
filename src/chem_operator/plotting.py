@@ -23,10 +23,12 @@ from chem_operator._experiments.comparison import (
 MODEL_LABELS = {
     "deeponet": "DeepONet",
     "pod_deeponet": "POD-DeepONet",
+    "fno": "FNO",
 }
 MODEL_STYLES = {
     "deeponet": ("tab:blue", "--"),
     "pod_deeponet": ("tab:orange", ":"),
+    "fno": ("tab:green", "-."),
 }
 
 STYLE_PATH = Path(__file__).parent / "styles" / "publication.mplstyle"
@@ -392,7 +394,7 @@ def plot_deeponet_run_set(
     output_dir: str | Path,
     cases: int = 2,
 ) -> tuple[Path, Path]:
-    """Plot one DeepONet run or compare compatible direct and POD runs."""
+    """Plot compatible CSTR operator runs from canonical artifacts."""
 
     runs = tuple(
         run if isinstance(run, RunArtifacts) else load_run(run)
@@ -405,7 +407,7 @@ def plot_deeponet_run_set(
     model_ids = tuple(str(run.manifest["model_id"]) for run in runs)
     unknown = sorted(set(model_ids) - MODEL_STYLES.keys())
     if unknown:
-        raise ValueError("Expected DeepONet runs; got " + ", ".join(unknown) + ".")
+        raise ValueError("Unsupported operator runs: " + ", ".join(unknown) + ".")
     output = Path(output_dir)
     output.mkdir(parents=True, exist_ok=True)
     history = plot_experiment_histories(
