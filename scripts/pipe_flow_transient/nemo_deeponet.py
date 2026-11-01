@@ -4,134 +4,44 @@ from __future__ import annotations
 
 import argparse
 import sys
-import time
 from dataclasses import replace
 from pathlib import Path
 from typing import Any, Mapping
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-import numpy as np
 import torch
 from physicsnemo.models.mlp.fully_connected import FullyConnected
 from physicsnemo.sym.eq.phy_informer import PhysicsInformer
 from ray import tune
 from torch import nn
 from torch.nn import functional as F
-from torch.utils.data import DataLoader, Dataset
 
-from chem_operator.datasets import ChemOperatorDataset
 from chem_operator.experiments import (
     CompositeLossTrainer,
-    EvaluationOutcome,
     LossTerm,
-    StreamingRegressionMetrics,
     run_operator,
 )
-from chem_operator.models import fit_zscore_normalizer
 from scripts.pipe_flow_transient.common import (
     FIELD_NAMES,
-    FILE_STEM,
     PATHS,
     PDE_REGISTRY,
     PHYSICS_CONSTANT_NAMES,
+    RolloutAdapter,
     dataset_pde_name,
+    evaluate_rollout_run as evaluate_run,
     experiment_spec,
+    fit_rollout_normalizer as fit_normalizer,
+    fourier_times as _fourier_times,
+    make_rollout_adapter as make_adapter,
     parse_args,
+    rollout_constants as _physics_constants,
+    rollout_raw_dataset as raw_dataset,
 )
 
 CONSTANT_NAMES = PHYSICS_CONSTANT_NAMES
 PHYSICS_WEIGHT_KEYS = ("physics_weight", "constraint_weight")
 MODEL_IDS = {"data": "nemo_deeponet_data", "physics": "nemo_deeponet_physics"}
-
-
-def raw_dataset(data_dir: Path, split: str, *, full_trajectory: bool = False) -> ChemOperatorDataset:
-    """Read adjacent pairs, or one whole trajectory per case for evaluation."""
-    return ChemOperatorDataset(
-        data_dir / f"{FILE_STEM}_{split}.h5",
-        task="operator_cartesian" if full_trajectory else "rollout",
-        coordinate_name="t",
-        input_fields=FIELD_NAMES,
-        output_fields=FIELD_NAMES,
-        constant_inputs=CONSTANT_NAMES,
-        n_steps_input=1,
-        n_steps_output=1,
-        dtype=torch.float32,
-    )
-
-
-def _physics_constants(sample: Mapping[str, Any]) -> torch.Tensor:
-    return torch.stack([sample["constant_inputs"][name].reshape(()) for name in CONSTANT_NAMES])
-
-
-def _fourier_times(t_now: torch.Tensor, t_next: torch.Tensor, constants: torch.Tensor):
-    radius, _, viscosity, _, density = constants.unbind(dim=-1)
-    scale = (viscosity / density) / radius.square()
-    return t_now * scale, (t_next - t_now) * scale
-
-
-class RolloutAdapter(Dataset):
-    """Normalize one radial profile and retain physical coordinates for physics."""
-
-    def __init__(self, dataset: ChemOperatorDataset, normalizer, n_radial: int):
-        self.dataset = dataset
-        self.normalizer = normalizer
-        self.n_radial = n_radial
-
-    def __len__(self) -> int:
-        return len(self.dataset)
-
-    def branch(self, velocity: torch.Tensor, constants: torch.Tensor,
-               t_now: torch.Tensor, t_next: torch.Tensor) -> torch.Tensor:
-        profile = self.normalizer.normalize(velocity, "velocity")
-        parameters = torch.stack([
-            self.normalizer.normalize(constants[..., index], name)
-            for index, name in enumerate(CONSTANT_NAMES)
-        ], dim=-1)
-        tau, dtau = _fourier_times(t_now, t_next, constants)
-        return torch.cat((profile, parameters, tau.unsqueeze(-1), dtau.unsqueeze(-1)), dim=-1)
-
-    def __getitem__(self, index: int) -> dict[str, Any]:
-        sample = self.dataset[index]
-        current = sample["input_fields"]["velocity"][0]
-        following = sample["output_fields"]["velocity"][0]
-        radius_grid = sample["output_coordinates"]["r"]
-        if current.numel() != self.n_radial or following.numel() != self.n_radial or radius_grid.numel() != self.n_radial:
-            raise ValueError("Rollout sample radial resolution differs from training resolution.")
-        t_now = sample["input_coordinates"]["t"][0]
-        t_next = sample["output_coordinates"]["t"][0]
-        if t_next <= t_now:
-            raise ValueError("Rollout times must increase.")
-        constants = _physics_constants(sample)
-        radius_fraction = radius_grid / constants[0]
-        if not torch.all(radius_fraction[1:] > radius_fraction[:-1]):
-            raise ValueError("Radial coordinates must increase.")
-        return {
-            "branch": self.branch(current, constants, t_now, t_next),
-            "x": radius_fraction,
-            "y": self.normalizer.normalize(following, "velocity"),
-            "current": current,
-            "t_now": t_now,
-            "t_next": t_next,
-            "r": radius_grid,
-            "constants": constants,
-            "physicsnemo_pde": str(sample["metadata"]["physicsnemo_pde"]),
-        }
-
-
-def fit_normalizer(data_dir: Path):
-    # Read each case once while retaining statistics for every radial node.
-    dataset = raw_dataset(data_dir, "train", full_trajectory=True)
-    try:
-        dataset_pde_name(dataset)
-        return fit_zscore_normalizer(dataset, FIELD_NAMES, CONSTANT_NAMES)
-    finally:
-        dataset.close()
-
-
-def make_adapter(data_dir: Path, split: str, normalizer, n_radial: int):
-    dataset = raw_dataset(data_dir, split)
-    return dataset, RolloutAdapter(dataset, normalizer, n_radial)
 
 
 class DeepONet(nn.Module):
@@ -278,64 +188,6 @@ def make_trainer(config, context, normalizer, n_radial: int, *, pde_name: str,
             "branch_time_features": ["fourier_time", "fourier_step"],
             "variant": variant,
         },
-    )
-
-
-def evaluate_run(trainer, data, context, normalizer, data_dir: Path,
-                 n_radial: int, *, cases: int = 2, max_cases: int | None = None):
-    """Score teacher-forced windows and recursive trajectories in physical units."""
-    model = trainer.model.to(context.device).eval()
-    one_step = StreamingRegressionMetrics()
-    rollout = StreamingRegressionMetrics()
-    arrays = {key: [] for key in ("case_ids", "reference", "prediction", "t", "r")}
-    started = time.perf_counter()
-    with torch.no_grad():
-        for batch in DataLoader(data, batch_size=int(trainer.config["batch_size"])):
-            predicted = model(batch["branch"].to(context.device), batch["x"].to(context.device))
-            predicted = normalizer.denormalize(predicted.cpu(), "velocity")
-            reference = normalizer.denormalize(batch["y"], "velocity")
-            one_step.update(predicted, reference)
-
-        raw = raw_dataset(data_dir, "test", full_trajectory=True)
-        adapter = RolloutAdapter(raw, normalizer, n_radial)
-        try:
-            count = len(raw) if max_cases is None else min(len(raw), max_cases)
-            for case_index in range(count):
-                sample = raw[case_index]
-                constants = _physics_constants(sample)
-                r = sample["output_coordinates"]["r"]
-                if r.numel() != n_radial:
-                    raise ValueError("Test trajectory radial resolution differs from training resolution.")
-                x = (r / constants[0]).to(context.device).unsqueeze(0)
-                times = torch.cat((sample["input_coordinates"]["t"], sample["output_coordinates"]["t"]))
-                reference = torch.cat((sample["input_fields"]["velocity"], sample["output_fields"]["velocity"]))
-                current = reference[0]
-                profiles = [current]
-                for step in range(1, len(times)):
-                    branch = adapter.branch(current, constants, times[step - 1], times[step]).to(context.device).unsqueeze(0)
-                    predicted = model(branch, x)
-                    current = normalizer.denormalize(predicted.squeeze(0).cpu(), "velocity")
-                    profiles.append(current)
-                prediction = torch.stack(profiles)
-                rollout.update(prediction[1:], reference[1:])
-                if len(arrays["case_ids"]) < cases:
-                    arrays["case_ids"].append(sample["metadata"]["case_index"])
-                    arrays["reference"].append(reference.unsqueeze(0).numpy())
-                    arrays["prediction"].append(prediction.unsqueeze(0).numpy())
-                    arrays["t"].append(times.numpy())
-                    arrays["r"].append(r.numpy())
-        finally:
-            raw.close()
-    elapsed = time.perf_counter() - started
-    scores = {f"one_step_{key}": value for key, value in one_step.compute().items()}
-    scores.update(rollout.compute())
-    diagnostics = trainer.evaluate_losses(data, context)
-    scores.update({key: diagnostics[key] for key in ("data_loss", "physics_loss", "constraint_loss")})
-    return EvaluationOutcome(
-        scores,
-        {**{key: np.asarray(value) for key, value in arrays.items()},
-         "labels": np.asarray(FIELD_NAMES), "coordinate_names": np.asarray(("t", "r"))},
-        elapsed,
     )
 
 
