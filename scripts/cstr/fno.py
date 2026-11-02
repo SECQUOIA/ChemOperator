@@ -22,7 +22,7 @@ from torch.utils.data import DataLoader, Dataset
 from chem_operator.experiments import (
     EvaluationOutcome,
     ExperimentRunner,
-    FNOTrainer,
+    OperatorTrainer,
     LossTerm,
     RayRuntimeConfig,
     StreamingRegressionMetrics,
@@ -178,9 +178,9 @@ def make_trainer(
     config: Mapping[str, Any],
     context: Any,
     normalizer: ZScoreNormalizer,
-) -> FNOTrainer:
+) -> OperatorTrainer:
     n_species = int(normalizer.means["X"].numel())
-    return FNOTrainer(
+    return OperatorTrainer(
         lambda values: model_from_config(values, context.device, n_species),
         config,
         loss_terms=(LossTerm("data_loss", relative_l2),),
@@ -197,7 +197,7 @@ def make_trainer(
 
 
 def evaluate(
-    trainer: FNOTrainer,
+    trainer: OperatorTrainer,
     data: CSTRFNOAdapter,
     context: Any,
     *,

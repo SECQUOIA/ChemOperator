@@ -32,9 +32,8 @@ from .evaluation import deeponet_training_config, evaluate_deeponet
 from .metrics import History, MetricEvent, StreamingRegressionMetrics, TimingRecorder
 from .runner import ExperimentResult, ExperimentRunner, ExperimentSpec
 from .trainers import (
-    CompositeLossTrainer,
+    OperatorTrainer,
     DeepONetTrainer,
-    FNOTrainer,
     LossTerm,
     count_parameters,
     default_batch_size,
@@ -60,14 +59,13 @@ __all__ = [
     "ArtifactValidationError",
     "ComparisonSeries",
     "ComparisonRecord",
-    "CompositeLossTrainer",
+    "OperatorTrainer",
     "DeepONetTrainer",
     "DeepONetTuningSettings",
     "EvaluationOutcome",
     "ExperimentResult",
     "ExperimentRunner",
     "ExperimentSpec",
-    "FNOTrainer",
     "History",
     "LossTerm",
     "MetricEvent",

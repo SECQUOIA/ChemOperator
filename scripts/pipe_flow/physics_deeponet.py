@@ -14,7 +14,7 @@ from torch.utils.data import DataLoader
 from physicsnemo.models.mlp.fully_connected import FullyConnected
 from physicsnemo.sym.eq.phy_informer import PhysicsInformer
 from chem_operator.reactors.pipe_flow.dataset_generator import HagenPoiseuille, hagen_poiseuille_velocity
-from chem_operator.experiments import CompositeLossTrainer, LossTerm, EvaluationOutcome, StreamingRegressionMetrics
+from chem_operator.experiments import OperatorTrainer, LossTerm, EvaluationOutcome, StreamingRegressionMetrics
 from chem_operator.experiments import parse_operator_args, run_operator
 import argparse
 import numpy as np
@@ -166,7 +166,7 @@ def make_trainer(config, context, statistics):
         return prediction
     def physical(value):
         return value * statistics.velocity_std.to(value.device) + statistics.velocity_mean.to(value.device)
-    return CompositeLossTrainer(lambda cfg: model_from_config(cfg,context.device),config,
+    return OperatorTrainer(lambda cfg: model_from_config(cfg,context.device),config,
         batch_adapter=adapt,forward_adapter=forward,validation_requires_grad=True,
         loss_terms=[LossTerm("data_loss",lambda p,t,b: torch.nn.functional.mse_loss(p,t)),
                     LossTerm("physics_loss",lambda p,t,b: b["physics_loss"],float(config.get("physics_weight",0)))],

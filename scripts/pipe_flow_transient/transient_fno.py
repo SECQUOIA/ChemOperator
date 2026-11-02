@@ -9,7 +9,7 @@ from neuralop.losses import LpLoss
 from neuralop.models import FNO
 from ray import tune
 import torch
-from chem_operator.experiments import FNOTrainer, LossTerm
+from chem_operator.experiments import OperatorTrainer, LossTerm
 from chem_operator.experiments import run_operator, evaluate_fields
 from scripts.pipe_flow_transient.common import (
     PATHS,
@@ -59,7 +59,7 @@ MODEL_ID = "transient_fno"
 
 def make_trainer(config, context, normalizer):
     loss = LpLoss(d=2, p=2, reduction="mean")
-    return FNOTrainer(lambda cfg: model_from_config(cfg, context.device), config,
+    return OperatorTrainer(lambda cfg: model_from_config(cfg, context.device), config,
         loss_terms=[LossTerm("data_loss", lambda p,t,b: loss(p,t))], selection_metric="data_loss",
         metric_adapter=lambda p,t,b: (normalizer.denormalize(p, "velocity"), normalizer.denormalize(t, "velocity")),
         checkpoint_metadata={"normalizer": normalizer.state_dict(), "input_channels": list(CONSTANT_NAMES),

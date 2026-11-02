@@ -19,7 +19,7 @@ from chem_operator.example_paths import ExamplePaths
 from chem_operator.models import FNOAdapter, FNOChannel, fit_fno_zscore_normalizer
 from chem_operator.normalization import ZScoreNormalizer
 from chem_operator.experiments import (
-    FNOTrainer,
+    OperatorTrainer,
     LossTerm,
     evaluate_fields,
     operator_spec,
@@ -448,7 +448,7 @@ def make_trainer(
     normalizer: ZScoreNormalizer,
     geometry: tuple[float, float],
     shape: tuple[int, int],
-) -> FNOTrainer:
+) -> OperatorTrainer:
     """Use the same loss, physical metrics, and checkpoint contract for all models."""
     loss = LpLoss(d=2, p=2, reduction="mean")
 
@@ -461,7 +461,7 @@ def make_trainer(
             dim=1,
         )
 
-    return FNOTrainer(
+    return OperatorTrainer(
         lambda cfg: model_factory(cfg, context.device),
         config,
         loss_terms=[LossTerm("data_loss", lambda prediction, target, batch: loss(prediction, target))],
@@ -484,7 +484,7 @@ def run_model(args: Any, model_id: str, model_factory: ModelFactory, search_spac
     """Run Q2D tuning, final training, and test evaluation."""
     normalizer, geometry, shape = fit_normalizer(args.data_dir / f"{FILE_STEM}_train.h5")
 
-    def evaluate_run(trainer: FNOTrainer, data: FNOAdapter, context: Any):
+    def evaluate_run(trainer: OperatorTrainer, data: FNOAdapter, context: Any):
         return evaluate_fields(
             trainer,
             data,
