@@ -17,41 +17,21 @@ import torch
 from torch.nn import functional as torch_functional
 from chem_operator.models import FNOAdapter
 from chem_operator.normalization import ZScoreNormalizer
-from chem_operator.experiments import run_operator, evaluate_fields
 from scripts.q2d.common import (
-    PATHS,
     FILE_STEM,
-    SEED,
-    METRIC,
-    TUNE_SAMPLES,
-    TUNE_EPOCHS,
-    FINAL_EPOCHS,
-    EVALUATION_BATCH_SIZE,
-    CPUS_PER_TRIAL,
-    GPUS_PER_TRIAL,
-    MAX_CONCURRENT_TRIALS,
     LATENCY_WARMUPS,
     LATENCY_REPEATS,
-    RELATIVE_L2_EPS,
     AMORTIZED_EVALUATION_COUNTS,
     REPRESENTATIVE_RESOLUTION_COUNT,
-    MESH_FILE_PATTERN,
     INPUT_CHANNELS,
     OUTPUT_CHANNELS,
     MeshFile,
     raw_dataset,
-    adapter_spatial_shape,
-    fit_normalizer,
-    normalizer_state,
-    normalizer_from_state,
     make_adapter,
     discover_mesh_files,
     find_superresolution_pair,
-    PROBLEM_ID,
-    experiment_spec,
     parse_args,
-    evaluate,
-    make_trainer as make_model_trainer,
+    run_model,
     relative_l2_per_field as _relative_l2_per_field,
     relative_l2_per_sample as _relative_l2_per_sample,
 )
@@ -420,9 +400,6 @@ def search_space():
 
 MODEL_ID = "fno"
 
-def make_trainer(config, context, normalizer, geometry, shape):
-    return make_model_trainer(model_from_config, config, context, normalizer, geometry, shape)
-
 def save_benchmarks(trainer, result, *, data_dir, normalizer, geometry, shape):
     from chem_operator.experiments import ArtifactStore, fingerprint_path
     output = result.context.paths.run_dir
@@ -455,17 +432,10 @@ def save_benchmarks(trainer, result, *, data_dir, normalizer, geometry, shape):
 
 def main():
     args = parse_args()
-    normalizer,geometry,shape = fit_normalizer(args.data_dir / f"{FILE_STEM}_train.h5")
-    def evaluate_run(trainer,data,context):
-        outcome = evaluate_fields(trainer,data,context,labels=tuple(c.label for c in OUTPUT_CHANNELS),
-            coordinate_names=("z","r"),cases=args.plot_cases,
-            extra_metrics=lambda t,d,c: evaluate(t.model,d,batch_size=EVALUATION_BATCH_SIZE,device=c.device))
-        return outcome
-    run_operator(args,PATHS,experiment_spec(args,MODEL_ID),
-        lambda split: make_adapter(args.data_dir / f"{FILE_STEM}_{split}.h5",normalizer,geometry),
-        lambda config,context: make_trainer(config,context,normalizer,geometry,shape), search_space(),evaluate_run,
-        selection_metric="data_loss",after_run=(lambda trainer,result: save_benchmarks(trainer,result,
-            data_dir=args.data_dir,normalizer=normalizer,geometry=geometry,shape=shape)) if args.benchmark else None)
+    run_model(
+        args, MODEL_ID, model_from_config, search_space(),
+        after_run=save_benchmarks if args.benchmark else None,
+    )
 
 if __name__ == "__main__":
     main()

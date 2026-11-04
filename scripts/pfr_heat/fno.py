@@ -180,12 +180,6 @@ def supervised_loss(prediction, batch):
     )
 
 
-def relative_channels(prediction: torch.Tensor, target: torch.Tensor):
-    error = torch.linalg.vector_norm((prediction - target).flatten(2), dim=2)
-    scale = torch.linalg.vector_norm(target.flatten(2), dim=2).clamp_min(1e-12)
-    return error / scale
-
-
 PHYSICS_WEIGHT_KEYS = ("lambda_f", "lambda_g", "lambda_s", "lambda_bc")
 
 

@@ -8,7 +8,6 @@ from typing import Any, Mapping
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-import numpy as np
 import torch
 from torch.utils.data import Subset
 
@@ -30,29 +29,6 @@ MODEL_ID = "pod_deeponet"
 POD_VARIANCE_THRESHOLD = 0.999
 
 
-def pod_state(pod: PODTransform) -> dict[str, Any]:
-    """Keep the fitted basis and mean in a weights-only checkpoint."""
-    return {
-        "mean": torch.as_tensor(np.array(pod.mean, copy=True)),
-        "basis": torch.as_tensor(np.array(pod.basis, copy=True)),
-        "explained_variance_ratio": torch.as_tensor(
-            np.array(pod.explained_variance_ratio, copy=True)
-        ),
-        "cumulative_explained_variance": pod.cumulative_explained_variance,
-        "output_shape": list(pod.output_shape),
-    }
-
-
-def pod_from_state(state: Mapping[str, Any]) -> PODTransform:
-    return PODTransform(
-        mean=state["mean"].cpu().numpy(),
-        basis=state["basis"].cpu().numpy(),
-        explained_variance_ratio=state["explained_variance_ratio"].cpu().numpy(),
-        cumulative_explained_variance=float(state["cumulative_explained_variance"]),
-        output_shape=tuple(int(value) for value in state["output_shape"]),
-    )
-
-
 class PODRolloutDeepXDE(RolloutDeepXDEGrid):
     """Cartesian POD-DeepONet on normalized radial profiles."""
 
@@ -72,11 +48,11 @@ class PODRolloutDeepXDETrainer(RolloutDeepXDETrainerBase):
         super().__init__(
             config, normalizer, n_radial, model_id=MODEL_ID,
             model_builder=lambda cfg, radial: PODRolloutDeepXDE(cfg, radial, self.pod),
-            pod_metadata=pod_state(pod),
+            pod_metadata=pod.state_dict(),
         )
 
     def _restore_model_metadata(self, metadata: Mapping[str, Any]) -> None:
-        self.pod = pod_from_state(metadata["pod"])
+        self.pod = PODTransform.from_state_dict(metadata["pod"])
 
     @classmethod
     def from_checkpoint(cls, path: str | Path, context):
@@ -85,7 +61,7 @@ class PODRolloutDeepXDETrainer(RolloutDeepXDETrainerBase):
         metadata = payload["metadata"]
         trainer = cls(
             payload["config"], normalizer_from_state_dict(metadata["normalizer"]),
-            int(metadata["n_radial"]), pod_from_state(metadata["pod"]),
+            int(metadata["n_radial"]), PODTransform.from_state_dict(metadata["pod"]),
         )
         trainer.load_checkpoint(path, context)
         return trainer

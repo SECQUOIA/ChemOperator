@@ -59,7 +59,11 @@ class History:
 
 @dataclass(slots=True)
 class StreamingRegressionMetrics:
-    """Accumulate shared physical-space metrics without retaining predictions."""
+    """Accumulate shared physical-space metrics without retaining predictions.
+
+    ``relative_l2`` is the pooled norm ratio across all observations, rather
+    than the mean per-case ratio returned by ``models.relative_l2_loss``.
+    """
 
     count: int = 0
     squared_error: float = 0.0

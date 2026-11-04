@@ -29,8 +29,6 @@ from scripts.pipe_flow_transient.common import (
     dataset_pde_name,
     make_adapter,
     fit_normalizer,
-    normalizer_state,
-    normalizer_from_state,
     adapter_radial_spacing,
     training_pde_name,
     PROBLEM_ID,

@@ -516,6 +516,17 @@ metrics, checkpoint, tuning trials, and bounded reconstructions. Run the
 corresponding `plot.py` with the two run paths afterward to generate loss and
 reconstruction figures.
 
+`chem_operator.models.relative_l2_loss` averages per-case norm ratios by
+default; `reduction="none"` returns the individual ratios, and `eps` controls
+the denominator floor. The `relative_l2` metric returned by
+`StreamingRegressionMetrics.compute()` instead pools the squared errors and
+reference values across all observations. These are
+different statistics and should be compared using the same reduction.
+
+POD checkpoints use `PODTransform.state_dict()` and
+`PODTransform.from_state_dict()`. The tensor-based state retains the existing
+checkpoint fields and supports `torch.load(..., weights_only=True)`.
+
 Review each script's data paths, run-mode flags, trajectory limits, and compute
 settings before launching it. The tuning scripts can be long-running and use a
 GPU when PyTorch reports one as available. Examples are grouped by physical
