@@ -1,4 +1,4 @@
-"""Plot the CSTR training-set CO histories on a logarithmic time axis."""
+"""Plot saved CSTR runs, with optional training-set CO diagnostics."""
 
 from __future__ import annotations
 
@@ -16,7 +16,6 @@ import numpy as np
 from chem_operator.example_paths import ExamplePaths
 from chem_operator.plotting import plot_deeponet_run_set, use_publication_style
 
-use_publication_style()
 PATHS = ExamplePaths.from_script(__file__)
 MECHANISM = "n-heptane-NUIG-2016.yaml"
 PLOT_CASES = 2
@@ -70,11 +69,8 @@ def plot_co_histories(dataset: Path = DATASET, output: Path = OUTPUT) -> Path:
 
 
 def main() -> None:
-    path = plot_co_histories()
-    print(f"Plot written to {path}")
-
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--run", type=Path, action="append", required=True,
+    parser.add_argument("--run", type=Path, action="append",
                         help="Canonical run directory; repeat to compare compatible models.")
     parser.add_argument(
         "--output-dir",
@@ -82,7 +78,25 @@ def main() -> None:
         default=PATHS.example / "results" / "deeponet_comparison",
     )
     parser.add_argument("--cases", type=int, default=PLOT_CASES)
+    parser.add_argument("--co-histories", action="store_true",
+                        help="Also plot raw training-set CO histories; may be used without --run.")
+    parser.add_argument("--dataset", type=Path, default=DATASET,
+                        help="Training archive for --co-histories.")
+    parser.add_argument("--co-output", type=Path, default=OUTPUT,
+                        help="Output image for --co-histories.")
+    parser.add_argument("--use-tex", action="store_true",
+                        help="Render text with an external LaTeX installation.")
     args = parser.parse_args()
+    if not args.run and not args.co_histories:
+        parser.error("Provide --run or --co-histories.")
+    if args.cases < 1:
+        parser.error("--cases must be positive.")
+    use_publication_style(use_tex=args.use_tex)
+    if args.co_histories:
+        path = plot_co_histories(args.dataset, args.co_output)
+        print(f"Plot written to {path}")
+    if not args.run:
+        return
     fuel_index = ct.Solution(MECHANISM).species_index("NC7H16")
     paths = plot_deeponet_run_set(
         args.run,

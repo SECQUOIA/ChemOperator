@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import csv
 from collections import defaultdict
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from fnmatch import fnmatchcase
 from pathlib import Path
@@ -33,8 +33,10 @@ MODEL_STYLES = {
 
 STYLE_PATH = Path(__file__).parent / "styles" / "publication.mplstyle"
 
-def use_publication_style() -> None:
+def use_publication_style(*, use_tex: bool = False) -> None:
+    """Apply the bundled style, optionally using an external LaTeX installation."""
     plt.style.use(STYLE_PATH)
+    plt.rcParams["text.usetex"] = use_tex
 
 @dataclass(frozen=True, slots=True)
 class HistoryPanel:
@@ -42,15 +44,19 @@ class HistoryPanel:
 
     Metric patterns may use glob wildcards, such as ``"*_loss"`` to match
     loss terms. Set ``splits`` to ``None`` to include every recorded split.
+    ``metrics_by_model`` selects equivalent quantities stored under different
+    metric names; it overrides ``metrics`` for the specified model IDs.
     """
 
     metrics: tuple[str, ...]
     title: str
     splits: tuple[str, ...] | None = None
     yscale: str | None = None
+    metrics_by_model: Mapping[str, tuple[str, ...]] | None = None
 
     def __post_init__(self) -> None:
-        if not self.metrics or any(not metric for metric in self.metrics):
+        patterns = (self.metrics, *(self.metrics_by_model or {}).values())
+        if any(not metrics or any(not metric for metric in metrics) for metrics in patterns):
             raise ValueError("HistoryPanel metrics cannot be empty.")
         if not self.title:
             raise ValueError("HistoryPanel title cannot be empty.")
@@ -413,8 +419,10 @@ def plot_deeponet_run_set(
     history = plot_experiment_histories(
         runs,
         output=output / "training_validation_loss.png",
-        metric="relative_l2",
-        split="val",
+        panels=(HistoryPanel(
+            ("relative_l2",), "Validation mean per-case relative L2", ("val",),
+            metrics_by_model={"fno": ("data_loss",)},
+        ),),
     )
     reconstruction = _plot_deeponet_run_reconstructions(
         runs,
@@ -458,7 +466,9 @@ def plot_experiment_histories(
     elif not panels:
         raise ValueError("At least one history panel is required.")
     if len(loaded) > 1 and any(
-        _matches_metric("objective", panel.metrics) for panel in panels
+        _matches_metric("objective", metrics)
+        for panel in panels
+        for metrics in (panel.metrics, *(panel.metrics_by_model or {}).values())
     ):
         raise ValueError(
             "Raw objectives are model-specific and cannot be overlaid directly."
@@ -476,10 +486,13 @@ def plot_experiment_histories(
         colors = plt.rcParams["axes.prop_cycle"].by_key().get("color", ["C0"])
         curve_colors: dict[tuple[int, str], str] = {}
         for run_index, run in enumerate(loaded):
+            metrics = (panel.metrics_by_model or {}).get(
+                str(run.manifest["model_id"]), panel.metrics
+            )
             events = [
                 event
                 for event in run.history
-                if _matches_metric(event.metric, panel.metrics)
+                if _matches_metric(event.metric, metrics)
                 and (
                     panel.splits is None
                     or event.split in panel.splits

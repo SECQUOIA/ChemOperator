@@ -128,6 +128,20 @@ python scripts/cstr/plot.py \
   --cases 2
 ```
 
+This comparison uses saved artifacts and mean per-case validation errors;
+the original training archive is not required. Raw CO histories are a separate
+opt-in diagnostic:
+
+```bash
+python scripts/cstr/plot.py --co-histories \
+  --dataset datasets/cstr/cstr_non_isothermal_train.h5 \
+  --co-output scripts/cstr/results/train_set_CO.png
+```
+
+The diagnostic may also be combined with `--run`. Text rendering uses
+Matplotlib by default; add `--use-tex` only when an external LaTeX installation
+is available.
+
 `common.py` is support code for dataset loading, normalization, experiment
 metadata, tuning resources, and the shared CLI; it is not an entry point.
 
@@ -293,7 +307,8 @@ Compare any number of saved runs by repeating `--run`:
 ```bash
 python scripts/pipe_flow_transient/plot.py \
   --run artifacts/runs/pipe_flow_transient/transient_fno/<run-id> \
-  --run artifacts/runs/pipe_flow_transient/transient_nemo_fno/<run-id> \
+  --run artifacts/runs/pipe_flow_transient/transient_nemo_fno_data/<run-id> \
+  --run artifacts/runs/pipe_flow_transient/transient_nemo_fno_physics/<run-id> \
   --output-dir scripts/pipe_flow_transient/results/comparison \
   --cases 2
 ```
@@ -347,14 +362,26 @@ normalizers, and experiment configuration.
 
 ## `scripts/q2d`
 
-Generate 100 quasi-two-dimensional catalytic membrane reactor cases:
+Generate 80 canonical quasi-two-dimensional catalytic membrane reactor cases,
+matched resolution-sweep test cases, and paired tolerance-sweep test cases:
 
 ```bash
 python scripts/q2d/generate_dataset.py
 ```
 
-This invokes the configured external/Docker solver, overwrites the base
-splits, and leaves the source-code resolution sweep disabled.
+This invokes the configured external/Docker solver and overwrites all three
+dataset suites. The six resolution meshes combine axial sizes 14, 16, 18
+with radial sizes 6, 8. Select an individual suite explicitly when needed:
+
+```bash
+python scripts/q2d/generate_dataset.py --suite base --n-cases 80
+python scripts/q2d/generate_dataset.py --suite resolution
+python scripts/q2d/generate_dataset.py --suite tolerance
+```
+
+`--n-cases` controls the canonical case count for `--suite all` (the default)
+and `--suite base`; the resolution and tolerance suites retain their own
+configured sample counts.
 
 Tune, train, and benchmark the axial/radial NeuralOperator FNO:
 

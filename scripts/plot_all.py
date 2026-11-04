@@ -22,7 +22,7 @@ def run_plot(name: str, script: str, *runs: Path | None, **options: str) -> None
         print(f"Skipping {name}: no runs were found.", file=sys.stderr)
         return
 
-    command = ["uv", "run", "python", str(ROOT / script)]
+    command = [sys.executable, str(ROOT / script)]
     for run in selected:
         command.extend(("--run", str(run)))
     for option, value in options.items():
@@ -71,7 +71,8 @@ def main() -> None:
         "transient pipe flow",
         "scripts/pipe_flow_transient/plot.py",
         latest_run("artifacts/runs/pipe_flow_transient/transient_fno"),
-        latest_run("artifacts/runs/pipe_flow_transient/transient_nemo_fno"),
+        latest_run("artifacts/runs/pipe_flow_transient/transient_nemo_fno_data"),
+        latest_run("artifacts/runs/pipe_flow_transient/transient_nemo_fno_physics"),
     )
     run_plot(
         "PFR heat",

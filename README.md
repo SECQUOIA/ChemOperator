@@ -479,7 +479,7 @@ canonical run directories; pipe-flow's physics-informed study uses Hydra.
 | [`scripts/pfr_heat/fno.py`](scripts/pfr_heat/fno.py) | Coupled PhysicsNeMo reactor/wall FNO workflow |
 | [`scripts/pfr_heat/deeponet_fno.py`](scripts/pfr_heat/deeponet_fno.py) | Coupled PhysicsNeMo-MLP reactor DeepONet and wall FNO workflow |
 | [`scripts/pipe_flow_transient/nemo_deeponet.py`](scripts/pipe_flow_transient/nemo_deeponet.py) | PhysicsNeMo DeepONet for one-step velocity prediction and recursive rollout |
-| [`scripts/q2d/generate_dataset.py`](scripts/q2d/generate_dataset.py) | Quasi-2D CMR dataset generation and disabled mesh-resolution sweep |
+| [`scripts/q2d/generate_dataset.py`](scripts/q2d/generate_dataset.py) | Quasi-2D CMR base datasets, mesh-resolution sweeps, and tolerance sweeps |
 | [`scripts/q2d/validate_solver.py`](scripts/q2d/validate_solver.py) | Bundled-reference and Docker-backed Q2D validation plots |
 | [`scripts/q2d/fno.py`](scripts/q2d/fno.py) | Quasi-2D FNO training, superresolution, and break-even analysis |
 | [`scripts/q2d/tfno.py`](scripts/q2d/tfno.py) | Quasi-2D tensorized FNO tuning, training, and evaluation |
@@ -515,6 +515,13 @@ versioned canonical run containing its manifest, best configuration, history,
 metrics, checkpoint, tuning trials, and bounded reconstructions. Run the
 corresponding `plot.py` with the two run paths afterward to generate loss and
 reconstruction figures.
+
+The CSTR plotter reads saved run artifacts by default. Add `--co-histories`
+to plot raw training-set CO histories, with optional `--dataset` and
+`--co-output` paths; this diagnostic can also run without `--run`. Publication
+plots use Matplotlib's built-in text rendering unless `--use-tex` is selected
+(which requires an external LaTeX installation). CSTR validation comparisons
+select FNO's `data_loss` and DeepONet's `relative_l2`, both mean per-case errors.
 
 `chem_operator.models.relative_l2_loss` averages per-case norm ratios by
 default; `reduction="none"` returns the individual ratios, and `eps` controls
@@ -572,15 +579,17 @@ simulator = CMRSim(
 )
 ```
 
-Generate the base Q2D dataset with the same simulator configuration used by
-the FNO experiment:
+Generate the canonical Q2D train/validation/test splits, matched resolution
+sweeps, and paired tolerance sweeps with the FNO simulator configuration:
 
 ```bash
 uv run python scripts/q2d/generate_dataset.py
 ```
 
-The mesh-resolution sweep in that script is retained behind an `if False`
-guard. The base generator and the sweep require the Docker image. Bundled
+Use `--suite base`, `--suite resolution`, or `--suite tolerance` to generate
+only that suite. `--n-cases` controls the canonical case count (default: 80).
+The resolution sweep uses the six meshes formed by axial sizes 14, 16, 18
+and radial sizes 6, 8. All generation suites require the Docker image. Bundled
 tutorial outputs can be checked without Docker; pass `--radial-grid` to run
 the Docker-backed validation cases instead:
 

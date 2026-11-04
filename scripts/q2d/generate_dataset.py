@@ -1,5 +1,6 @@
 """Generate canonical, resolution-sweep, and tolerance-sweep Q2D datasets."""
 
+import argparse
 from collections.abc import Mapping
 
 from chem_operator.datasets import SimulationDatasetGenerator
@@ -118,10 +119,29 @@ def generate_tolerance_datasets() -> None:
 
 def generate_all_datasets(n_cases: int = 80) -> None:
     """Generate the canonical, resolution-sweep, and tolerance datasets."""
-    # generate_multiresolution_datasets()
+    generate_dataset(n_cases=n_cases)
+    generate_multiresolution_datasets()
     generate_tolerance_datasets()
-    # generate_dataset(n_cases=n_cases)
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--suite", choices=("all", "base", "resolution", "tolerance"), default="all",
+                        help="Dataset suite to generate (default: all).")
+    parser.add_argument("--n-cases", type=int, default=80,
+                        help="Number of canonical cases for the all/base suites (default: 80).")
+    args = parser.parse_args()
+    if args.n_cases < 1:
+        parser.error("--n-cases must be positive.")
+    if args.suite == "all":
+        generate_all_datasets(n_cases=args.n_cases)
+    elif args.suite == "base":
+        generate_dataset(n_cases=args.n_cases)
+    elif args.suite == "resolution":
+        generate_multiresolution_datasets()
+    else:
+        generate_tolerance_datasets()
 
 
 if __name__ == "__main__":
-    generate_all_datasets()
+    main()

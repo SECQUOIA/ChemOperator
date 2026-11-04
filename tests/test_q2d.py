@@ -7,6 +7,7 @@ import json
 from pathlib import Path
 
 import numpy as np
+import pytest
 
 from chem_operator.reactors.q2d.dataset_generator import (
     CMRSim,
@@ -108,9 +109,11 @@ def test_dataset_script_defines_resolution_and_tolerance_sweeps() -> None:
 
     assert GENERATE_DATASET.RESOLUTIONS == (
         (14, 6),
-        (14, 10),
-        (14, 14),
-        (14, 20),
+        (14, 8),
+        (16, 6),
+        (16, 8),
+        (18, 6),
+        (18, 8),
     )
     spaces = GENERATE_DATASET.q2d_multiresolution_parameter_space
     assert set(spaces) == set(GENERATE_DATASET.RESOLUTIONS)
@@ -128,6 +131,27 @@ def test_dataset_script_defines_resolution_and_tolerance_sweeps() -> None:
         assert isinstance(space["rtol_ss"], Grid)
         assert tuple(space["rtol_ss"].values) == GENERATE_DATASET.STEADY_RTOLS
         assert space["refine"].value is False
+
+
+@pytest.mark.parametrize(("arguments", "expected"), [
+    (None, [("base", 7), "resolution", "tolerance"]),
+    ([], [("base", 80), "resolution", "tolerance"]),
+    (["--suite", "all", "--n-cases", "7"], [("base", 7), "resolution", "tolerance"]),
+    (["--suite", "base", "--n-cases", "7"], [("base", 7)]),
+    (["--suite", "resolution"], ["resolution"]),
+    (["--suite", "tolerance"], ["tolerance"]),
+])
+def test_generation_defaults_and_explicit_suites(monkeypatch, arguments, expected):
+    calls = []
+    monkeypatch.setattr(GENERATE_DATASET, "generate_dataset", lambda n_cases: calls.append(("base", n_cases)))
+    monkeypatch.setattr(GENERATE_DATASET, "generate_multiresolution_datasets", lambda: calls.append("resolution"))
+    monkeypatch.setattr(GENERATE_DATASET, "generate_tolerance_datasets", lambda: calls.append("tolerance"))
+    if arguments is None:
+        GENERATE_DATASET.generate_all_datasets(n_cases=7)
+    else:
+        monkeypatch.setattr("sys.argv", ["generate_dataset.py", *arguments])
+        GENERATE_DATASET.main()
+    assert calls == expected
 
 
 def test_q2d_tolerance_interpolation_uses_physical_coordinates() -> None:

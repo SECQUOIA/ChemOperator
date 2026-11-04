@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import importlib.util
+import json
 from pathlib import Path
 import subprocess
 import sys
@@ -36,6 +37,7 @@ def test_model_workflow_help_omits_removed_flags() -> None:
     (
         "scripts/pfr/plot.py",
         "scripts/q2d/plot.py",
+        "scripts/cstr/plot.py",
     ),
 )
 def test_plot_scripts_require_run_paths(script: str) -> None:
@@ -70,3 +72,33 @@ def test_plot_all_uses_repeatable_run_arguments(monkeypatch: pytest.MonkeyPatch)
 
     assert len(calls) == 1
     assert calls[0][-4:] == ["--run", "direct", "--run", "pod"]
+
+
+def test_plot_all_runs_child_with_current_python_without_uv(tmp_path, monkeypatch):
+    from scripts import plot_all
+
+    script = tmp_path / "child.py"
+    script.write_text(
+        "import json, sys\nfrom pathlib import Path\n"
+        "Path('child.json').write_text(json.dumps([sys.executable, sys.argv[1:]]))\n"
+    )
+    monkeypatch.setattr(plot_all, "ROOT", tmp_path)
+    monkeypatch.setenv("PATH", str(tmp_path))
+    plot_all.run_plot("child", "child.py", Path("saved-run"), cases="1")
+    interpreter, arguments = json.loads((tmp_path / "child.json").read_text())
+    assert interpreter == sys.executable
+    assert arguments == ["--run", "saved-run", "--cases", "1"]
+
+
+def test_plot_all_discovers_transient_physicsnemo_variants(tmp_path, monkeypatch):
+    from scripts import plot_all
+
+    models = ("transient_nemo_fno_data", "transient_nemo_fno_physics")
+    paths = [tmp_path / "artifacts/runs/pipe_flow_transient" / model / "run-1" for model in models]
+    for path in paths:
+        path.mkdir(parents=True)
+    monkeypatch.setattr(plot_all, "ROOT", tmp_path)
+    calls = {}
+    monkeypatch.setattr(plot_all, "run_plot", lambda name, script, *runs: calls.update({name: runs}))
+    plot_all.main()
+    assert tuple(run for run in calls["transient pipe flow"] if run is not None) == tuple(paths)
