@@ -17,6 +17,7 @@ dependencies = [
     "nvidia-physicsnemo>=2.1.1",
     "optuna>=4.9.0",
     "pandas>=3.0.3",
+    "pyqt6>=6.11.0",
     "ray[tune]>=2.56.0",
     "scikit-learn>=1.9.0",
     "scipy>=1.18.0",
@@ -38,12 +39,14 @@ where = ["src"]
 
 [tool.setuptools.package-data]
 "chem_operator.example_data" = ["*.yaml", "README.md"]
+chem_operator = ["styles/*.mplstyle"]
 
 [tool.uv]
 config-settings-package = { scikits-odes-daepack = { setup-args = "-Dc_std=c17" } }
 
 [dependency-groups]
 dev = [
+    "huggingface-hub>=1.24.0",
     "pylint>=4.0.6",
     "pytest>=9.1.1",
     "pytest-cov>=7.1.0",

@@ -188,19 +188,19 @@ model-specific transformations:
 parameter specs
       │
       ▼
-CaseSimulator.make_case(params) ──► CaseParameters
+CaseSimulator.make_case(params)       ──► CaseParameters
       │
       ▼
-CaseSimulator.run_case(case)   ──► SimulationRecord
+CaseSimulator.run_case(case)          ──► SimulationRecord
       │
       ▼
-SimulationDatasetGenerator     ──► <simulator>_{train,valid,test}.h5
+SimulationDatasetGenerator            ──► <simulator>_{train,valid,test}.h5
       │
       ▼
-ChemOperatorDataset            ──► raw dictionaries of PyTorch tensors
+ChemOperatorDataset / dataset adapter ──► raw dictionaries of PyTorch tensors
       │
       ▼
-DataProcessor / model adapter  ──► model-ready x, y, constants, coordinates
+DataProcessor / model adapter         ──► model-ready x, y, constants, coordinates
 ```
 
 ### Parameter sampling
@@ -478,9 +478,12 @@ canonical run directories; pipe-flow's physics-informed study uses Hydra.
 | [`scripts/pipe_flow_transient/transient_nemo_fno.py`](scripts/pipe_flow_transient/transient_nemo_fno.py) | PhysicsNeMo transient pipe-flow FNO workflow |
 | [`scripts/pfr_heat/fno.py`](scripts/pfr_heat/fno.py) | Coupled PhysicsNeMo reactor/wall FNO workflow |
 | [`scripts/pfr_heat/deeponet_fno.py`](scripts/pfr_heat/deeponet_fno.py) | Coupled PhysicsNeMo-MLP reactor DeepONet and wall FNO workflow |
-| [`scripts/q2d/generate_dataset.py`](scripts/q2d/generate_dataset.py) | Quasi-2D CMR dataset generation and disabled mesh-resolution sweep |
+| [`scripts/pipe_flow_transient/nemo_deeponet.py`](scripts/pipe_flow_transient/nemo_deeponet.py) | PhysicsNeMo DeepONet for one-step velocity prediction and recursive rollout |
+| [`scripts/q2d/generate_dataset.py`](scripts/q2d/generate_dataset.py) | Quasi-2D CMR base datasets, mesh-resolution sweeps, and tolerance sweeps |
 | [`scripts/q2d/validate_solver.py`](scripts/q2d/validate_solver.py) | Bundled-reference and Docker-backed Q2D validation plots |
 | [`scripts/q2d/fno.py`](scripts/q2d/fno.py) | Quasi-2D FNO training, superresolution, and break-even analysis |
+| [`scripts/q2d/tfno.py`](scripts/q2d/tfno.py) | Quasi-2D tensorized FNO tuning, training, and evaluation |
+| [`scripts/q2d/uno.py`](scripts/q2d/uno.py) | Quasi-2D U-shaped neural operator tuning, training, and evaluation |
 | [`scripts/diagnostics/processing.py`](scripts/diagnostics/processing.py) | Visual smoke test for preprocessing and inverse reconstruction |
 
 Examples:
@@ -489,19 +492,21 @@ Examples:
 uv run scripts/cstr/deeponet.py
 uv run scripts/cstr/pod_deeponet.py
 uv run scripts/cstr/plot.py \
-  --deeponet-run artifacts/runs/cstr_non_isothermal/deeponet/<run-id> \
-  --pod-deeponet-run artifacts/runs/cstr_non_isothermal/pod_deeponet/<run-id>
+  --run artifacts/runs/cstr_non_isothermal/deeponet/<run-id> \
+  --run artifacts/runs/cstr_non_isothermal/pod_deeponet/<run-id>
 uv run scripts/pipe_flow_transient/transient_fno.py
 uv run scripts/pipe_flow/physics_deeponet.py final.epochs=5
 uv run scripts/pfr_heat/deeponet_fno.py
 uv run scripts/q2d/validate_solver.py
+uv run scripts/q2d/tfno.py
+uv run scripts/q2d/uno.py
 ```
 
-The physics-informed FNO entry points accept
+The physics-informed model entry points accept
 `--variant {data,physics,both}` and default to `physics`. This applies to
-`pipe_flow_transient/transient_nemo_fno.py`, `pfr_heat/fno.py`, and
-`pfr_heat/deeponet_fno.py`. The `physics` variant combines supervised data
-loss with PDE and constraint losses; it is not physics-only training. The
+`pipe_flow_transient/transient_nemo_fno.py`, `pipe_flow_transient/nemo_deeponet.py`,
+`pfr_heat/fno.py`, and `pfr_heat/deeponet_fno.py`. The `physics` variant combines
+supervised data loss with PDE and constraint losses; it is not physics-only training. The
 `both` option runs independent data-only and physics-informed searches, writing
 artifacts under model IDs suffixed with `_data` and `_physics`, respectively.
 
@@ -510,6 +515,24 @@ versioned canonical run containing its manifest, best configuration, history,
 metrics, checkpoint, tuning trials, and bounded reconstructions. Run the
 corresponding `plot.py` with the two run paths afterward to generate loss and
 reconstruction figures.
+
+The CSTR plotter reads saved run artifacts by default. Add `--co-histories`
+to plot raw training-set CO histories, with optional `--dataset` and
+`--co-output` paths; this diagnostic can also run without `--run`. Publication
+plots use Matplotlib's built-in text rendering unless `--use-tex` is selected
+(which requires an external LaTeX installation). CSTR validation comparisons
+select FNO's `data_loss` and DeepONet's `relative_l2`, both mean per-case errors.
+
+`chem_operator.models.relative_l2_loss` averages per-case norm ratios by
+default; `reduction="none"` returns the individual ratios, and `eps` controls
+the denominator floor. The `relative_l2` metric returned by
+`StreamingRegressionMetrics.compute()` instead pools the squared errors and
+reference values across all observations. These are
+different statistics and should be compared using the same reduction.
+
+POD checkpoints use `PODTransform.state_dict()` and
+`PODTransform.from_state_dict()`. The tensor-based state retains the existing
+checkpoint fields and supports `torch.load(..., weights_only=True)`.
 
 Review each script's data paths, run-mode flags, trajectory limits, and compute
 settings before launching it. The tuning scripts can be long-running and use a
@@ -556,15 +579,17 @@ simulator = CMRSim(
 )
 ```
 
-Generate the base Q2D dataset with the same simulator configuration used by
-the FNO experiment:
+Generate the canonical Q2D train/validation/test splits, matched resolution
+sweeps, and paired tolerance sweeps with the FNO simulator configuration:
 
 ```bash
 uv run python scripts/q2d/generate_dataset.py
 ```
 
-The mesh-resolution sweep in that script is retained behind an `if False`
-guard. The base generator and the sweep require the Docker image. Bundled
+Use `--suite base`, `--suite resolution`, or `--suite tolerance` to generate
+only that suite. `--n-cases` controls the canonical case count (default: 80).
+The resolution sweep uses the six meshes formed by axial sizes 14, 16, 18
+and radial sizes 6, 8. All generation suites require the Docker image. Bundled
 tutorial outputs can be checked without Docker; pass `--radial-grid` to run
 the Docker-backed validation cases instead:
 

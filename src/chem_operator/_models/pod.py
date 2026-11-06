@@ -23,6 +23,32 @@ class PODTransform:
     cumulative_explained_variance: float
     output_shape: tuple[int, ...]
 
+    def state_dict(self) -> dict[str, Any]:
+        """Snapshot the fitted transform in the weights-only checkpoint format."""
+        return {
+            "mean": torch.tensor(self.mean),
+            "basis": torch.tensor(self.basis),
+            "explained_variance_ratio": torch.tensor(self.explained_variance_ratio),
+            "cumulative_explained_variance": self.cumulative_explained_variance,
+            "output_shape": list(self.output_shape),
+        }
+
+    @classmethod
+    def from_state_dict(cls, state: Mapping[str, Any]) -> PODTransform:
+        """Restore tensor or NumPy state from existing POD checkpoints."""
+        arrays = {}
+        for name in ("mean", "basis", "explained_variance_ratio"):
+            value = state[name]
+            arrays[name] = (
+                value.detach().cpu().numpy()
+                if isinstance(value, torch.Tensor) else np.asarray(value)
+            )
+        return cls(
+            **arrays,
+            cumulative_explained_variance=float(state["cumulative_explained_variance"]),
+            output_shape=tuple(int(value) for value in state["output_shape"]),
+        )
+
     @property
     def n_components(self) -> int:
         return self.basis.shape[1]

@@ -1,4 +1,4 @@
-"""Tests for dataset generation used by model-script ``--generate``."""
+"""Tests for explicit dataset-generation scripts."""
 
 from __future__ import annotations
 
