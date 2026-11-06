@@ -27,7 +27,7 @@ PATHS = ExamplePaths.from_script(__file__, dataset="pipe_flow_transient")
 FIELD_NAMES = ("velocity",)
 MODEL_CONSTANT_NAMES = (
     "radius",
-    # "length",
+    "length",
     "dynamic_viscosity",
     "pressure_drop",
 )

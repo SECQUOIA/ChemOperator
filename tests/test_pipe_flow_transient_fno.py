@@ -119,6 +119,48 @@ def test_fno_adapter_preserves_grid_and_round_trips(
         dataset.close()
 
 
+def test_fno_inputs_distinguish_pipe_lengths(fno_normalizer, tmp_path):
+    """Different velocity targets must retain their distinguishing input."""
+    simulator = TransientHagenPoiseuillePipeFlowSim()
+    records = []
+    for length in (1.0, 2.0):
+        params = {
+            "radius": 0.001,
+            "length": length,
+            "dynamic_viscosity": 0.001,
+            "pressure_drop": 60.0,
+            "density": 1000.0,
+            "n_time_points": 8,
+            "n_radial_points": 8,
+            "max_fourier_number": 2.0,
+        }
+        record = simulator.run_case(simulator.make_case(params))
+        record.metadata["params"] = params
+        records.append(record)
+    SimulationDatasetGenerator(simulator, tmp_path).save_split("train", records)
+
+    raw, adapter = make_adapter(tmp_path, "train", fno_normalizer, None)
+    try:
+        short, long = adapter[0], adapter[1]
+        torch.testing.assert_close(short["t"], long["t"])
+        torch.testing.assert_close(short["r"], long["r"])
+        short_velocity = adapter.denormalize_output(short["y"])
+        long_velocity = adapter.denormalize_output(long["y"])
+        assert short_velocity.abs().max() > 0
+        torch.testing.assert_close(short_velocity, 2 * long_velocity)
+        assert not torch.equal(short["x"], long["x"])
+        length_channel = CONSTANT_NAMES.index("length")
+        for sample, expected_length in ((short, 1.0), (long, 2.0)):
+            physical_length = fno_normalizer.denormalize(
+                sample["x"][length_channel], "length"
+            )
+            torch.testing.assert_close(
+                physical_length, torch.full_like(physical_length, expected_length)
+            )
+    finally:
+        raw.close()
+
+
 def test_fno_training_and_plots_smoke(fno_data_dir, fno_normalizer, tmp_path):
     """A canonical CPU run reloads its checkpoint and plots without its data."""
     from argparse import Namespace
