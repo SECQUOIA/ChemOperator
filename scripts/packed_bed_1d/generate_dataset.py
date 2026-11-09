@@ -7,12 +7,12 @@ from chem_operator.sampling import Constant, Uniform
 packed_bed_simulator = PackedBed1DSim(
     parameter_space={
         # sampled inlet and wall parameters, centered near the tutorial case
-        "T0": Uniform(660.0, 690.0),
-        "P0": Uniform(4.75e5, 5.25e5),
-        "inlet_velocity": Uniform(8e-4, 1.2e-3),
-        "wall_temperature": Uniform(705.0, 740.0),
+        "T0": Uniform(623.15, 723.15),
+        "P0": Uniform(4e5, 6e5),
+        "inlet_velocity": Uniform(5e-4, 3e-3),
         "inlet_nh3_mole_fraction": Uniform(0.975, 0.995),
         # constants from the tutorial
+        "wall_temperature": Constant(723.0),
         "diluent_species": Constant("AR"),
         "length": Constant(5e-2),
         "radius": Constant(5e-3),

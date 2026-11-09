@@ -290,9 +290,21 @@ def _with_output_channel(
 def relative_l2_loss(
     prediction: torch.Tensor,
     target: torch.Tensor,
+    *,
+    reduction: Literal["mean", "none"] = "mean",
+    eps: float | None = None,
 ) -> torch.Tensor:
-    """Mean trajectory-wise ``||prediction-target||₂ / ||target||₂``."""
+    """Per-case ``||prediction-target||₂ / ||target||₂``, averaged by default.
 
+    Each entry along the first axis is a case; remaining axes form its norm.
+    ``reduction="none"`` retains those individual errors. For channel-wise
+    errors, combine batch and channel axes before calling this function.
+    The denominator is clamped to ``eps`` (the target dtype's epsilon by
+    default). This differs from a pooled norm over the whole dataset.
+    """
+
+    if reduction not in {"mean", "none"}:
+        raise ValueError("relative L2 reduction must be 'mean' or 'none'.")
     if prediction.shape != target.shape:
         raise ValueError(
             "prediction and target must have identical shapes for relative L2."
@@ -300,10 +312,11 @@ def relative_l2_loss(
     error = (prediction - target).reshape(target.shape[0], -1)
     reference = target.reshape(target.shape[0], -1)
     denominator = torch.linalg.vector_norm(reference, dim=1)
-    denominator = denominator.clamp_min(torch.finfo(target.dtype).eps)
-    return (
-        torch.linalg.vector_norm(error, dim=1) / denominator
-    ).mean()
+    denominator = denominator.clamp_min(
+        torch.finfo(target.dtype).eps if eps is None else eps
+    )
+    errors = torch.linalg.vector_norm(error, dim=1) / denominator
+    return errors.mean() if reduction == "mean" else errors
 
 
 def _loader_loss(

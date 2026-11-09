@@ -190,10 +190,6 @@ def experiment_spec(model_id: str) -> ExperimentSpec:
 
 
 def validate_stages(stages: WorkflowStages) -> None:
-    if stages.generate:
-        raise ValueError("Use the PFR dataset-generation script first.")
-    if stages.plot:
-        raise ValueError("Use scripts/pfr/plot.py for saved runs.")
     if stages.train_config != "best":
         raise ValueError("DeepONet training currently requires --train-config best.")
 

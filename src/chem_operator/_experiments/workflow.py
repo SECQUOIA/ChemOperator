@@ -15,12 +15,10 @@ from .types import RunContext
 
 @dataclass(frozen=True, slots=True)
 class WorkflowStages:
-    """Explicit switches for generation, tuning, training, and plotting."""
+    """Explicit switches for tuning and training."""
 
-    generate: bool = False
     tune: bool = True
     train: bool = True
-    plot: bool = False
     train_config: str = "best"
     plot_cases: int = 2
 
@@ -33,10 +31,8 @@ class WorkflowStages:
     @classmethod
     def from_namespace(cls, namespace: argparse.Namespace) -> "WorkflowStages":
         return cls(
-            generate=bool(namespace.generate),
             tune=bool(namespace.tune),
             train=bool(namespace.train),
-            plot=bool(namespace.plot),
             train_config=str(namespace.train_config),
             plot_cases=int(namespace.plot_cases),
         )
@@ -44,11 +40,6 @@ class WorkflowStages:
 
 def add_workflow_arguments(parser: argparse.ArgumentParser) -> None:
     """Add the standard flags to a parser owned by a model script."""
-    parser.add_argument(
-        "--generate",
-        action=argparse.BooleanOptionalAction,
-        default=False,
-    )
     parser.add_argument(
         "--tune",
         action=argparse.BooleanOptionalAction,
@@ -58,12 +49,6 @@ def add_workflow_arguments(parser: argparse.ArgumentParser) -> None:
         "--train",
         action=argparse.BooleanOptionalAction,
         default=True,
-    )
-    parser.add_argument(
-        "--plot",
-        action=argparse.BooleanOptionalAction,
-        default=False,
-        help="Compatibility hook; prefer the separate artifact plotter.",
     )
     parser.add_argument("--train-config", default="best")
     parser.add_argument("--plot-cases", type=int, default=2)

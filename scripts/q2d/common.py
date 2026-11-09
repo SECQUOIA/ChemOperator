@@ -5,18 +5,28 @@ import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 import argparse
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
+from functools import partial
 import math
 import re
 from typing import Any
 import numpy as np
 import torch
+from neuralop.losses import LpLoss
+from torch.utils.data import DataLoader
 from chem_operator.datasets import ChemOperatorDataset
 from chem_operator.example_paths import ExamplePaths
-from chem_operator.models import FNOAdapter, FNOChannel, fit_fno_zscore_normalizer
+from chem_operator.models import FNOAdapter, FNOChannel, fit_fno_zscore_normalizer, relative_l2_loss
 from chem_operator.normalization import ZScoreNormalizer
-from chem_operator.experiments import parse_operator_args, operator_spec
+from chem_operator.experiments import (
+    FNOTrainer,
+    LossTerm,
+    evaluate_fields,
+    operator_spec,
+    parse_operator_args,
+    run_operator,
+)
 PATHS = ExamplePaths.from_script(__file__, dataset="q2d_cmr")
 
 FILE_STEM = "q2d_cmr"
@@ -206,39 +216,6 @@ def fit_normalizer(
     return normalizer, geometry, training_shape
 
 
-def normalizer_state(
-    normalizer: ZScoreNormalizer,
-) -> dict[str, dict[str, torch.Tensor]]:
-    """Return a CPU-only serializable normalizer state."""
-    return {
-        "mean": {
-            name: value.detach().cpu() for name, value in normalizer.means.items()
-        },
-        "std": {
-            name: value.detach().cpu() for name, value in normalizer.stds.items()
-        },
-        "mean_delta": {
-            name: value.detach().cpu()
-            for name, value in normalizer.delta_means.items()
-        },
-        "std_delta": {
-            name: value.detach().cpu()
-            for name, value in normalizer.delta_stds.items()
-        },
-    }
-
-
-def normalizer_from_state(
-    state: Mapping[str, Mapping[str, torch.Tensor]],
-) -> ZScoreNormalizer:
-    """Reconstruct the configured ChemOperator normalizer."""
-    return ZScoreNormalizer(
-        state,
-        variable_field_order=tuple(spec.label for spec in OUTPUT_CHANNELS),
-        constant_field_order=tuple(spec.label for spec in INPUT_CHANNELS),
-    )
-
-
 def make_adapter(
     path: Path,
     normalizer: ZScoreNormalizer,
@@ -378,10 +355,139 @@ def experiment_spec(args, model_id):
     return operator_spec(args, PATHS, PROBLEM_ID, model_id, FILE_STEM,
                          labels, {channel.label: channel.unit for channel in OUTPUT_CHANNELS}, ("z", "r"))
 
-def parse_args():
-    parser = argparse.ArgumentParser(description="Tune and train a Q2D FNO with canonical artifacts.")
-    parser.add_argument("--benchmark", action=argparse.BooleanOptionalAction, default=True,
-                        help="Evaluate available mesh-sweep files and save cost and superresolution artifacts.")
+def parse_args(*, model_name: str = "FNO", benchmark: bool = True):
+    parser = argparse.ArgumentParser(description=f"Tune and train a Q2D {model_name} with canonical artifacts.")
+    if benchmark:
+        parser.add_argument("--benchmark", action=argparse.BooleanOptionalAction, default=True,
+                            help="Evaluate available mesh-sweep files and save cost and superresolution artifacts.")
     return parse_operator_args(PATHS, epochs=FINAL_EPOCHS, tune_epochs=TUNE_EPOCHS, samples=TUNE_SAMPLES, parser=parser)
 
-__all__ = ['PATHS', 'FILE_STEM', 'SEED', 'METRIC', 'TUNE_SAMPLES', 'TUNE_EPOCHS', 'FINAL_EPOCHS', 'EVALUATION_BATCH_SIZE', 'CPUS_PER_TRIAL', 'GPUS_PER_TRIAL', 'MAX_CONCURRENT_TRIALS', 'LATENCY_WARMUPS', 'LATENCY_REPEATS', 'RELATIVE_L2_EPS', 'AMORTIZED_EVALUATION_COUNTS', 'REPRESENTATIVE_RESOLUTION_COUNT', 'MESH_FILE_PATTERN', 'INPUT_CHANNELS', 'OUTPUT_CHANNELS', 'MeshFile', 'raw_dataset', 'adapter_spatial_shape', 'fit_normalizer', 'normalizer_state', 'normalizer_from_state', 'make_adapter', 'discover_mesh_files', 'find_superresolution_pair', 'PROBLEM_ID', 'experiment_spec', 'parse_args']
+ModelFactory = Callable[[Mapping[str, Any], torch.device], torch.nn.Module]
+
+
+def relative_l2_per_sample(prediction: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+    return relative_l2_loss(prediction, target, reduction="none", eps=RELATIVE_L2_EPS)
+
+
+def relative_l2_per_field(prediction: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+    return relative_l2_loss(
+        prediction.flatten(0, 1), target.flatten(0, 1),
+        reduction="none", eps=RELATIVE_L2_EPS,
+    ).reshape(target.shape[:2])
+
+
+def evaluate(
+    model: torch.nn.Module,
+    dataset: FNOAdapter,
+    *,
+    batch_size: int,
+    device: torch.device,
+) -> dict[str, float]:
+    """Evaluate mean per-case normalized relative L2."""
+    loader = DataLoader(dataset, batch_size=batch_size, shuffle=False)
+    global_values: list[torch.Tensor] = []
+    field_values: list[torch.Tensor] = []
+    model.eval()
+    with torch.no_grad():
+        for batch in loader:
+            target = batch["y"].to(device)
+            prediction = model(batch["x"].to(device))
+            global_values.append(relative_l2_per_sample(prediction, target).cpu())
+            field_values.append(relative_l2_per_field(prediction, target).cpu())
+    global_tensor = torch.cat(global_values)
+    fields_tensor = torch.cat(field_values)
+    metrics = {"normalized_relative_l2": float(global_tensor.mean())}
+    for index, spec in enumerate(OUTPUT_CHANNELS):
+        metrics[f"normalized_relative_l2_{spec.label}"] = float(
+            fields_tensor[:, index].mean()
+        )
+    return metrics
+
+
+def make_trainer(
+    model_factory: ModelFactory,
+    config: Mapping[str, Any],
+    context: Any,
+    normalizer: ZScoreNormalizer,
+    geometry: tuple[float, float],
+    shape: tuple[int, int],
+) -> FNOTrainer:
+    """Use the same loss, physical metrics, and checkpoint contract for all models."""
+    loss = LpLoss(d=2, p=2, reduction="mean")
+
+    def physical(value: torch.Tensor) -> torch.Tensor:
+        return torch.stack(
+            [
+                normalizer.denormalize(value[:, index], channel.label)
+                for index, channel in enumerate(OUTPUT_CHANNELS)
+            ],
+            dim=1,
+        )
+
+    return FNOTrainer(
+        lambda cfg: model_factory(cfg, context.device),
+        config,
+        loss_terms=[LossTerm("data_loss", lambda prediction, target, batch: loss(prediction, target))],
+        selection_metric="data_loss",
+        metric_adapter=lambda prediction, target, batch: (
+            physical(prediction),
+            physical(target),
+        ),
+        checkpoint_metadata={
+            "normalizer": normalizer.state_dict(),
+            "geometry": list(geometry),
+            "training_shape": list(shape),
+            "input_channels": [channel.label for channel in INPUT_CHANNELS],
+            "output_channels": [channel.label for channel in OUTPUT_CHANNELS],
+        },
+    )
+
+
+def run_model(
+    args: Any, model_id: str, model_factory: ModelFactory, search_space: Mapping[str, Any],
+    *, after_run: Callable[..., None] | None = None,
+) -> None:
+    """Run Q2D tuning, final training, and test evaluation.
+
+    ``after_run`` receives the trainer and result, plus the prepared data
+    directory, normalizer, geometry, and training shape as keyword arguments.
+    """
+    normalizer, geometry, shape = fit_normalizer(args.data_dir / f"{FILE_STEM}_train.h5")
+
+    def evaluate_run(trainer: FNOTrainer, data: FNOAdapter, context: Any):
+        return evaluate_fields(
+            trainer,
+            data,
+            context,
+            labels=tuple(channel.label for channel in OUTPUT_CHANNELS),
+            coordinate_names=("z", "r"),
+            cases=args.plot_cases,
+            extra_metrics=lambda trained, dataset, run_context: evaluate(
+                trained.model,
+                dataset,
+                batch_size=EVALUATION_BATCH_SIZE,
+                device=run_context.device,
+            ),
+        )
+
+    run_operator(
+        args,
+        PATHS,
+        experiment_spec(args, model_id),
+        lambda split: make_adapter(
+            args.data_dir / f"{FILE_STEM}_{split}.h5", normalizer, geometry
+        ),
+        lambda config, context: make_trainer(
+            model_factory, config, context, normalizer, geometry, shape
+        ),
+        search_space,
+        evaluate_run,
+        selection_metric="data_loss",
+        after_run=partial(
+            after_run, data_dir=args.data_dir, normalizer=normalizer,
+            geometry=geometry, shape=shape,
+        ) if after_run is not None else None,
+    )
+
+
+__all__ = ['PATHS', 'FILE_STEM', 'SEED', 'METRIC', 'TUNE_SAMPLES', 'TUNE_EPOCHS', 'FINAL_EPOCHS', 'EVALUATION_BATCH_SIZE', 'CPUS_PER_TRIAL', 'GPUS_PER_TRIAL', 'MAX_CONCURRENT_TRIALS', 'LATENCY_WARMUPS', 'LATENCY_REPEATS', 'RELATIVE_L2_EPS', 'AMORTIZED_EVALUATION_COUNTS', 'REPRESENTATIVE_RESOLUTION_COUNT', 'MESH_FILE_PATTERN', 'INPUT_CHANNELS', 'OUTPUT_CHANNELS', 'MeshFile', 'raw_dataset', 'adapter_spatial_shape', 'fit_normalizer', 'make_adapter', 'discover_mesh_files', 'find_superresolution_pair', 'PROBLEM_ID', 'experiment_spec', 'parse_args', 'ModelFactory', 'relative_l2_per_sample', 'relative_l2_per_field', 'evaluate', 'make_trainer', 'run_model']

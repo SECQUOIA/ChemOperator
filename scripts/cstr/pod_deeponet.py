@@ -39,7 +39,7 @@ from chem_operator.normalization import ZScoreNormalizer
 
 
 MODEL_ID = "pod_deeponet"
-POD_VARIANCE_THRESHOLD = 0.9995
+POD_VARIANCE_THRESHOLD = 0.999
 
 
 def search_space(pod_components: int) -> dict[str, Any]:
