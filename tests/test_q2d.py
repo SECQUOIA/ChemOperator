@@ -147,7 +147,7 @@ def test_q2d_tolerance_interpolation_uses_physical_coordinates() -> None:
     np.testing.assert_allclose(_relative_field_errors(prediction, expected), [0.0])
 
 
-def test_q2d_canonical_training_benchmark_and_plotting(tmp_path, monkeypatch):
+def test_q2d_canonical_training_benchmark_and_plotting(tmp_path, monkeypatch, capsys):
     """A small synthetic grid verifies the whole FNO artifact and mesh contract."""
     from argparse import Namespace
     import torch
@@ -193,6 +193,14 @@ def test_q2d_canonical_training_benchmark_and_plotting(tmp_path, monkeypatch):
     # Plotting must continue working when datasets are inaccessible.
     (tmp_path / "data").rename(tmp_path / "hidden-data")
     monkeypatch.setattr("sys.argv",["plot.py","--run",str(context.paths.run_dir),"--output-dir",str(tmp_path / "plots")])
+    capsys.readouterr()
     plot.main()
-    assert (tmp_path / "plots" / "fine_superresolution.png").is_file()
-    assert (tmp_path / "plots" / "break_even_speedup_map.png").is_file()
+    lines = capsys.readouterr().out.splitlines()
+    assert lines.count("Plots written to:") == 1
+    reported = [Path(line) for line in lines[lines.index("Plots written to:") + 1:]]
+    generated = set((tmp_path / "plots").rglob("*.png"))
+    assert len(reported) == len(generated)
+    assert set(reported) == generated
+    run_plots = tmp_path / "plots" / "fno" / context.paths.run_dir.name
+    assert (run_plots / "fine_superresolution.png").is_file()
+    assert (run_plots / "break_even_speedup_map.png").is_file()

@@ -34,7 +34,12 @@ def test_model_workflow_help_omits_removed_flags() -> None:
 @pytest.mark.parametrize(
     "script",
     (
+        "scripts/cstr/plot.py",
+        "scripts/packed_bed_1d/plot.py",
         "scripts/pfr/plot.py",
+        "scripts/pfr_heat/plot.py",
+        "scripts/pipe_flow/plot.py",
+        "scripts/pipe_flow_transient/plot.py",
         "scripts/q2d/plot.py",
     ),
 )
@@ -46,6 +51,8 @@ def test_plot_scripts_require_run_paths(script: str) -> None:
     )
     assert help_result.returncode == 0, help_result.stderr
     assert "--run RUN" in help_result.stdout
+    assert "--recent" in help_result.stdout
+    assert "--runs-root RUNS_ROOT" in help_result.stdout
     assert "--deeponet-run" not in help_result.stdout
 
     missing_result = subprocess.run(

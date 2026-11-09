@@ -10,8 +10,12 @@ os.environ.setdefault("MPLBACKEND", "Agg")
 os.environ.setdefault("MPLCONFIGDIR", "/tmp/matplotlib")
 
 from chem_operator.example_paths import ExamplePaths
-from chem_operator.plotting import plot_deeponet_run_set
+from chem_operator.plotting import (
+    add_plot_run_arguments, plot_selected_runs, print_plot_paths,
+    select_plot_runs, use_publication_style,
+)
 
+use_publication_style()
 
 PATHS = ExamplePaths.from_script(__file__)
 PLOT_CASES = 2
@@ -19,8 +23,7 @@ PLOT_CASES = 2
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--run", type=Path, action="append", required=True,
-                        help="Canonical run directory; repeat to compare compatible models.")
+    add_plot_run_arguments(parser, root=PATHS.root)
     parser.add_argument(
         "--output-dir",
         type=Path,
@@ -28,14 +31,9 @@ def main() -> None:
     )
     parser.add_argument("--cases", type=int, default=PLOT_CASES)
     args = parser.parse_args()
-    paths = plot_deeponet_run_set(
-        args.run,
-        selected_labels=("T", "velocity", "X[0]", "Z[0]"),
-        coordinate_label="Axial position z [m]",
-        output_dir=args.output_dir,
-        cases=args.cases,
-    )
-    print("Plots written to " + ", ".join(str(path) for path in paths))
+    runs = select_plot_runs(args, parser, problem_id="packed_bed_1d")
+    paths = plot_selected_runs(runs, args.output_dir, cases=args.cases)
+    print_plot_paths(paths)
 
 
 if __name__ == "__main__":

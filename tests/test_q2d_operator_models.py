@@ -121,6 +121,6 @@ def test_q2d_operator_runs_compare_and_reload(tmp_path, monkeypatch):
          "--output-dir", str(tmp_path / "plots")],
     )
     plot.main()
-    assert (tmp_path / "plots" / "comparison.png").is_file()
+    assert (tmp_path / "plots" / "comparisons" / "group_1" / "validation_history.png").is_file()
     for module, _ in CONFIGS:
         assert (tmp_path / "plots" / module.MODEL_ID / "smoke" / "case_00.png").is_file()
