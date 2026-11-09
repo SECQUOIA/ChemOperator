@@ -141,20 +141,23 @@ corresponding splits:
 python scripts/pfr/generate_dataset.py
 ```
 
-Tune and train the direct or POD-compressed chain-of-reactors model:
+Tune and train the direct DeepONet, POD-DeepONet, or supervised FNO on the
+chain-of-reactors dataset:
 
 ```bash
 python scripts/pfr/deeponet.py
 python scripts/pfr/pod_deeponet.py
+python scripts/pfr/fno.py
 ```
 
-Both predict temperature, pressure, composition, and velocity along `z`.
+All three predict temperature, pressure, composition, and velocity along `z`.
 Compare their saved runs with:
 
 ```bash
 python scripts/pfr/plot.py \
   --run artifacts/runs/pfr_chain/deeponet/<run-id> \
   --run artifacts/runs/pfr_chain/pod_deeponet/<run-id> \
+  --run artifacts/runs/pfr_chain/fno/<run-id> \
   --output-dir scripts/pfr/results/deeponet_comparison \
   --cases 2
 ```
@@ -170,11 +173,12 @@ existing splits:
 python scripts/packed_bed_1d/generate_dataset.py
 ```
 
-Tune and train the direct or POD-compressed DeepONet:
+Tune and train the direct DeepONet, POD-compressed DeepONet, or supervised FNO:
 
 ```bash
 python scripts/packed_bed_1d/deeponet.py
 python scripts/packed_bed_1d/pod_deeponet.py
+python scripts/packed_bed_1d/fno.py
 ```
 
 Compare saved runs:
@@ -183,11 +187,16 @@ Compare saved runs:
 python scripts/packed_bed_1d/plot.py \
   --run artifacts/runs/packed_bed_1d/deeponet/<run-id> \
   --run artifacts/runs/packed_bed_1d/pod_deeponet/<run-id> \
+  --run artifacts/runs/packed_bed_1d/fno/<run-id> \
   --output-dir scripts/packed_bed_1d/results/deeponet_comparison \
   --cases 2
 ```
 
 `common.py` contains the shared packed-bed data and experiment configuration.
+The FNO resamples every profile to 128 fixed physical positions from `0` to
+`0.05 m`. The DeepONet adapters instead resample to 128 relative positions
+through each case's recorded endpoint, which may extend slightly beyond
+`0.05 m` because the solver overshoots the nominal bed length.
 
 ## `scripts/pipe_flow`
 
@@ -372,6 +381,42 @@ For example, train without the post-training benchmark:
 
 ```bash
 python scripts/q2d/fno.py --no-benchmark
+```
+
+Tune and train fixed-mesh direct and POD-DeepONets on the same Q2D channels:
+
+```bash
+python scripts/q2d/deeponet.py
+python scripts/q2d/pod_deeponet.py
+```
+
+Both use `T0` and `SCCM` to predict methane, hydrogen, and surface carbon fields.
+They accept the common run, tuning, and training options, including `--data-dir`,
+`--epochs`, `--tune-epochs`, `--samples`, `--max-cases`, and `--plot-cases`.
+They require the same geometry and coordinate grid across selected cases and do
+not expose `--benchmark`. POD is fitted only on selected training cases, requires
+at least two cases, and retains 99.9% of normalized output variance.
+
+Train directly from a JSON configuration, or reuse a run's saved best configuration:
+
+```bash
+python scripts/q2d/deeponet.py --no-tune --train-config config.json --epochs 100
+python scripts/q2d/pod_deeponet.py --run-id q2d_pod_01 --no-train
+python scripts/q2d/pod_deeponet.py --run-id q2d_pod_01 --no-tune
+```
+
+The JSON configuration uses `width`, `latent_width`, `branch_hidden_layers`,
+`trunk_hidden_layers`, `activation`, `learning_rate`, `weight_decay`, and
+`batch_size`. For POD, the fitted basis determines `latent_width` and disables the
+learned trunk. Epochs and seed follow the Q2D CLI and shared defaults.
+
+Compare their saved fields and metrics with another Q2D model:
+
+```bash
+python scripts/q2d/plot.py \
+  --run artifacts/runs/q2d_cmr/deeponet/<run-id> \
+  --run artifacts/runs/q2d_cmr/pod_deeponet/<run-id> \
+  --run artifacts/runs/q2d_cmr/fno/<run-id>
 ```
 
 Plot a saved run and, when present, its benchmark artifacts:

@@ -484,6 +484,8 @@ canonical run directories; pipe-flow's physics-informed study uses Hydra.
 | [`scripts/q2d/fno.py`](scripts/q2d/fno.py) | Quasi-2D FNO training, superresolution, and break-even analysis |
 | [`scripts/q2d/tfno.py`](scripts/q2d/tfno.py) | Quasi-2D tensorized FNO tuning, training, and evaluation |
 | [`scripts/q2d/uno.py`](scripts/q2d/uno.py) | Quasi-2D U-shaped neural operator tuning, training, and evaluation |
+| [`scripts/q2d/deeponet.py`](scripts/q2d/deeponet.py) | Fixed-mesh Q2D Cartesian DeepONet tuning, training, and evaluation |
+| [`scripts/q2d/pod_deeponet.py`](scripts/q2d/pod_deeponet.py) | Fixed-mesh Q2D POD-DeepONet with a training-only joint field basis |
 | [`scripts/diagnostics/processing.py`](scripts/diagnostics/processing.py) | Visual smoke test for preprocessing and inverse reconstruction |
 
 Examples:
