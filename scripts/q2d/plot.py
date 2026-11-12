@@ -16,8 +16,10 @@ from scipy.interpolate import RegularGridInterpolator
 from chem_operator.example_paths import ExamplePaths
 from chem_operator.plotting import (
     add_plot_run_arguments, plot_operator_fields, plot_selected_runs,
-    print_plot_paths, select_plot_runs,
+    print_plot_paths, select_plot_runs, use_publication_style
 )
+
+use_publication_style()
 PATHS = ExamplePaths.from_script(__file__, dataset="q2d_cmr")
 PROBLEM_ID = "q2d_cmr"
 SLIDE_DPI = 220

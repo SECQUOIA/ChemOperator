@@ -5,7 +5,9 @@ import sys
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from chem_operator._experiments.comparison import load_run, read_reconstructions
 from chem_operator.example_paths import ExamplePaths
-from chem_operator.plotting import add_plot_run_arguments, select_plot_runs, plot_selected_runs, print_plot_paths
+from chem_operator.plotting import add_plot_run_arguments, select_plot_runs, plot_selected_runs, print_plot_paths, use_publication_style
+
+use_publication_style()
 
 PATHS = ExamplePaths.from_script(__file__)
 PROBLEM_ID = "pfr_heat"
