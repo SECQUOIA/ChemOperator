@@ -21,7 +21,7 @@ from chem_operator.example_paths import ExamplePaths
 from chem_operator.models import FNOAdapter, FNOChannel, fit_fno_zscore_normalizer, fit_zscore_normalizer
 from chem_operator.normalization import ZScoreNormalizer, normalizer_from_state_dict
 from chem_operator.reactors.pipe_flow_transient.dataset_generator import TransientHagenPoiseuille
-from chem_operator.experiments import CompositeLossTrainer, EvaluationOutcome, LossTerm, StreamingRegressionMetrics, parse_operator_args, operator_spec, run_operator
+from chem_operator.experiments import OperatorTrainer, EvaluationOutcome, LossTerm, StreamingRegressionMetrics, parse_operator_args, operator_spec, run_operator
 PATHS = ExamplePaths.from_script(__file__, dataset="pipe_flow_transient")
 
 FIELD_NAMES = ("velocity",)
@@ -415,7 +415,7 @@ def rollout_architecture(config: Mapping[str, Any]) -> DeepONetTrainingConfig:
     )
 
 
-class RolloutDeepXDETrainerBase(CompositeLossTrainer):
+class RolloutDeepXDETrainerBase(OperatorTrainer):
     """Shared rollout losses, metrics, and checkpoint metadata."""
 
     def __init__(self, config: Mapping[str, Any], normalizer: ZScoreNormalizer,

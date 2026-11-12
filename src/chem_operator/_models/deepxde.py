@@ -11,6 +11,7 @@ from torch.utils.data import Dataset
 
 from chem_operator.dataset_processing import DataProcessor
 from .arrays import OperatorArrays, ReferenceSample, _Trajectory
+from .deepxde_backend import import_deepxde
 from .deepxde_geometry import ArrayTransform, DeepXDEFormat
 
 
@@ -603,7 +604,7 @@ class DeepONetAdapter(Dataset):
 
         if validation.format != self.format:
             raise ValueError("Training and validation adapters must share a format.")
-        import deepxde as dde
+        dde = import_deepxde()
 
         train = self.arrays
         valid = validation.arrays

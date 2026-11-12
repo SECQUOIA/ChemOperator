@@ -476,7 +476,7 @@ def _concatenate_batches(values: Sequence[Any]) -> Any:
     raise TypeError(f"Cannot concatenate prediction type {type(first).__name__}.")
 
 
-class FNOTrainer:
+class OperatorTrainer:
     """Model-factory-driven operator trainer with optional composite losses.
 
     ``forward_adapter`` can compute model-dependent residuals once per batch
@@ -512,7 +512,7 @@ class FNOTrainer:
         self.config = dict(config)
         self.loss_terms = tuple(loss_terms or (LossTerm("data_loss", mse_loss_term),))
         if not self.loss_terms:
-            raise ValueError("FNOTrainer requires at least one loss term.")
+            raise ValueError("OperatorTrainer requires at least one loss term.")
         if early_stopping_patience is not None and early_stopping_patience < 1:
             raise ValueError("early_stopping_patience must be positive.")
         if num_workers < 0:
@@ -797,11 +797,6 @@ class FNOTrainer:
         model = _move_operator_model(self.model_factory(payload["config"]), device, dtype)
         model.load_state_dict(payload["state_dict"], strict=True)
         return model
-
-
-class CompositeLossTrainer(FNOTrainer):
-    """Descriptive alias for an FNO trainer configured with named loss terms."""
-
 
 def accepts_context(factory: Callable[..., Any]) -> bool:
     """Return whether a trainer factory explicitly accepts a run context."""

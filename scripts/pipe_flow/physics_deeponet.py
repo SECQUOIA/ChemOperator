@@ -1,24 +1,50 @@
-"""Model definition, scientific losses, and canonical experiment entry point."""
+"""Tune and train data-only or physics-informed PhysicsNeMo pipe-flow DeepONets."""
 
 from __future__ import annotations
-import sys
+
+import argparse
+from collections.abc import Mapping
 from pathlib import Path
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+import sys
 import time
-from typing import Any, Mapping
-from omegaconf import OmegaConf
-from ray import tune
+from typing import Any
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+
+import numpy as np
 import torch
-from torch import nn
-from torch.utils.data import DataLoader
 from physicsnemo.models.mlp.fully_connected import FullyConnected
 from physicsnemo.sym.eq.phy_informer import PhysicsInformer
+from ray import tune
+from torch import nn
+from torch.utils.data import DataLoader
+
+from chem_operator.experiments import (
+    ArtifactStore,
+    EvaluationOutcome,
+    LossTerm,
+    OperatorTrainer,
+    StreamingRegressionMetrics,
+    parse_operator_args,
+    run_operator,
+)
 from chem_operator.reactors.pipe_flow.dataset_generator import HagenPoiseuille, hagen_poiseuille_velocity
-from chem_operator.experiments import CompositeLossTrainer, LossTerm, EvaluationOutcome, StreamingRegressionMetrics
-from chem_operator.experiments import parse_operator_args, run_operator
-import argparse
-import numpy as np
-from scripts.pipe_flow.common import PATHS, BRANCH_NAMES, Normalization, load_physics_split, fit_physics_normalization, PhysicsPipeDataset, physics_experiment_spec
+from scripts.pipe_flow.common import (
+    BRANCH_NAMES,
+    PATHS,
+    Normalization,
+    PhysicsPipeDataset,
+    fit_physics_normalization,
+    load_physics_split,
+    physics_experiment_spec,
+)
+
+
+MODEL_IDS = {"data": "physics_deeponet_data", "physics": "physics_deeponet_physics"}
+SEED = 42
+PHYSICS_WEIGHT_RANGE = (1.0e-4, 1.0)
+
+
 class DeepONet(nn.Module):
     """PhysicsNeMo branch/trunk MLPs with a scalar DeepONet product."""
 
@@ -80,6 +106,19 @@ def model_from_config(config: Mapping[str, Any], device: torch.device) -> DeepON
         latent_width=int(config["latent_width"]),
         activation=str(config["activation"]),
     ).to(device)
+
+
+def search_space() -> dict[str, Any]:
+    return {
+        "width": tune.choice([64, 128]),
+        "depth": tune.choice([2, 3]),
+        "latent_width": tune.choice([16, 32]),
+        "activation": tune.choice(["silu", "gelu", "tanh"]),
+        "learning_rate": tune.loguniform(1.0e-4, 3.0e-3),
+        "weight_decay": tune.loguniform(1.0e-8, 1.0e-4),
+        "batch_size": tune.choice([64, 128]),
+        "seed": SEED,
+    }
 
 
 def physics_mse(
@@ -166,7 +205,7 @@ def make_trainer(config, context, statistics):
         return prediction
     def physical(value):
         return value * statistics.velocity_std.to(value.device) + statistics.velocity_mean.to(value.device)
-    return CompositeLossTrainer(lambda cfg: model_from_config(cfg,context.device),config,
+    return OperatorTrainer(lambda cfg: model_from_config(cfg,context.device),config,
         batch_adapter=adapt,forward_adapter=forward,validation_requires_grad=True,
         loss_terms=[LossTerm("data_loss",lambda p,t,b: torch.nn.functional.mse_loss(p,t)),
                     LossTerm("physics_loss",lambda p,t,b: b["physics_loss"],float(config.get("physics_weight",0)))],
@@ -196,40 +235,48 @@ def evaluate_run(trainer,data,context,statistics,cases=3):
         {**{k: np.asarray(v) for k,v in stored.items()},"case_ids": np.arange(len(stored["reference"])),"labels": np.asarray(["velocity"])},elapsed)
 
 
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--config",type=Path,default=Path(__file__).with_suffix(".yaml"))
-    parser.add_argument("--variant",choices=("both","data","physics"),default="both")
-    parser.add_argument("--physics-samples", type=int, help="Physics-weight trials; defaults to the YAML budget for --variant both.")
-    args = parse_operator_args(PATHS,epochs=40,tune_epochs=20,samples=8,parser=parser)
-    if args.physics_samples is not None and args.physics_samples < 1:
+    parser.add_argument("--variant", choices=("data", "physics", "both"), default="both")
+    parser.add_argument("--physics-samples", type=int, default=5)
+    args = parse_operator_args(PATHS, epochs=40, tune_epochs=20, samples=8, parser=parser)
+    if args.physics_samples < 1:
         parser.error("--physics-samples must be positive.")
-    cfg = OmegaConf.load(args.config)
+
     verify_exact_residual()
-    statistics = fit_physics_normalization(load_physics_split(args.data_dir,"train",args.max_cases))
-    def dataset_factory(split):
-        data = PhysicsPipeDataset(load_physics_split(args.data_dir,split,args.max_cases).normalized(statistics))
-        return data,data
-    base_space = {"width": tune.choice(list(cfg.search.width)), "depth": tune.choice(list(cfg.search.depth)),
-        "latent_width": tune.choice(list(cfg.search.latent_width)), "activation": tune.choice(list(cfg.search.activation)),
-        "learning_rate": tune.loguniform(*map(float,cfg.search.learning_rate)),
-        "weight_decay": tune.loguniform(*map(float,cfg.search.weight_decay)), "batch_size": tune.choice(list(cfg.search.batch_size))}
-    from chem_operator.experiments import ArtifactStore
-    base_context = None
-    for variant in (("data","physics") if args.variant == "both" else (args.variant,)):
-        model_id = "physics_deeponet_data" if variant == "data" else "physics_deeponet"
-        space = dict(base_space, physics_weight=0.0)
+    statistics = fit_physics_normalization(load_physics_split(args.data_dir, "train", args.max_cases))
+
+    def dataset_factory(split: str):
+        data = PhysicsPipeDataset(
+            load_physics_split(args.data_dir, split, args.max_cases).normalized(statistics)
+        )
+        return data, data
+
+    data_context = None
+    variants = ("data", "physics") if args.variant == "both" else (args.variant,)
+    for variant in variants:
+        model_id = MODEL_IDS[variant]
+        space = dict(search_space(), physics_weight=0.0)
         if variant == "physics":
-            if base_context is not None:
-                space = ArtifactStore(base_context).read_best_config()
-            space["physics_weight"] = tune.loguniform(float(cfg.physics.min_weight),float(cfg.physics.max_weight))
+            if data_context is not None:
+                space = ArtifactStore(data_context).read_best_config()
+            space["physics_weight"] = tune.loguniform(*PHYSICS_WEIGHT_RANGE)
+
         variant_args = argparse.Namespace(**vars(args))
-        if variant == "physics":
-            variant_args.samples = args.physics_samples or (int(cfg.physics.num_samples) if args.variant == "both" else args.samples)
-        context = run_operator(variant_args,PATHS,physics_experiment_spec(variant_args,model_id),dataset_factory,
-            lambda config,context: make_trainer(dict(config, physics_weight=0.0) if variant == "data" else config,context,statistics), space,
-            lambda trainer,data,context: evaluate_run(trainer,data,context,statistics,args.plot_cases),seed=int(cfg.seed))
-        if variant == "data": base_context = context
+        if variant == "physics" and args.variant == "both":
+            variant_args.samples = args.physics_samples
+        context = run_operator(
+            variant_args, PATHS, physics_experiment_spec(variant_args, model_id), dataset_factory,
+            lambda config, run_context, selected=variant: make_trainer(
+                dict(config, physics_weight=0.0) if selected == "data" else config, run_context, statistics
+            ),
+            space,
+            lambda trainer, data, run_context: evaluate_run(trainer, data, run_context, statistics, args.plot_cases),
+            seed=SEED,
+        )
+        if variant == "data":
+            data_context = context
+
 
 if __name__ == "__main__":
     main()

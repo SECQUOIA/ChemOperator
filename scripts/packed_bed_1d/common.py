@@ -1,4 +1,4 @@
-"""Shared packed-bed dataset and DeepONet experiment configuration."""
+"""Shared packed-bed dataset and operator experiment configuration."""
 
 from __future__ import annotations
 
@@ -73,7 +73,7 @@ UNITS = {
 }
 
 COORDINATE_STRIDE = 1
-RESAMPLE_POINTS = 128
+RESAMPLE_POINTS = 512
 SEED = 7
 RECONSTRUCTION_CASES = 2
 MAX_TRAJECTORIES: int | None = None

@@ -186,10 +186,10 @@ def test_physics_deeponet_canonical_run(tmp_path):
     data = PhysicsPipeDataset(load_physics_split(tmp_path / "data","train",None).normalized(statistics))
     config = dict(width=4,depth=1,latent_width=4,activation="tanh",learning_rate=1e-3,
                   weight_decay=0.,batch_size=2,epochs=1,physics_weight=1e-4)
-    context = RunContext.create(tmp_path / "runs",problem="pipe_flow",model="physics_deeponet",run_id="smoke",seed=42)
+    context = RunContext.create(tmp_path / "runs",problem="pipe_flow",model="physics_deeponet_physics",run_id="smoke",seed=42)
     args = Namespace(data_dir=tmp_path / "data",samples=1,tune_epochs=1,plot_cases=2,max_cases=None)
     trainer = model_script.make_trainer(config,context,statistics)
-    result = ExperimentRunner(context,physics_experiment_spec(args,"physics_deeponet")).run(
+    result = ExperimentRunner(context,physics_experiment_spec(args,"physics_deeponet_physics")).run(
         trainer,data,data,data,config=config,evaluator=lambda t,d,c: model_script.evaluate_run(t,d,c,statistics,cases=2))
     assert result.evaluation.metrics["physics_loss"] >= 0
     assert result.training.metadata["checkpoint_reload_verified"]

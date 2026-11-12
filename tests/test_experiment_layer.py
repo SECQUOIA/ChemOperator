@@ -17,7 +17,7 @@ from chem_operator.experiments import (
     EvaluationOutcome,
     ExperimentRunner,
     ExperimentSpec,
-    FNOTrainer,
+    OperatorTrainer,
     LossTerm,
     MetricEvent,
     RunContext,
@@ -166,10 +166,10 @@ class TinyFields(Dataset):
         return {"x": value, "y": 2.0 * value}
 
 
-def test_fno_trainer_implements_contract_and_verifies_checkpoint(
+def test_operator_trainer_implements_contract_and_verifies_checkpoint(
     tmp_path: Path,
 ) -> None:
-    trainer = FNOTrainer(
+    trainer = OperatorTrainer(
         lambda config: torch.nn.Conv2d(1, 1, kernel_size=1),
         {
             "epochs": 1,
@@ -213,7 +213,7 @@ def test_experiment_runner_publishes_complete_run(tmp_path: Path) -> None:
         tuning_budget={"samples": 0, "epochs": 1},
         project_root=tmp_path,
     )
-    trainer = FNOTrainer(
+    trainer = OperatorTrainer(
         lambda config: torch.nn.Conv2d(1, 1, kernel_size=1),
         {"epochs": 1, "batch_size": 2, "learning_rate": 1.0e-2},
     )
@@ -258,7 +258,7 @@ def test_experiment_runner_publishes_complete_run(tmp_path: Path) -> None:
     assert loaded.metrics[0]["metric"] == "relative_l2"
 
 
-def test_fno_trainer_supports_multi_input_mapping_outputs(tmp_path: Path) -> None:
+def test_operator_trainer_supports_multi_input_mapping_outputs(tmp_path: Path) -> None:
     class PairFields(Dataset):
         def __len__(self) -> int:
             return 4
@@ -296,7 +296,7 @@ def test_fno_trainer_supports_multi_input_mapping_outputs(tmp_path: Path) -> Non
         del batch
         return prediction["sum"], target["sum"]
 
-    trainer = FNOTrainer(
+    trainer = OperatorTrainer(
         lambda config: PairModel(),
         {"epochs": 1, "batch_size": 2, "learning_rate": 1.0e-2},
         loss_terms=(LossTerm("data", loss),),

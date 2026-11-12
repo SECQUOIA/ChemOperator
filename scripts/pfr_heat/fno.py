@@ -15,7 +15,7 @@ from torch import nn
 from torch.nn import functional as F
 from torch.utils.data import DataLoader
 from chem_operator.reactors.pfr_heat.dataset_generator import CylindricalWall, ModelConstants, PlugFlowReactor
-from chem_operator.experiments import CompositeLossTrainer, LossTerm, EvaluationOutcome, StreamingRegressionMetrics
+from chem_operator.experiments import OperatorTrainer, LossTerm, EvaluationOutcome, StreamingRegressionMetrics
 from chem_operator.experiments import run_operator
 import numpy as np
 from scripts.pfr_heat.common import (
@@ -242,7 +242,7 @@ def make_trainer(config, context, pfr, wall, shape, *, variant="physics"):
     terms = [LossTerm("data_loss", lambda p,t,b: supervised_loss(p,b))]
     for name, key in (("species", "lambda_f"), ("gas", "lambda_g"), ("solid", "lambda_s"), ("bc", "lambda_bc")):
         terms.append(LossTerm(name + "_loss", lambda p,t,b,n=name: b["physics_losses"][n], float(config[key])))
-    return CompositeLossTrainer(lambda cfg: model_from_config(cfg,pfr,wall,context.device), config,
+    return OperatorTrainer(lambda cfg: model_from_config(cfg,pfr,wall,context.device), config,
         batch_adapter=adapt, forward_adapter=forward, loss_terms=terms, metric_adapter=metric,
         checkpoint_metadata={"pfr_normalizer": pfr.state_dict(), "wall_normalizer": wall.state_dict(),
                              "shape": list(shape), "pdes": EXPECTED_PDES})

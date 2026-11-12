@@ -3,18 +3,20 @@ from pathlib import Path
 import argparse
 import sys
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-from chem_operator.plotting import plot_operator_runs
+from chem_operator.example_paths import ExamplePaths
+from chem_operator.plotting import add_plot_run_arguments, select_plot_runs, plot_selected_runs, print_plot_paths
+
+PATHS = ExamplePaths.from_script(__file__)
+PROBLEM_ID = "pipe_flow_transient"
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--run", type=Path, action="append", required=True,
-                        help="Canonical run directory; repeat to compare compatible models.")
-    parser.add_argument("--output-dir", type=Path, default=Path(__file__).parent / "results" / "comparison")
-    parser.add_argument("--cases", type=int, default=1)
+    add_plot_run_arguments(parser, root=PATHS.root, problem_id=PROBLEM_ID,
+                           cases=3)
     args = parser.parse_args()
-    for path in plot_operator_runs(args.run, args.output_dir, cases=args.cases):
-        print(path)
+    runs = select_plot_runs(args, parser, problem_id=PROBLEM_ID)
+    print_plot_paths(plot_selected_runs(runs, args.output_dir, cases=args.cases))
 
 
 if __name__ == "__main__":

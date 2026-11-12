@@ -13,8 +13,13 @@ import matplotlib.pyplot as plt
 from matplotlib.ticker import LogLocator, LogFormatterMathtext, NullFormatter
 from matplotlib.colors import LogNorm
 from scipy.interpolate import RegularGridInterpolator
-from chem_operator.plotting import plot_operator_runs, plot_operator_fields
-from chem_operator.experiments import load_run
+from chem_operator.example_paths import ExamplePaths
+from chem_operator.plotting import (
+    add_plot_run_arguments, plot_operator_fields, plot_selected_runs,
+    print_plot_paths, select_plot_runs,
+)
+PATHS = ExamplePaths.from_script(__file__, dataset="q2d_cmr")
+PROBLEM_ID = "q2d_cmr"
 SLIDE_DPI = 220
 
 
@@ -638,45 +643,53 @@ def plot_mesh_wall_time(
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--run", type=Path, action="append", required=True,
-                        help="Canonical run directory; repeat to compare compatible models.")
-    parser.add_argument("--output-dir", type=Path, default=Path(__file__).parent / "results" / "models")
-    parser.add_argument("--cases", type=int, default=2)
+    add_plot_run_arguments(parser, root=PATHS.root, problem_id=PROBLEM_ID,
+                           cases=3)
     parser.add_argument("--tolerance-comparison", action="store_true",
                         help="For FNO runs only: plot coarse interpolation and FNO error versus wall time.")
-    parser.add_argument("--data-dir", type=Path,
-                        default=Path(__file__).resolve().parents[2] / "datasets" / "q2d_cmr")
+    parser.add_argument("--data-dir", type=Path, default=PATHS.data)
     args = parser.parse_args()
+    runs = select_plot_runs(args, parser, problem_id=PROBLEM_ID)
     if args.tolerance_comparison:
-        for run_path in args.run:
-            if load_run(run_path).manifest["model_id"] != "fno":
+        for run in runs:
+            if run.manifest["model_id"] != "fno":
                 parser.error("--tolerance-comparison supports FNO runs only.")
-    plot_operator_runs(args.run,args.output_dir,cases=args.cases)
-    for run_path in args.run:
-        run = load_run(run_path)
-        output_dir = (args.output_dir if len(args.run) == 1 else
-                      args.output_dir / run.manifest["model_id"] / run.path.name)
+    paths = list(plot_selected_runs(runs, args.output_dir, cases=args.cases))
+    for run in runs:
+        output_dir = args.output_dir / run.manifest["model_id"] / run.path.name
         if args.tolerance_comparison:
+            path = output_dir / "tolerance_superresolution_error_vs_time.png"
             plot_tolerance_superresolution(
-                output_dir / "tolerance_superresolution_error_vs_time.png",
-                run.path, args.data_dir,
+                path, run.path, args.data_dir,
             )
+            paths.append(path)
         benchmark = run.path / "mesh_benchmark.csv"
         if not benchmark.exists():
             continue
         frame = pd.read_csv(benchmark)
         cost = json.loads((run.path / "cost_model.json").read_text())
         shape = tuple(run.manifest["benchmark_metadata"]["training_shape"])
-        plot_mesh_l2(output_dir / "mesh_l2_vs_points.png",frame,shape)
-        plot_mesh_wall_time(output_dir / "mesh_wall_time_vs_points.png",frame,shape,cost)
-        plot_cumulative_break_even(output_dir / "cumulative_break_even.png",cost)
-        plot_amortized_pareto(output_dir / "amortized_pareto_frontiers.png",cost)
-        plot_break_even_map(output_dir / "break_even_speedup_map.png",cost)
+        path = output_dir / "mesh_l2_vs_points.png"
+        plot_mesh_l2(path,frame,shape)
+        paths.append(path)
+        path = output_dir / "mesh_wall_time_vs_points.png"
+        plot_mesh_wall_time(path,frame,shape,cost)
+        paths.append(path)
+        path = output_dir / "cumulative_break_even.png"
+        plot_cumulative_break_even(path,cost)
+        paths.append(path)
+        path = output_dir / "amortized_pareto_frontiers.png"
+        plot_amortized_pareto(path,cost)
+        paths.append(path)
+        path = output_dir / "break_even_speedup_map.png"
+        plot_break_even_map(path,cost)
+        paths.append(path)
         with np.load(run.path / "superresolution.npz",allow_pickle=False) as arrays:
             for prefix in ("coarse","fine"):
-                plot_operator_fields(output_dir / f"{prefix}_superresolution.png",
+                paths.append(plot_operator_fields(output_dir / f"{prefix}_superresolution.png",
                     arrays[f"{prefix}_reference"],arrays[f"{prefix}_prediction"],arrays["labels"],
-                    [arrays[f"{prefix}_z"],arrays[f"{prefix}_r"]],["z","r"])
+                    [arrays[f"{prefix}_z"],arrays[f"{prefix}_r"]],["z","r"]))
+    print_plot_paths(paths)
 
 if __name__ == "__main__":
     main()

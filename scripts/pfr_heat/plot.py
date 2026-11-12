@@ -4,7 +4,11 @@ import argparse
 import sys
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from chem_operator._experiments.comparison import load_run, read_reconstructions
-from chem_operator.plotting import plot_operator_runs
+from chem_operator.example_paths import ExamplePaths
+from chem_operator.plotting import add_plot_run_arguments, select_plot_runs, plot_selected_runs, print_plot_paths
+
+PATHS = ExamplePaths.from_script(__file__)
+PROBLEM_ID = "pfr_heat"
 
 
 def plot_pfr_profiles(run_path, output_dir, *, cases=2):
@@ -89,25 +93,18 @@ def plot_pfr_profiles(run_path, output_dir, *, cases=2):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--run", type=Path, action="append", required=True,
-                        help="Canonical run directory; repeat to compare compatible models.")
-    parser.add_argument("--output-dir", type=Path, default=Path(__file__).parent / "results" / "comparison")
-    parser.add_argument("--cases", type=int, default=2)
+    add_plot_run_arguments(parser, root=PATHS.root, problem_id=PROBLEM_ID,
+                           cases=3)
     args = parser.parse_args()
 
-    paths = list(plot_operator_runs(args.run, args.output_dir, cases=args.cases))
-    for run_path in args.run:
-        run = load_run(run_path)
-        destination = (
-            args.output_dir
-            if len(args.run) == 1
-            else args.output_dir / run.manifest["model_id"] / run.path.name
-        )
+    runs = select_plot_runs(args, parser, problem_id=PROBLEM_ID)
+    paths = list(plot_selected_runs(runs, args.output_dir, cases=args.cases))
+    for run in runs:
+        destination = args.output_dir / run.manifest["model_id"] / run.path.name
         paths.extend(
             plot_pfr_profiles(run.path, destination, cases=args.cases)
         )
-    for path in paths:
-        print(path)
+    print_plot_paths(paths)
 
 
 if __name__ == "__main__":

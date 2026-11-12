@@ -5,27 +5,42 @@ import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 import argparse
-from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass
+from collections.abc import Callable, Iterator, Mapping, Sequence
+from contextlib import ExitStack, contextmanager
+from dataclasses import dataclass, replace
 from functools import partial
 import math
+import os
 import re
 from typing import Any
 import numpy as np
 import torch
 from neuralop.losses import LpLoss
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, Dataset
 from chem_operator.datasets import ChemOperatorDataset
 from chem_operator.example_paths import ExamplePaths
-from chem_operator.models import FNOAdapter, FNOChannel, fit_fno_zscore_normalizer, relative_l2_loss
+from chem_operator.models import (
+    FNOAdapter, FNOChannel, PODTransform, fit_fno_zscore_normalizer, relative_l2_loss,
+)
 from chem_operator.normalization import ZScoreNormalizer
 from chem_operator.experiments import (
-    FNOTrainer,
+    DeepONetTrainer,
+    DeepONetTuningSettings,
+    EvaluationOutcome,
+    ExperimentRunner,
+    OperatorTrainer,
     LossTerm,
+    RayRuntimeConfig,
+    RunContext,
+    StreamingRegressionMetrics,
+    WorkflowStages,
+    deeponet_training_config,
+    deeponet_tuner,
     evaluate_fields,
     operator_spec,
     parse_operator_args,
     run_operator,
+    run_context_from_namespace,
 )
 PATHS = ExamplePaths.from_script(__file__, dataset="q2d_cmr")
 
@@ -411,7 +426,7 @@ def make_trainer(
     normalizer: ZScoreNormalizer,
     geometry: tuple[float, float],
     shape: tuple[int, int],
-) -> FNOTrainer:
+) -> OperatorTrainer:
     """Use the same loss, physical metrics, and checkpoint contract for all models."""
     loss = LpLoss(d=2, p=2, reduction="mean")
 
@@ -424,7 +439,7 @@ def make_trainer(
             dim=1,
         )
 
-    return FNOTrainer(
+    return OperatorTrainer(
         lambda cfg: model_factory(cfg, context.device),
         config,
         loss_terms=[LossTerm("data_loss", lambda prediction, target, batch: loss(prediction, target))],
@@ -454,7 +469,7 @@ def run_model(
     """
     normalizer, geometry, shape = fit_normalizer(args.data_dir / f"{FILE_STEM}_train.h5")
 
-    def evaluate_run(trainer: FNOTrainer, data: FNOAdapter, context: Any):
+    def evaluate_run(trainer: OperatorTrainer, data: FNOAdapter, context: Any):
         return evaluate_fields(
             trainer,
             data,
@@ -490,4 +505,256 @@ def run_model(
     )
 
 
+class Q2DDeepONetAdapter(Dataset):
+    """View Q2D fields as scalar branches and a shared Cartesian trunk."""
+
+    format = "cartesian_product"
+
+    def __init__(
+        self,
+        dataset: FNOAdapter,
+        geometry: tuple[float, float],
+        coordinates: tuple[torch.Tensor, torch.Tensor],
+        max_cases: int | None = None,
+    ) -> None:
+        if any(channel.source not in {"parameter", "constant"}
+               for channel in dataset.input_channels):
+            raise ValueError("Q2D DeepONet branch channels must be scalar controls.")
+        self.dataset = dataset
+        self.coordinates = tuple(value.detach().cpu().clone() for value in coordinates)
+        self.shape = tuple(len(value) for value in self.coordinates)
+        self.labels = tuple(channel.label for channel in dataset.output_channels)
+        self.count = len(dataset) if max_cases is None else min(max_cases, len(dataset))
+        if self.count < 1:
+            raise ValueError("Q2D DeepONet requires at least one selected case.")
+        self.trunk = torch.stack(
+            torch.meshgrid(*self.coordinates, indexing="ij"), dim=-1,
+        ).reshape(-1, 2)
+        for index in range(self.count):
+            physical = dataset.physical_item(index)
+            if not np.allclose(_case_geometry(physical["metadata"]), geometry,
+                               rtol=1e-10, atol=1e-12):
+                raise ValueError(f"Q2D case {index} differs from training geometry.")
+            for axis, expected in zip(("z", "r"), self.coordinates):
+                actual = physical[axis]
+                if actual.shape != expected.shape or not torch.allclose(
+                    actual, expected, rtol=1e-6, atol=1e-8,
+                ):
+                    raise ValueError(
+                        f"Q2D case {index} differs from the training coordinate grid ({axis})."
+                    )
+
+    def __len__(self) -> int:
+        return self.count
+
+    def __getitem__(self, index: int) -> dict[str, Any]:
+        if not 0 <= index < self.count:
+            raise IndexError(index)
+        sample = self.dataset[index]
+        return {
+            "branch": sample["x"][:, 0, 0],
+            "trunk": self.trunk,
+            "coordinate": self.trunk,
+            "target": sample["y"].movedim(0, -1).reshape(-1, len(self.labels)),
+            "labels": self.labels,
+        }
+
+    def field_output(self, values: torch.Tensor) -> torch.Tensor:
+        """Restore the channel-first axial/radial field layout."""
+        return values.movedim(-1, -2).reshape(
+            *values.shape[:-2], len(self.labels), *self.shape,
+        )
+
+
+@contextmanager
+def deeponet_data(
+    data_dir: Path,
+    splits: Sequence[str],
+    normalizer: ZScoreNormalizer,
+    geometry: tuple[float, float],
+    coordinates: tuple[torch.Tensor, torch.Tensor],
+    max_cases: int | None = None,
+) -> Iterator[tuple[Q2DDeepONetAdapter, ...]]:
+    """Open and validate selected cases, closing every HDF5 handle on exit."""
+    with ExitStack() as stack:
+        datasets = []
+        for split in splits:
+            raw = raw_dataset(Path(data_dir) / f"{FILE_STEM}_{split}.h5")
+            stack.callback(raw.close)
+            fields = FNOAdapter(
+                raw, normalizer, input_channels=INPUT_CHANNELS,
+                output_channels=OUTPUT_CHANNELS, coordinate_names=("z", "r"),
+            )
+            datasets.append(Q2DDeepONetAdapter(fields, geometry, coordinates, max_cases))
+        yield tuple(datasets)
+
+
+def prepare_deeponet_data(
+    data_dir: Path,
+) -> tuple[ZScoreNormalizer, tuple[float, float], tuple[torch.Tensor, torch.Tensor]]:
+    """Fit training-only statistics and discover the physical training grid."""
+    path = Path(data_dir) / f"{FILE_STEM}_train.h5"
+    normalizer, geometry, _ = fit_normalizer(path)
+    raw, dataset = make_adapter(path, normalizer, geometry)
+    try:
+        sample = dataset[0]
+        coordinates = (sample["z"].clone(), sample["r"].clone())
+    finally:
+        raw.close()
+    return normalizer, geometry, coordinates
+
+
+def deeponet_search_space() -> dict[str, Any]:
+    """Shared branch architecture and optimizer search for both DeepONets."""
+    from ray import tune
+
+    return {
+        "loss": "relative_l2",
+        "width": tune.choice([64, 128, 256]),
+        "branch_hidden_layers": tune.choice([2, 3, 4]),
+        "activation": tune.choice(["gelu", "tanh"]),
+        "learning_rate": tune.loguniform(1e-4, 3e-3),
+        "weight_decay": tune.loguniform(1e-8, 1e-4),
+        "batch_size": tune.choice([4, 8, 16]),
+        "epochs": TUNE_EPOCHS,
+        "seed": SEED,
+    }
+
+
+def evaluate_q2d_deeponet(
+    trainer: DeepONetTrainer,
+    data: Q2DDeepONetAdapter,
+    context: RunContext,
+    *,
+    cases: int,
+) -> EvaluationOutcome:
+    """Score physical fields and emit reconstructions compatible with Q2D plots."""
+    import time
+
+    started = time.perf_counter()
+    prediction = data.field_output(trainer.predict(data, context))
+    elapsed = time.perf_counter() - started
+    # DeepXDE can change PyTorch's global default device to CUDA, while
+    # DeepONetTrainer.predict returns CPU tensors. Read targets on CPU too.
+    with torch.device("cpu"):
+        reference = data.field_output(torch.stack([data[i]["target"] for i in range(len(data))]))
+    normalized_global = relative_l2_per_sample(prediction, reference).mean()
+    normalized_fields = relative_l2_per_field(prediction, reference).mean(dim=0)
+    prediction = data.dataset.denormalize_output(prediction)
+    reference = data.dataset.denormalize_output(reference)
+    aggregate = StreamingRegressionMetrics()
+    aggregate.update(prediction, reference)
+    metrics = aggregate.compute()
+    metrics["normalized_relative_l2"] = float(normalized_global)
+    for index, label in enumerate(data.labels):
+        field_metrics = StreamingRegressionMetrics()
+        field_metrics.update(prediction[:, index], reference[:, index])
+        metrics.update({f"{label}/{key}": value for key, value in field_metrics.compute().items()})
+        metrics[f"normalized_relative_l2_{label}"] = float(normalized_fields[index])
+    count = min(cases, len(data))
+    return EvaluationOutcome(
+        metrics=metrics,
+        reconstructions={
+            "case_ids": np.arange(count),
+            "reference": reference[:count].numpy(),
+            "prediction": prediction[:count].numpy(),
+            "labels": np.asarray(data.labels),
+            "coordinate_names": np.asarray(("z", "r")),
+            **{axis: value.unsqueeze(0).expand(count, -1).numpy()
+               for axis, value in zip(("z", "r"), data.coordinates)},
+        },
+        inference_seconds=elapsed,
+    )
+
+
+def run_deeponet(
+    args: argparse.Namespace,
+    model_id: str,
+    search_space: Mapping[str, Any],
+    normalizer: ZScoreNormalizer,
+    geometry: tuple[float, float],
+    coordinates: tuple[torch.Tensor, torch.Tensor],
+    *,
+    pod: PODTransform | None = None,
+) -> RunContext:
+    """Run the shared fixed-mesh DeepXDE tuning and final-training workflow."""
+    from functools import partial
+    import json
+
+    os.environ.setdefault("DDE_BACKEND", "pytorch")
+    stages = WorkflowStages.from_namespace(args)
+    data_factory = partial(
+        deeponet_data, args.data_dir, normalizer=normalizer, geometry=geometry,
+        coordinates=coordinates, max_cases=args.max_cases,
+    )
+    with data_factory(("train", "valid", "test")) as (_, _, test):
+        test_count = len(test)
+    context = run_context_from_namespace(
+        args, problem=PROBLEM_ID, model=model_id, seed=SEED,
+        provenance={"max_cases": args.max_cases},
+    )
+    spec = replace(experiment_spec(args, model_id),
+                   selected_test_case_ids=range(min(args.plot_cases, test_count)))
+    runner = ExperimentRunner(context, spec)
+    tuning = None
+    if stages.tune:
+        def trial_data(_context):
+            return data_factory(("train", "valid"))
+
+        gpus = int(context.device.type == "cuda")
+        settings = DeepONetTuningSettings(
+            max_epochs=args.tune_epochs, num_samples=args.samples,
+            max_concurrent_trials=MAX_CONCURRENT_TRIALS,
+            cpus_per_trial=CPUS_PER_TRIAL, gpus_per_trial=gpus,
+            ray_runtime=RayRuntimeConfig(
+                num_cpus=CPUS_PER_TRIAL, num_gpus=gpus,
+                object_store_memory=100 * 1024**2, temp_dir=PATHS.ray.resolve(),
+                runtime_env={"env_vars": {"PYTHONPATH": os.pathsep.join(filter(None, (
+                    str(PATHS.root), str(PATHS.root / "src"), os.environ.get("PYTHONPATH"),
+                ))), "DDE_BACKEND": "pytorch"}},
+            ),
+        )
+        tuning = runner.tune(
+            deeponet_tuner(
+                search_space=dict(search_space, epochs=args.tune_epochs), pod=pod,
+                dataset_factory=trial_data, context=context, settings=settings,
+                pin_memory=bool(gpus),
+            ), None, None,
+            experiment_name=f"{PROBLEM_ID}_{model_id}_{context.paths.run_dir.name}",
+        )
+    if stages.train:
+        if tuning is not None:
+            config = dict(tuning.best_config)
+        elif args.train_config == "best":
+            config = runner.artifacts.read_best_config()
+        else:
+            config = json.loads(Path(args.train_config).read_text())
+        config.update(epochs=args.epochs, seed=SEED, loss="relative_l2")
+        if pod is not None:
+            config.update(latent_width=pod.n_components, trunk_hidden_layers=0)
+        trainer = DeepONetTrainer(
+            deeponet_training_config(config), pod=pod,
+            pin_memory=context.device.type == "cuda",
+            checkpoint_metadata={
+                "normalizer": normalizer.state_dict(), "geometry": list(geometry),
+                "training_shape": [len(value) for value in coordinates],
+                "input_channels": [channel.label for channel in INPUT_CHANNELS],
+                "output_channels": [channel.label for channel in OUTPUT_CHANNELS],
+                "coordinate_names": ["z", "r"],
+                "training_coordinates": {axis: value.clone() for axis, value in zip(("z", "r"), coordinates)},
+            },
+        )
+        with data_factory(("train", "valid", "test")) as (train, valid, test):
+            runner.run(
+                trainer, train, valid, test, config=trainer.config.to_dict(), tuning=tuning,
+                evaluator=partial(evaluate_q2d_deeponet, cases=args.plot_cases),
+            )
+    print(f"Run artifacts: {context.paths.run_dir}")
+    return context
+
+
 __all__ = ['PATHS', 'FILE_STEM', 'SEED', 'METRIC', 'TUNE_SAMPLES', 'TUNE_EPOCHS', 'FINAL_EPOCHS', 'EVALUATION_BATCH_SIZE', 'CPUS_PER_TRIAL', 'GPUS_PER_TRIAL', 'MAX_CONCURRENT_TRIALS', 'LATENCY_WARMUPS', 'LATENCY_REPEATS', 'RELATIVE_L2_EPS', 'AMORTIZED_EVALUATION_COUNTS', 'REPRESENTATIVE_RESOLUTION_COUNT', 'MESH_FILE_PATTERN', 'INPUT_CHANNELS', 'OUTPUT_CHANNELS', 'MeshFile', 'raw_dataset', 'adapter_spatial_shape', 'fit_normalizer', 'make_adapter', 'discover_mesh_files', 'find_superresolution_pair', 'PROBLEM_ID', 'experiment_spec', 'parse_args', 'ModelFactory', 'relative_l2_per_sample', 'relative_l2_per_field', 'evaluate', 'make_trainer', 'run_model']
+__all__ += [
+    "Q2DDeepONetAdapter", "deeponet_data", "prepare_deeponet_data",
+    "deeponet_search_space", "evaluate_q2d_deeponet", "run_deeponet",
+]

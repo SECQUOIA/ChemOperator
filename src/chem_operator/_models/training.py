@@ -14,6 +14,7 @@ from .deeponet import (CheckpointCallback, CoordinateScaler,
                        make_deeponet_dataloader)
 from .deepxde import DeepONetAdapter
 from .pod import PODTransform
+from .deepxde_backend import import_deepxde
 
 
 def train_deeponet_lazy(
@@ -61,7 +62,7 @@ def train_deeponet_lazy(
     branch_width = int(sample["branch"].shape[-1])
     trunk_width = int(sample["trunk"].shape[-1])
 
-    import deepxde as dde
+    dde = import_deepxde()
 
     dde.config.set_random_seed(config.seed)
     selected_device = torch.device(

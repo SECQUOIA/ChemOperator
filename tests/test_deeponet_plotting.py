@@ -267,8 +267,9 @@ def test_cstr_cli_plots_saved_runs_without_raw_datasets(tmp_path, monkeypatch):
     monkeypatch.setattr("sys.argv", ["plot.py", "--run", str(run), "--output-dir", str(tmp_path / "plots")])
     with plt.rc_context():
         plot.main()
-    assert (tmp_path / "plots" / "training_validation_loss.png").is_file()
-    assert (tmp_path / "plots" / "test_reconstructions.png").is_file()
+    run_plots = tmp_path / "plots" / "deeponet" / run.name
+    assert (run_plots / "training_validation_loss.png").is_file()
+    assert (run_plots / "case_00.png").is_file()
 
 
 def test_cstr_co_diagnostic_can_run_explicitly_without_run(tmp_path, monkeypatch):
