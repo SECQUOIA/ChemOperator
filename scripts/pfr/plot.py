@@ -14,20 +14,14 @@ from chem_operator.plotting import add_plot_run_arguments, select_plot_runs, plo
 
 
 PATHS = ExamplePaths.from_script(__file__)
-PLOT_CASES = 2
-
+PROBLEM_ID = "pfr_chain"
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    add_plot_run_arguments(parser, root=PATHS.root)
-    parser.add_argument(
-        "--output-dir",
-        type=Path,
-        default=PATHS.example / "results" / "deeponet_comparison",
-    )
-    parser.add_argument("--cases", type=int, default=PLOT_CASES)
+    add_plot_run_arguments(parser, root=PATHS.root, problem_id=PROBLEM_ID,
+                           cases=3)
     args = parser.parse_args()
-    runs = select_plot_runs(args, parser, problem_id="pfr_chain")
+    runs = select_plot_runs(args, parser, problem_id=PROBLEM_ID)
     paths = plot_selected_runs(runs, args.output_dir, cases=args.cases)
     print_plot_paths(paths)
 

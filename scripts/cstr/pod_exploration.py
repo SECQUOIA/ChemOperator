@@ -21,7 +21,7 @@ from chem_operator.example_paths import ExamplePaths
 
 
 PATHS = ExamplePaths.from_script(__file__)
-OUTPUT_DIR = PATHS.example / "results" / "pod_exploration"
+OUTPUT_DIR = PATHS.plots / "cstr_non_isothermal" / "diagnostics" / "pod_exploration"
 MECHANISM = "n-heptane-NUIG-2016.yaml"
 INLET_COMPOSITION = {"NC7H16": 0.005, "O2": 0.0275, "HE": 0.9675}
 REACTOR_TEMPERATURE = 925.0  # K

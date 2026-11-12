@@ -26,7 +26,8 @@ python scripts/<folder>/<script>.py [options]
 
 Pass `--help` to a model or plotting entry point to see its effective CLI.
 Generated datasets are written below `datasets/`; canonical model runs are
-written below `artifacts/runs/` unless `--runs-root` is supplied.
+written below `artifacts/runs/` unless `--runs-root` is supplied, and plots are
+written below `artifacts/plots/<problem_id>/` unless `--output-dir` is supplied.
 
 Each workflow keeps separate entry points for dataset generation, model runs,
 and artifact plotting:
@@ -37,10 +38,18 @@ and artifact plotting:
 | Tune and train | `python scripts/<folder>/<model>.py` |
 | Plot saved runs | `python scripts/<folder>/plot.py --run PATH [--run PATH ...]` |
 
-Plotters require at least one `--run`. Repeat it to compare compatible runs;
-`--output-dir PATH` selects the plot directory and `--cases N` limits plotted
-test cases. Use `python scripts/plot_all.py` to plot the newest available
-runs across workflows.
+Plotters require `--run` or `--recent`, which are mutually exclusive. Repeat
+`--run` to compare compatible runs. Use `--recent` instead of `--run` to plot
+the newest completed run for every model, or `bash scripts/plot_all.sh` to do
+so across workflows. Every plotter shares the same output options:
+
+| Option | Default | Purpose |
+| --- | --- | --- |
+| `--output-dir PATH` | `artifacts/plots/<problem_id>` | Plot directory; mirrors `artifacts/runs/<problem_id>`. |
+| `--cases N` | per workflow (1 to 3) | Number of test cases to plot; must be positive. |
+
+Within the plot directory, each run is written to `<model_id>/<run-id>/` and
+compatible runs are overlaid under `comparisons/group_N/`.
 
 ## Common model options
 
@@ -124,7 +133,6 @@ python scripts/cstr/plot.py \
   --run artifacts/runs/cstr_non_isothermal/deeponet/<run-id> \
   --run artifacts/runs/cstr_non_isothermal/pod_deeponet/<run-id> \
   --run artifacts/runs/cstr_non_isothermal/fno/<run-id> \
-  --output-dir scripts/cstr/results/deeponet_comparison \
   --cases 2
 ```
 
@@ -135,7 +143,7 @@ opt-in diagnostic:
 ```bash
 python scripts/cstr/plot.py --co-histories \
   --dataset datasets/cstr/cstr_non_isothermal_train.h5 \
-  --co-output scripts/cstr/results/train_set_CO.png
+  --co-output artifacts/plots/cstr_non_isothermal/diagnostics/train_set_CO.png
 ```
 
 The diagnostic may also be combined with `--run`. Text rendering uses
@@ -172,7 +180,6 @@ python scripts/pfr/plot.py \
   --run artifacts/runs/pfr_chain/deeponet/<run-id> \
   --run artifacts/runs/pfr_chain/pod_deeponet/<run-id> \
   --run artifacts/runs/pfr_chain/fno/<run-id> \
-  --output-dir scripts/pfr/results/deeponet_comparison \
   --cases 2
 ```
 
@@ -202,7 +209,6 @@ python scripts/packed_bed_1d/plot.py \
   --run artifacts/runs/packed_bed_1d/deeponet/<run-id> \
   --run artifacts/runs/packed_bed_1d/pod_deeponet/<run-id> \
   --run artifacts/runs/packed_bed_1d/fno/<run-id> \
-  --output-dir scripts/packed_bed_1d/results/deeponet_comparison \
   --cases 2
 ```
 
@@ -263,7 +269,7 @@ Plot one or more canonical physics/operator runs:
 python scripts/pipe_flow/plot.py \
   --run artifacts/runs/pipe_flow/physics_deeponet_data/<run-id> \
   --run artifacts/runs/pipe_flow/physics_deeponet/<run-id> \
-  --output-dir scripts/pipe_flow/results/comparison --cases 3
+  --cases 3
 ```
 
 Or compare the standard direct/POD pair:
@@ -318,7 +324,6 @@ python scripts/pipe_flow_transient/plot.py \
   --run artifacts/runs/pipe_flow_transient/transient_fno/<run-id> \
   --run artifacts/runs/pipe_flow_transient/transient_nemo_fno_data/<run-id> \
   --run artifacts/runs/pipe_flow_transient/transient_nemo_fno_physics/<run-id> \
-  --output-dir scripts/pipe_flow_transient/results/comparison \
   --cases 2
 ```
 
@@ -362,7 +367,6 @@ Plot one or more saved runs:
 python scripts/pfr_heat/plot.py \
   --run artifacts/runs/pfr_heat/fno_physics/<run-id> \
   --run artifacts/runs/pfr_heat/deeponet_fno_physics/<run-id> \
-  --output-dir scripts/pfr_heat/results/comparison \
   --cases 2
 ```
 
@@ -451,7 +455,6 @@ Plot a saved run and, when present, its benchmark artifacts:
 ```bash
 python scripts/q2d/plot.py \
   --run artifacts/runs/q2d_cmr/fno/<run-id> \
-  --output-dir scripts/q2d/results/fno \
   --cases 1
 ```
 

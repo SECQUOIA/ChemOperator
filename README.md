@@ -540,8 +540,9 @@ Review each script's data paths, run-mode flags, trajectory limits, and compute
 settings before launching it. The tuning scripts can be long-running and use a
 GPU when PyTorch reports one as available. Examples are grouped by physical
 case, with configuration beside their runners. Training runners write below
-`artifacts/runs/<problem>/<model>/<run-id>` by default. Project-level Ray state
-is written below `.ray/`.
+`artifacts/runs/<problem>/<model>/<run-id>` by default, and plotters write below
+`artifacts/plots/<problem>/<model>/<run-id>` so the two trees mirror each other.
+Project-level Ray state is written below `.ray/`.
 
 The experiment tuning layer defaults `RAY_ENABLE_UV_RUN_RUNTIME_ENV=0` before
 Ray is imported, so local workers reuse the installed environment under

@@ -58,10 +58,42 @@ def _run(root: Path, model: str, run_id: str, *, stamp: str,
     return context.paths.run_dir
 
 
-def _parser(root: Path) -> argparse.ArgumentParser:
+def _parser(root: Path, *, cases: int = 2) -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser()
-    add_plot_run_arguments(parser, root=root)
+    add_plot_run_arguments(parser, root=root, problem_id="synthetic", cases=cases)
     return parser
+
+
+def test_shared_arguments_default_to_mirrored_plot_tree(tmp_path: Path) -> None:
+    args = _parser(tmp_path, cases=3).parse_args(["--recent"])
+    assert args.runs_root == tmp_path / "artifacts" / "runs"
+    assert args.output_dir == tmp_path / "artifacts" / "plots" / "synthetic"
+    assert args.cases == 3
+    override = _parser(tmp_path).parse_args(
+        ["--recent", "--output-dir", str(tmp_path / "custom"), "--cases", "1"]
+    )
+    assert override.output_dir == tmp_path / "custom"
+    assert override.cases == 1
+
+
+@pytest.mark.parametrize("argv", [
+    ["--recent", "--cases", "0"],
+    ["--recent", "--cases", "-2"],
+    ["--recent", "--cases", "two"],
+    ["--recent", "--run", "some/run"],
+    [],
+])
+def test_shared_arguments_reject_invalid_combinations(
+    tmp_path: Path, argv: list[str], capsys: pytest.CaptureFixture[str],
+) -> None:
+    with pytest.raises(SystemExit) as excinfo:
+        _parser(tmp_path).parse_args(argv)
+    assert excinfo.value.code == 2
+    stderr = capsys.readouterr().err
+    if "--cases" in argv:
+        assert "--cases" in stderr
+    else:
+        assert "--run" in stderr and "--recent" in stderr
 
 
 def test_recent_selects_newest_completed_per_discovered_model(tmp_path: Path) -> None:

@@ -13,10 +13,13 @@ import matplotlib.pyplot as plt
 from matplotlib.ticker import LogLocator, LogFormatterMathtext, NullFormatter
 from matplotlib.colors import LogNorm
 from scipy.interpolate import RegularGridInterpolator
+from chem_operator.example_paths import ExamplePaths
 from chem_operator.plotting import (
     add_plot_run_arguments, plot_operator_fields, plot_selected_runs,
     print_plot_paths, select_plot_runs,
 )
+PATHS = ExamplePaths.from_script(__file__, dataset="q2d_cmr")
+PROBLEM_ID = "q2d_cmr"
 SLIDE_DPI = 220
 
 
@@ -640,15 +643,13 @@ def plot_mesh_wall_time(
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    add_plot_run_arguments(parser, root=Path(__file__).resolve().parents[2])
-    parser.add_argument("--output-dir", type=Path, default=Path(__file__).parent / "results" / "models")
-    parser.add_argument("--cases", type=int, default=2)
+    add_plot_run_arguments(parser, root=PATHS.root, problem_id=PROBLEM_ID,
+                           cases=3)
     parser.add_argument("--tolerance-comparison", action="store_true",
                         help="For FNO runs only: plot coarse interpolation and FNO error versus wall time.")
-    parser.add_argument("--data-dir", type=Path,
-                        default=Path(__file__).resolve().parents[2] / "datasets" / "q2d_cmr")
+    parser.add_argument("--data-dir", type=Path, default=PATHS.data)
     args = parser.parse_args()
-    runs = select_plot_runs(args, parser, problem_id="q2d_cmr")
+    runs = select_plot_runs(args, parser, problem_id=PROBLEM_ID)
     if args.tolerance_comparison:
         for run in runs:
             if run.manifest["model_id"] != "fno":

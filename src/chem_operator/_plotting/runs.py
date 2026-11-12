@@ -25,14 +25,36 @@ def print_plot_paths(paths: Iterable[Path]) -> None:
         print(path)
 
 
-def add_plot_run_arguments(parser: argparse.ArgumentParser, *, root: Path) -> None:
-    selection = parser.add_mutually_exclusive_group(required=True)
+def _positive_int(value: str) -> int:
+    try:
+        count = int(value)
+    except ValueError as error:
+        raise argparse.ArgumentTypeError(f"invalid int value: {value!r}") from error
+    if count < 1:
+        raise argparse.ArgumentTypeError("must be a positive integer")
+    return count
+
+
+def add_plot_run_arguments(parser: argparse.ArgumentParser, *, root: Path,
+                           problem_id: str, cases: int = 2,
+                           required: bool = True) -> None:
+    """Register the run selection and output options shared by every plot CLI.
+
+    Plots default to ``<root>/artifacts/plots/<problem_id>`` so they mirror the
+    ``<root>/artifacts/runs/<problem_id>`` layout used by training runners.
+    """
+    selection = parser.add_mutually_exclusive_group(required=required)
     selection.add_argument("--run", type=Path, action="append",
                            help="Canonical run directory; repeat to plot multiple runs.")
     selection.add_argument("--recent", action="store_true",
                            help="Plot the newest completed run for every model.")
     parser.add_argument("--runs-root", type=Path, default=root / "artifacts" / "runs",
                         help="Root containing problem/model/run artifact directories.")
+    parser.add_argument("--output-dir", type=Path,
+                        default=root / "artifacts" / "plots" / problem_id,
+                        help="Directory for plots (default: artifacts/plots/<problem_id>).")
+    parser.add_argument("--cases", type=_positive_int, default=cases,
+                        help="Number of test cases to plot.")
 
 
 def _timestamp(manifest: dict) -> datetime:

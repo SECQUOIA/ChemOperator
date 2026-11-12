@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -119,7 +120,7 @@ def test_q2d_operator_runs_compare_and_reload(train_cli, tmp_path, monkeypatch):
         assert (tmp_path / "plots" / module.MODEL_ID / "smoke" / "case_00.png").is_file()
 
 
-def test_q2d_fno_benchmarks_and_portable_plotting(train_cli, data_dir, tmp_path, monkeypatch):
+def test_q2d_fno_benchmarks_and_portable_plotting(train_cli, data_dir, tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(fno, "LATENCY_WARMUPS", 0)
     monkeypatch.setattr(fno, "LATENCY_REPEATS", 1)
     run_path = train_cli(*CONFIGS[0])
@@ -132,9 +133,17 @@ def test_q2d_fno_benchmarks_and_portable_plotting(train_cli, data_dir, tmp_path,
     # Plotting must continue working when datasets are inaccessible.
     data_dir.rename(tmp_path / "hidden-data")
     monkeypatch.setattr("sys.argv", ["plot.py", "--run", str(run_path), "--output-dir", str(tmp_path / "plots")])
+    capsys.readouterr()
     plot.main()
-    assert (tmp_path / "plots" / "fine_superresolution.png").is_file()
-    assert (tmp_path / "plots" / "break_even_speedup_map.png").is_file()
+    lines = capsys.readouterr().out.splitlines()
+    assert lines.count("Plots written to:") == 1
+    reported = [Path(line) for line in lines[lines.index("Plots written to:") + 1:]]
+    generated = set((tmp_path / "plots").rglob("*.png"))
+    assert len(reported) == len(generated)
+    assert set(reported) == generated
+    run_plots = tmp_path / "plots" / fno.MODEL_ID / run_path.name
+    assert (run_plots / "fine_superresolution.png").is_file()
+    assert (run_plots / "break_even_speedup_map.png").is_file()
 
 
 def test_q2d_benchmark_failure_is_recorded(train_cli, data_dir, tmp_path):
