@@ -266,19 +266,6 @@ class DeepONetTrainer:
     def save_checkpoint(self, path: str | Path) -> Path:
         if self.model is None or self.coordinate_scaler is None or self._architecture is None:
             raise RuntimeError("Fit or load a DeepONet before saving a checkpoint.")
-        pod_state = None
-        if self.pod is not None:
-            pod_state = {
-                "mean": torch.as_tensor(self.pod.mean),
-                "basis": torch.as_tensor(self.pod.basis),
-                "explained_variance_ratio": torch.as_tensor(
-                    self.pod.explained_variance_ratio
-                ),
-                "cumulative_explained_variance": (
-                    self.pod.cumulative_explained_variance
-                ),
-                "output_shape": list(self.pod.output_shape),
-            }
         payload = {
             "checkpoint_version": self.CHECKPOINT_VERSION,
             "trainer": "deeponet",
@@ -288,7 +275,7 @@ class DeepONetTrainer:
                 "minimum": torch.as_tensor(self.coordinate_scaler.minimum),
                 "span": torch.as_tensor(self.coordinate_scaler.span),
             },
-            "pod": pod_state,
+            "pod": self.pod.state_dict() if self.pod is not None else None,
             "metadata": self.checkpoint_metadata,
             "state_dict": _cpu_state_dict(self.model),
         }
@@ -302,7 +289,8 @@ class DeepONetTrainer:
             minimum=_numpy(scaler["minimum"]),
             span=_numpy(scaler["span"]),
         )
-        self.pod = _pod_from_state(payload.get("pod"))
+        state = payload.get("pod")
+        self.pod = PODTransform.from_state_dict(state) if state is not None else None
         self.checkpoint_metadata = dict(payload.get("metadata", {}))
         self._architecture = {
             name: int(value) for name, value in payload["architecture"].items()
@@ -324,7 +312,8 @@ class DeepONetTrainer:
             raise ValueError("Unsupported DeepONet checkpoint version.")
         config = DeepONetTrainingConfig.from_dict(payload["config"])
         architecture = payload["architecture"]
-        pod = _pod_from_state(payload.get("pod"))
+        state = payload.get("pod")
+        pod = PODTransform.from_state_dict(state) if state is not None else None
         if pod is None:
             model = _network(
                 int(architecture["branch_width"]),
@@ -343,20 +332,6 @@ def _numpy(value: Any) -> np.ndarray:
     if isinstance(value, torch.Tensor):
         return value.detach().cpu().numpy()
     return np.asarray(value)
-
-
-def _pod_from_state(state: Mapping[str, Any] | None) -> PODTransform | None:
-    if state is None:
-        return None
-    return PODTransform(
-        mean=_numpy(state["mean"]),
-        basis=_numpy(state["basis"]),
-        explained_variance_ratio=_numpy(state["explained_variance_ratio"]),
-        cumulative_explained_variance=float(
-            state["cumulative_explained_variance"]
-        ),
-        output_shape=tuple(int(value) for value in state["output_shape"]),
-    )
 
 
 @dataclass(frozen=True, slots=True)

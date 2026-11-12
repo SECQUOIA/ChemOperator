@@ -52,6 +52,6 @@ lines.markersize: 3
 # savefig.bbox : tight
 # savefig.pad_inches : 0.01  # Use virtually all space when we specify figure dimensions
 
-# LaTeX packages
-text.usetex : True
+# External LaTeX rendering is opt-in; built-in mathtext works by default.
+text.usetex : False
 text.latex.preamble : \usepackage{amsmath} \usepackage{amssymb}

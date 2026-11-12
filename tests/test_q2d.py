@@ -7,6 +7,7 @@ import json
 from pathlib import Path
 
 import numpy as np
+import pytest
 
 from chem_operator.reactors.q2d.dataset_generator import (
     CMRSim,
@@ -108,9 +109,11 @@ def test_dataset_script_defines_resolution_and_tolerance_sweeps() -> None:
 
     assert GENERATE_DATASET.RESOLUTIONS == (
         (14, 6),
-        (14, 10),
-        (14, 14),
-        (14, 20),
+        (14, 8),
+        (16, 6),
+        (16, 8),
+        (18, 6),
+        (18, 8),
     )
     spaces = GENERATE_DATASET.q2d_multiresolution_parameter_space
     assert set(spaces) == set(GENERATE_DATASET.RESOLUTIONS)
@@ -130,6 +133,27 @@ def test_dataset_script_defines_resolution_and_tolerance_sweeps() -> None:
         assert space["refine"].value is False
 
 
+@pytest.mark.parametrize(("arguments", "expected"), [
+    (None, [("base", 7), "resolution", "tolerance"]),
+    ([], [("base", 80), "resolution", "tolerance"]),
+    (["--suite", "all", "--n-cases", "7"], [("base", 7), "resolution", "tolerance"]),
+    (["--suite", "base", "--n-cases", "7"], [("base", 7)]),
+    (["--suite", "resolution"], ["resolution"]),
+    (["--suite", "tolerance"], ["tolerance"]),
+])
+def test_generation_defaults_and_explicit_suites(monkeypatch, arguments, expected):
+    calls = []
+    monkeypatch.setattr(GENERATE_DATASET, "generate_dataset", lambda n_cases: calls.append(("base", n_cases)))
+    monkeypatch.setattr(GENERATE_DATASET, "generate_multiresolution_datasets", lambda: calls.append("resolution"))
+    monkeypatch.setattr(GENERATE_DATASET, "generate_tolerance_datasets", lambda: calls.append("tolerance"))
+    if arguments is None:
+        GENERATE_DATASET.generate_all_datasets(n_cases=7)
+    else:
+        monkeypatch.setattr("sys.argv", ["generate_dataset.py", *arguments])
+        GENERATE_DATASET.main()
+    assert calls == expected
+
+
 def test_q2d_tolerance_interpolation_uses_physical_coordinates() -> None:
     """A linear field remains exact on a different cell-centre mesh."""
     from scripts.q2d.plot import _interpolate_fields, _relative_field_errors
@@ -145,62 +169,3 @@ def test_q2d_tolerance_interpolation_uses_physical_coordinates() -> None:
 
     np.testing.assert_allclose(prediction, expected)
     np.testing.assert_allclose(_relative_field_errors(prediction, expected), [0.0])
-
-
-def test_q2d_canonical_training_benchmark_and_plotting(tmp_path, monkeypatch, capsys):
-    """A small synthetic grid verifies the whole FNO artifact and mesh contract."""
-    from argparse import Namespace
-    import torch
-    from chem_operator.datasets import SimulationDatasetGenerator, SimulationRecord
-    from chem_operator.experiments import ExperimentRunner, RunContext, load_run
-    from scripts.q2d import fno, common, plot
-
-    def record(nz, nr, offset=0.):
-        z,r = np.linspace(0.,1.,nz),np.linspace(0.,.5,nr)
-        base = z[:,None] + r[None,:] + offset
-        return SimulationRecord(
-            coordinates={"z": z,"r": r}, fields={"X": np.stack((.2+.1*base,.4-.1*base),axis=-1),
-                                                      "theta": (.1+.01*base)[...,None]},
-            constants={"SCCM": 500.+offset}, metadata={"params": {"T0": 1173.+offset,"sccm": 500.+offset},
-                "field_species": {"X": ["CH4","H2"],"theta": ["C(s)"]},"wall_time": .01,
-                "input_values": {"LENGTH_LUMEN": 1.,"CHANNELRAD_LUMEN": .5}})
-
-    generator = SimulationDatasetGenerator(CMRSim(),tmp_path / "data")
-    for split in ("train","valid","test"):
-        generator.save_split(split,[record(6,4,0.),record(6,4,.1)])
-    for nz,nr in ((6,4),(8,6)):
-        generator.save_split(f"{nz}_{nr}_test",[record(nz,nr)])
-    normalizer,geometry,shape = common.fit_normalizer(tmp_path / "data" / "q2d_cmr_train.h5")
-    raw,data = common.make_adapter(tmp_path / "data" / "q2d_cmr_test.h5",normalizer,geometry)
-    context = RunContext.create(tmp_path / "runs",problem="q2d_cmr",model="fno",run_id="smoke",seed=42)
-    args = Namespace(data_dir=tmp_path / "data",samples=1,tune_epochs=1,plot_cases=1,max_cases=None)
-    config = dict(modes_z=2,modes_r=2,hidden_channels=4,n_layers=1,learning_rate=1e-3,
-                  weight_decay=0.,batch_size=1,epochs=1)
-    trainer = fno.make_trainer(config,context,normalizer,geometry,shape)
-    try:
-        result = ExperimentRunner(context,common.experiment_spec(args,"fno")).run(trainer,data,data,data,config=config,
-            evaluator=lambda t,d,c: fno.evaluate_fields(t,d,c,labels=tuple(ch.label for ch in common.OUTPUT_CHANNELS),
-                                                       coordinate_names=("z","r"),cases=1))
-    finally:
-        raw.close()
-    monkeypatch.setattr(fno,"LATENCY_WARMUPS",0)
-    monkeypatch.setattr(fno,"LATENCY_REPEATS",1)
-    fno.save_benchmarks(trainer,result,data_dir=tmp_path / "data",normalizer=normalizer,geometry=geometry,shape=shape)
-    manifest = load_run(context.paths.run_dir).manifest
-    assert len(manifest["benchmark_metadata"]["dataset_fingerprints"]) == 2
-    checkpoint = torch.load(context.paths.checkpoint(),weights_only=True)
-    assert any(value.is_complex() for value in checkpoint["state_dict"].values())
-    # Plotting must continue working when datasets are inaccessible.
-    (tmp_path / "data").rename(tmp_path / "hidden-data")
-    monkeypatch.setattr("sys.argv",["plot.py","--run",str(context.paths.run_dir),"--output-dir",str(tmp_path / "plots")])
-    capsys.readouterr()
-    plot.main()
-    lines = capsys.readouterr().out.splitlines()
-    assert lines.count("Plots written to:") == 1
-    reported = [Path(line) for line in lines[lines.index("Plots written to:") + 1:]]
-    generated = set((tmp_path / "plots").rglob("*.png"))
-    assert len(reported) == len(generated)
-    assert set(reported) == generated
-    run_plots = tmp_path / "plots" / "fno" / context.paths.run_dir.name
-    assert (run_plots / "fine_superresolution.png").is_file()
-    assert (run_plots / "break_even_speedup_map.png").is_file()

@@ -1,4 +1,4 @@
-"""Plot the CSTR training-set CO histories on a logarithmic time axis."""
+"""Plot saved CSTR runs, with optional training-set CO diagnostics."""
 
 from __future__ import annotations
 
@@ -19,12 +19,11 @@ from chem_operator.plotting import (
     select_plot_runs, use_publication_style,
 )
 
-use_publication_style()
 PATHS = ExamplePaths.from_script(__file__)
+PROBLEM_ID = "cstr_non_isothermal"
 MECHANISM = "n-heptane-NUIG-2016.yaml"
-PLOT_CASES = 2
 DATASET = PATHS.root / "datasets" / "cstr" / "cstr_non_isothermal_train.h5"
-OUTPUT = PATHS.example / "results" / "train_set_CO.png"
+OUTPUT = PATHS.plots / PROBLEM_ID / "diagnostics" / "train_set_CO.png"
 
 
 def plot_co_histories(dataset: Path = DATASET, output: Path = OUTPUT) -> Path:
@@ -74,15 +73,26 @@ def plot_co_histories(dataset: Path = DATASET, output: Path = OUTPUT) -> Path:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    add_plot_run_arguments(parser, root=PATHS.root)
-    parser.add_argument(
-        "--output-dir",
-        type=Path,
-        default=PATHS.example / "results" / "deeponet_comparison",
-    )
-    parser.add_argument("--cases", type=int, default=PLOT_CASES)
+    add_plot_run_arguments(parser, root=PATHS.root, problem_id=PROBLEM_ID,
+                           cases=3, required=False)
+    parser.add_argument("--co-histories", action="store_true",
+                        help="Also plot raw training-set CO histories; may be used without --run.")
+    parser.add_argument("--dataset", type=Path, default=DATASET,
+                        help="Training archive for --co-histories.")
+    parser.add_argument("--co-output", type=Path, default=OUTPUT,
+                        help="Output image for --co-histories.")
+    parser.add_argument("--use-tex", action="store_true",
+                        help="Render text with an external LaTeX installation.")
     args = parser.parse_args()
-    runs = select_plot_runs(args, parser, problem_id="cstr_non_isothermal")
+    if not (args.run or args.recent or args.co_histories):
+        parser.error("Provide --run, --recent, or --co-histories.")
+    use_publication_style(use_tex=args.use_tex)
+    if args.co_histories:
+        path = plot_co_histories(args.dataset, args.co_output)
+        print(f"Plot written to {path}")
+    if not (args.run or args.recent):
+        return
+    runs = select_plot_runs(args, parser, problem_id=PROBLEM_ID)
     paths = plot_selected_runs(runs, args.output_dir, cases=args.cases)
     print_plot_paths(paths)
 

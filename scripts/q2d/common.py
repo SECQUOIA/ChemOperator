@@ -8,6 +8,7 @@ import argparse
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass, replace
+from functools import partial
 import math
 import os
 import re
@@ -18,7 +19,9 @@ from neuralop.losses import LpLoss
 from torch.utils.data import DataLoader, Dataset
 from chem_operator.datasets import ChemOperatorDataset
 from chem_operator.example_paths import ExamplePaths
-from chem_operator.models import FNOAdapter, FNOChannel, PODTransform, fit_fno_zscore_normalizer
+from chem_operator.models import (
+    FNOAdapter, FNOChannel, PODTransform, fit_fno_zscore_normalizer, relative_l2_loss,
+)
 from chem_operator.normalization import ZScoreNormalizer
 from chem_operator.experiments import (
     DeepONetTrainer,
@@ -228,39 +231,6 @@ def fit_normalizer(
     return normalizer, geometry, training_shape
 
 
-def normalizer_state(
-    normalizer: ZScoreNormalizer,
-) -> dict[str, dict[str, torch.Tensor]]:
-    """Return a CPU-only serializable normalizer state."""
-    return {
-        "mean": {
-            name: value.detach().cpu() for name, value in normalizer.means.items()
-        },
-        "std": {
-            name: value.detach().cpu() for name, value in normalizer.stds.items()
-        },
-        "mean_delta": {
-            name: value.detach().cpu()
-            for name, value in normalizer.delta_means.items()
-        },
-        "std_delta": {
-            name: value.detach().cpu()
-            for name, value in normalizer.delta_stds.items()
-        },
-    }
-
-
-def normalizer_from_state(
-    state: Mapping[str, Mapping[str, torch.Tensor]],
-) -> ZScoreNormalizer:
-    """Reconstruct the configured ChemOperator normalizer."""
-    return ZScoreNormalizer(
-        state,
-        variable_field_order=tuple(spec.label for spec in OUTPUT_CHANNELS),
-        constant_field_order=tuple(spec.label for spec in INPUT_CHANNELS),
-    )
-
-
 def make_adapter(
     path: Path,
     normalizer: ZScoreNormalizer,
@@ -411,19 +381,14 @@ ModelFactory = Callable[[Mapping[str, Any], torch.device], torch.nn.Module]
 
 
 def relative_l2_per_sample(prediction: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
-    difference = (prediction - target).flatten(start_dim=1)
-    reference = target.flatten(start_dim=1)
-    return torch.linalg.vector_norm(difference, dim=1) / torch.linalg.vector_norm(
-        reference, dim=1
-    ).clamp_min(RELATIVE_L2_EPS)
+    return relative_l2_loss(prediction, target, reduction="none", eps=RELATIVE_L2_EPS)
 
 
 def relative_l2_per_field(prediction: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
-    difference = (prediction - target).flatten(start_dim=2)
-    reference = target.flatten(start_dim=2)
-    return torch.linalg.vector_norm(difference, dim=2) / torch.linalg.vector_norm(
-        reference, dim=2
-    ).clamp_min(RELATIVE_L2_EPS)
+    return relative_l2_loss(
+        prediction.flatten(0, 1), target.flatten(0, 1),
+        reduction="none", eps=RELATIVE_L2_EPS,
+    ).reshape(target.shape[:2])
 
 
 def evaluate(
@@ -493,8 +458,15 @@ def make_trainer(
     )
 
 
-def run_model(args: Any, model_id: str, model_factory: ModelFactory, search_space: Mapping[str, Any]) -> None:
-    """Run Q2D tuning, final training, and test evaluation."""
+def run_model(
+    args: Any, model_id: str, model_factory: ModelFactory, search_space: Mapping[str, Any],
+    *, after_run: Callable[..., None] | None = None,
+) -> None:
+    """Run Q2D tuning, final training, and test evaluation.
+
+    ``after_run`` receives the trainer and result, plus the prepared data
+    directory, normalizer, geometry, and training shape as keyword arguments.
+    """
     normalizer, geometry, shape = fit_normalizer(args.data_dir / f"{FILE_STEM}_train.h5")
 
     def evaluate_run(trainer: OperatorTrainer, data: FNOAdapter, context: Any):
@@ -526,6 +498,10 @@ def run_model(args: Any, model_id: str, model_factory: ModelFactory, search_spac
         search_space,
         evaluate_run,
         selection_metric="data_loss",
+        after_run=partial(
+            after_run, data_dir=args.data_dir, normalizer=normalizer,
+            geometry=geometry, shape=shape,
+        ) if after_run is not None else None,
     )
 
 
@@ -777,7 +753,7 @@ def run_deeponet(
     return context
 
 
-__all__ = ['PATHS', 'FILE_STEM', 'SEED', 'METRIC', 'TUNE_SAMPLES', 'TUNE_EPOCHS', 'FINAL_EPOCHS', 'EVALUATION_BATCH_SIZE', 'CPUS_PER_TRIAL', 'GPUS_PER_TRIAL', 'MAX_CONCURRENT_TRIALS', 'LATENCY_WARMUPS', 'LATENCY_REPEATS', 'RELATIVE_L2_EPS', 'AMORTIZED_EVALUATION_COUNTS', 'REPRESENTATIVE_RESOLUTION_COUNT', 'MESH_FILE_PATTERN', 'INPUT_CHANNELS', 'OUTPUT_CHANNELS', 'MeshFile', 'raw_dataset', 'adapter_spatial_shape', 'fit_normalizer', 'normalizer_state', 'normalizer_from_state', 'make_adapter', 'discover_mesh_files', 'find_superresolution_pair', 'PROBLEM_ID', 'experiment_spec', 'parse_args', 'ModelFactory', 'relative_l2_per_sample', 'relative_l2_per_field', 'evaluate', 'make_trainer', 'run_model']
+__all__ = ['PATHS', 'FILE_STEM', 'SEED', 'METRIC', 'TUNE_SAMPLES', 'TUNE_EPOCHS', 'FINAL_EPOCHS', 'EVALUATION_BATCH_SIZE', 'CPUS_PER_TRIAL', 'GPUS_PER_TRIAL', 'MAX_CONCURRENT_TRIALS', 'LATENCY_WARMUPS', 'LATENCY_REPEATS', 'RELATIVE_L2_EPS', 'AMORTIZED_EVALUATION_COUNTS', 'REPRESENTATIVE_RESOLUTION_COUNT', 'MESH_FILE_PATTERN', 'INPUT_CHANNELS', 'OUTPUT_CHANNELS', 'MeshFile', 'raw_dataset', 'adapter_spatial_shape', 'fit_normalizer', 'make_adapter', 'discover_mesh_files', 'find_superresolution_pair', 'PROBLEM_ID', 'experiment_spec', 'parse_args', 'ModelFactory', 'relative_l2_per_sample', 'relative_l2_per_field', 'evaluate', 'make_trainer', 'run_model']
 __all__ += [
     "Q2DDeepONetAdapter", "deeponet_data", "prepare_deeponet_data",
     "deeponet_search_space", "evaluate_q2d_deeponet", "run_deeponet",

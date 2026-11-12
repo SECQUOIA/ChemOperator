@@ -32,8 +32,6 @@ from scripts.pipe_flow_transient.common import (
     dataset_pde_name,
     make_adapter,
     fit_normalizer,
-    normalizer_state,
-    normalizer_from_state,
     adapter_radial_spacing,
     training_pde_name,
     PROBLEM_ID,
@@ -182,20 +180,6 @@ def physics_losses(  # pylint: disable=too-many-arguments,too-many-locals
         initial_loss + wall_loss + center_gradient.square().mean()
     ) / 3.0
     return physics_loss, constraint_loss
-
-
-def relative_l2_batch(  # pylint: disable=not-callable
-    prediction: torch.Tensor,
-    target: torch.Tensor,
-) -> torch.Tensor:
-    """Return the mean per-case relative L2 error."""
-    error = torch.linalg.vector_norm(
-        (prediction - target).flatten(start_dim=1), dim=1
-    )
-    scale = torch.linalg.vector_norm(
-        target.flatten(start_dim=1), dim=1
-    ).clamp_min(1.0e-12)
-    return (error / scale).mean()
 
 
 PHYSICS_WEIGHT_KEYS = ("physics_weight", "constraint_weight")

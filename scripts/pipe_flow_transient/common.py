@@ -27,7 +27,7 @@ PATHS = ExamplePaths.from_script(__file__, dataset="pipe_flow_transient")
 FIELD_NAMES = ("velocity",)
 MODEL_CONSTANT_NAMES = (
     "radius",
-    # "length",
+    "length",
     "dynamic_viscosity",
     "pressure_drop",
 )
@@ -176,39 +176,6 @@ def fit_normalizer(data_dir: Path) -> ZScoreNormalizer:
         )
     finally:
         dataset.close()
-
-
-def normalizer_state(
-    normalizer: ZScoreNormalizer,
-) -> dict[str, dict[str, torch.Tensor]]:
-    """Return a CPU-only serializable normalizer state."""
-    return {
-        "mean": {
-            name: value.detach().cpu() for name, value in normalizer.means.items()
-        },
-        "std": {
-            name: value.detach().cpu() for name, value in normalizer.stds.items()
-        },
-        "mean_delta": {
-            name: value.detach().cpu()
-            for name, value in normalizer.delta_means.items()
-        },
-        "std_delta": {
-            name: value.detach().cpu()
-            for name, value in normalizer.delta_stds.items()
-        },
-    }
-
-
-def normalizer_from_state(
-    state: Mapping[str, Mapping[str, torch.Tensor]],
-) -> ZScoreNormalizer:
-    """Reconstruct the normalizer stored with a checkpoint."""
-    return ZScoreNormalizer(
-        state,
-        variable_field_order=FIELD_NAMES,
-        constant_field_order=MODEL_CONSTANT_NAMES,
-    )
 
 
 def adapter_radial_spacing(dataset: PhysicsFNOAdapter) -> float:
@@ -536,4 +503,4 @@ def run_rollout_experiment(args, normalizer: ZScoreNormalizer, n_radial: int,
         ),
     )
 
-__all__ = ['PATHS', 'FIELD_NAMES', 'MODEL_CONSTANT_NAMES', 'PHYSICS_CONSTANT_NAMES', 'INPUT_CHANNELS', 'OUTPUT_CHANNELS', 'FILE_STEM', 'METRIC', 'SEED', 'PDE_REGISTRY', 'MAX_TRAIN_TRAJECTORIES', 'CONSTANT_NAMES', 'PhysicsFNOAdapter', 'raw_dataset', 'dataset_pde_name', 'make_adapter', 'fit_normalizer', 'normalizer_state', 'normalizer_from_state', 'adapter_radial_spacing', 'training_pde_name', 'PROBLEM_ID', 'experiment_spec', 'parse_args']
+__all__ = ['PATHS', 'FIELD_NAMES', 'MODEL_CONSTANT_NAMES', 'PHYSICS_CONSTANT_NAMES', 'INPUT_CHANNELS', 'OUTPUT_CHANNELS', 'FILE_STEM', 'METRIC', 'SEED', 'PDE_REGISTRY', 'MAX_TRAIN_TRAJECTORIES', 'CONSTANT_NAMES', 'PhysicsFNOAdapter', 'raw_dataset', 'dataset_pde_name', 'make_adapter', 'fit_normalizer', 'adapter_radial_spacing', 'training_pde_name', 'PROBLEM_ID', 'experiment_spec', 'parse_args']

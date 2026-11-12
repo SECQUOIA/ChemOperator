@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import csv
+import math
 from pathlib import Path
 
 import numpy as np
@@ -16,9 +17,12 @@ from chem_operator.experiments import (
     build_manifest,
 )
 from chem_operator.plotting import (
+    HistoryPanel,
     plot_deeponet_artifacts,
     plot_deeponet_run_set,
     plot_deeponet_runs,
+    plot_experiment_histories,
+    use_publication_style,
 )
 
 
@@ -203,4 +207,104 @@ def test_plot_deeponet_runs_rejects_mismatched_references(tmp_path: Path) -> Non
             selected_labels=("T",),
             coordinate_label="Time [s]",
             output_dir=tmp_path / "plots",
+        )
+
+
+def test_publication_style_saves_without_latex(tmp_path, monkeypatch):
+    import matplotlib.pyplot as plt
+
+    monkeypatch.setenv("PATH", str(tmp_path))
+    with plt.rc_context():
+        use_publication_style()
+        figure, axis = plt.subplots()
+        axis.plot([0., 1.], [0., 1.])
+        axis.set_xlabel(r"Time $t$ [s]")
+        try:
+            figure.savefig(tmp_path / "publication.png")
+        finally:
+            plt.close(figure)
+    assert (tmp_path / "publication.png").stat().st_size > 0
+
+
+def test_cstr_comparison_uses_mean_per_case_errors(tmp_path, monkeypatch):
+    from matplotlib.figure import Figure
+
+    runs = [write_run(tmp_path, model) for model in ("deeponet", "pod_deeponet", "fno")]
+    for run in runs:
+        history = [MetricEvent(1, "val", "relative_l2", 0.55)]
+        if run.parent.name == "fno":
+            history = [MetricEvent(1, "val", "relative_l2", math.sqrt(2 / 101)),
+                       MetricEvent(1, "val", "data_loss", 0.55)]
+        ArtifactStore(run).write_history(history)
+    curves = []
+    original_save = Figure.savefig
+
+    def capture(figure, path, **kwargs):
+        if Path(path).name == "training_validation_loss.png":
+            curves.extend(line.get_ydata() for line in figure.axes[0].lines)
+        return original_save(figure, path, **kwargs)
+
+    monkeypatch.setattr(Figure, "savefig", capture)
+    plot_deeponet_run_set(runs, selected_labels=("T",), coordinate_label="Time [s]", output_dir=tmp_path / "plots")
+    assert len(curves) == 3
+    np.testing.assert_allclose(curves, [[0.55], [0.55], [0.55]])
+
+
+def test_cstr_cli_plots_saved_runs_without_raw_datasets(tmp_path, monkeypatch):
+    from scripts.cstr import plot
+    import matplotlib.pyplot as plt
+
+    run = write_run(tmp_path, "deeponet")
+    fuel = plot.ct.Solution(plot.MECHANISM).species_index("NC7H16")
+    reference = np.ones((1, 3, 3))
+    ArtifactStore(run).write_reconstructions(
+        case_ids=np.array([0]), coordinates=np.array([[0., 0.5, 1.]]),
+        reference=reference, prediction=reference * 0.9,
+        labels=np.array(["T", "P", f"X[{fuel}]"]),
+    )
+    monkeypatch.setattr(plot, "plot_co_histories", lambda *args, **kwargs: pytest.fail("Raw training data must be optional"))
+    monkeypatch.setenv("PATH", str(tmp_path))
+    monkeypatch.setattr("sys.argv", ["plot.py", "--run", str(run), "--output-dir", str(tmp_path / "plots")])
+    with plt.rc_context():
+        plot.main()
+    assert (tmp_path / "plots" / "training_validation_loss.png").is_file()
+    assert (tmp_path / "plots" / "test_reconstructions.png").is_file()
+
+
+def test_cstr_co_diagnostic_can_run_explicitly_without_run(tmp_path, monkeypatch):
+    import h5py
+    import matplotlib.pyplot as plt
+    from scripts.cstr import plot
+
+    mechanism = plot.ct.Solution(plot.MECHANISM)
+    values = np.zeros((3, mechanism.n_species))
+    values[:, mechanism.species_index("CO")] = [0., 0.1, 0.2]
+    dataset = tmp_path / "training.h5"
+    with h5py.File(dataset, "w") as archive:
+        case = archive.create_group("cases/case_0")
+        case.create_dataset("coordinates/t", data=[0., 0.1, 1.])
+        case.create_dataset("fields/X", data=values)
+    output = tmp_path / "co.png"
+    monkeypatch.setattr("sys.argv", ["plot.py", "--co-histories", "--dataset", str(dataset), "--co-output", str(output)])
+    with plt.rc_context():
+        plot.main()
+    assert output.stat().st_size > 0
+
+
+def test_publication_tex_requires_explicit_opt_in():
+    import matplotlib.pyplot as plt
+
+    with plt.rc_context():
+        use_publication_style(use_tex=True)
+        assert plt.rcParams["text.usetex"]
+        use_publication_style()
+        assert not plt.rcParams["text.usetex"]
+
+
+def test_model_metric_selection_cannot_overlay_raw_objectives(tmp_path):
+    runs = [write_run(tmp_path, model) for model in ("deeponet", "fno")]
+    with pytest.raises(ValueError, match="Raw objectives"):
+        plot_experiment_histories(
+            runs, output=tmp_path / "invalid.png",
+            panels=(HistoryPanel(("relative_l2",), "Error", metrics_by_model={"fno": ("objective",)}),),
         )

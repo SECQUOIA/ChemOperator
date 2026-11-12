@@ -31,6 +31,7 @@ from chem_operator.experiments import (
     WorkflowStages,
     run_context_from_namespace,
 )
+from chem_operator.models import relative_l2_loss
 from chem_operator.normalization import ZScoreNormalizer
 
 from scripts.cstr.common import (
@@ -169,9 +170,7 @@ def search_space() -> dict[str, Any]:
 def relative_l2(
     prediction: torch.Tensor, target: torch.Tensor, _: Mapping[str, Any]
 ) -> torch.Tensor:
-    error = torch.linalg.vector_norm((prediction - target).flatten(1), dim=1)
-    reference = torch.linalg.vector_norm(target.flatten(1), dim=1)
-    return (error / reference.clamp_min(1e-8)).mean()
+    return relative_l2_loss(prediction, target, eps=1e-8)
 
 
 def make_trainer(
