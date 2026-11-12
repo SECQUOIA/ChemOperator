@@ -466,14 +466,14 @@ information.
 
 The scripts are research experiments rather than a unified command-line
 interface. Direct and POD-DeepONets have separate entrypoints and write
-canonical run directories; pipe-flow's physics-informed study uses Hydra.
+canonical run directories.
 
 | Script | Workflow |
 | --- | --- |
 | `scripts/{cstr,packed_bed_1d,pfr,pipe_flow}/deeponet.py` | Tune and train one direct DeepONet |
 | `scripts/{cstr,packed_bed_1d,pfr,pipe_flow}/pod_deeponet.py` | Tune and train one POD-DeepONet |
 | `scripts/{cstr,packed_bed_1d,pfr,pipe_flow}/plot.py` | Compare explicit canonical direct and POD run directories |
-| [`scripts/pipe_flow/physics_deeponet.py`](scripts/pipe_flow/physics_deeponet.py) | Hydra-configured pipe-flow data/physics-loss study |
+| [`scripts/pipe_flow/physics_deeponet.py`](scripts/pipe_flow/physics_deeponet.py) | PhysicsNeMo DeepONet data/physics-loss study |
 | [`scripts/pipe_flow_transient/transient_fno.py`](scripts/pipe_flow_transient/transient_fno.py) | Neuraloperator FNO tuning, training, evaluation, checkpointing, and plots |
 | [`scripts/pipe_flow_transient/transient_nemo_fno.py`](scripts/pipe_flow_transient/transient_nemo_fno.py) | PhysicsNeMo transient pipe-flow FNO workflow |
 | [`scripts/pfr_heat/fno.py`](scripts/pfr_heat/fno.py) | Coupled PhysicsNeMo reactor/wall FNO workflow |
@@ -497,7 +497,7 @@ uv run scripts/cstr/plot.py \
   --run artifacts/runs/cstr_non_isothermal/deeponet/<run-id> \
   --run artifacts/runs/cstr_non_isothermal/pod_deeponet/<run-id>
 uv run scripts/pipe_flow_transient/transient_fno.py
-uv run scripts/pipe_flow/physics_deeponet.py final.epochs=5
+uv run scripts/pipe_flow/physics_deeponet.py --variant both
 uv run scripts/pfr_heat/deeponet_fno.py
 uv run scripts/q2d/validate_solver.py
 uv run scripts/q2d/tfno.py

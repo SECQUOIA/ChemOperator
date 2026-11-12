@@ -244,31 +244,27 @@ python scripts/pipe_flow/physics_deeponet.py --variant both
 python scripts/pipe_flow/physics_deeponet.py --variant data
 python scripts/pipe_flow/physics_deeponet.py --variant physics
 
-# Use another experiment configuration.
-python scripts/pipe_flow/physics_deeponet.py \
-  --config path/to/physics_deeponet.yaml \
-  --variant both --physics-samples 4
+# Shrink the physics-weight budget of the sequential comparison.
+python scripts/pipe_flow/physics_deeponet.py --variant both --physics-samples 4
 ```
 
 Its additional options are:
 
 | Option | Default | Purpose |
 | --- | --- | --- |
-| `--config PATH` | `scripts/pipe_flow/physics_deeponet.yaml` | Architecture choices, search ranges, seed, and physics-weight settings. |
 | `--variant {both,data,physics}` | `both` | Select the data-only baseline, physics-informed model, or sequential comparison. |
-| `--physics-samples N` | YAML budget | Override physics-weight trials when running the physics variant. |
+| `--physics-samples N` | `5` | Physics-weight trials for the physics run when `--variant both`. |
 
-The YAML does not replace the Ray search space: the script converts its
-`search` values into `tune.choice` and `tune.loguniform` distributions. With
-`--variant both`, the physics run reuses the best data-only architecture and
-tunes the physics-loss weight.
+The search space, seed, and physics-weight range are module constants in the
+script, as in `fno.py`. With `--variant both`, the physics run reuses the best
+data-only architecture and tunes only the physics-loss weight.
 
 Plot one or more canonical physics/operator runs:
 
 ```bash
 python scripts/pipe_flow/plot.py \
   --run artifacts/runs/pipe_flow/physics_deeponet_data/<run-id> \
-  --run artifacts/runs/pipe_flow/physics_deeponet/<run-id> \
+  --run artifacts/runs/pipe_flow/physics_deeponet_physics/<run-id> \
   --cases 3
 ```
 
