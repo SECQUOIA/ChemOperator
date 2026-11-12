@@ -488,22 +488,6 @@ canonical run directories.
 | [`scripts/q2d/pod_deeponet.py`](scripts/q2d/pod_deeponet.py) | Fixed-mesh Q2D POD-DeepONet with a training-only joint field basis |
 | [`scripts/diagnostics/processing.py`](scripts/diagnostics/processing.py) | Visual smoke test for preprocessing and inverse reconstruction |
 
-Examples:
-
-```bash
-uv run scripts/cstr/deeponet.py
-uv run scripts/cstr/pod_deeponet.py
-uv run scripts/cstr/plot.py \
-  --run artifacts/runs/cstr_non_isothermal/deeponet/<run-id> \
-  --run artifacts/runs/cstr_non_isothermal/pod_deeponet/<run-id>
-uv run scripts/pipe_flow_transient/transient_fno.py
-uv run scripts/pipe_flow/physics_deeponet.py --variant both
-uv run scripts/pfr_heat/deeponet_fno.py
-uv run scripts/q2d/validate_solver.py
-uv run scripts/q2d/tfno.py
-uv run scripts/q2d/uno.py
-```
-
 The physics-informed model entry points accept
 `--variant {data,physics,both}` and default to `physics`. This applies to
 `pipe_flow_transient/transient_nemo_fno.py`, `pipe_flow_transient/nemo_deeponet.py`,
