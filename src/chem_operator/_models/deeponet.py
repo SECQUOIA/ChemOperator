@@ -13,6 +13,7 @@ from torch.utils.data import DataLoader
 
 from .deepxde import DeepONetAdapter
 from .pod import PODTransform
+from .deepxde_backend import import_deepxde
 
 
 @dataclass(frozen=True)
@@ -85,7 +86,7 @@ def _network(
     output_width: int,
     config: DeepONetTrainingConfig,
 ):
-    import deepxde as dde
+    dde = import_deepxde()
 
     if output_width == 1:
         branch_last = config.latent_width
@@ -124,7 +125,7 @@ class _PODOnlyDeepONet(torch.nn.Module):
         config: DeepONetTrainingConfig,
     ):
         super().__init__()
-        import deepxde as dde
+        dde = import_deepxde()
 
         self.network = dde.nn.PODDeepONet(
             np.array(pod.basis, dtype=np.float32, copy=True),
