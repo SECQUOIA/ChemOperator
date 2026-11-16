@@ -66,7 +66,7 @@ def plot_co_histories(dataset: Path = DATASET, output: Path = OUTPUT) -> Path:
     axis.grid(alpha=0.2)
     figure.tight_layout()
     output.parent.mkdir(parents=True, exist_ok=True)
-    figure.savefig(output, dpi=200)
+    figure.savefig(output)
     plt.close(figure)
     return output
 

@@ -235,7 +235,7 @@ def _overlay(group: tuple[RunArtifacts, ...], destination: Path, cases: int) -> 
                 axis.legend(fontsize=8)
     fig.tight_layout()
     path = destination / "reconstruction_overlay.png"
-    fig.savefig(path, dpi=160)
+    fig.savefig(path)
     plt.close(fig)
     return path
 
