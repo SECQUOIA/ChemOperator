@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import argparse
 from contextlib import contextmanager
-import json
 import os
 from dataclasses import replace
 from pathlib import Path
@@ -18,6 +17,7 @@ import torch
 from torch.utils.data import DataLoader, Subset
 
 from .runner import ExperimentRunner, ExperimentSpec
+from .seeds import resolve_train_config, train_final
 from .types import EvaluationOutcome
 from .tuning import Tuner, TuningConfig, RayRuntimeConfig
 from .workflow import WorkflowStages, add_run_arguments, add_workflow_arguments, run_context_from_namespace
@@ -100,22 +100,24 @@ def run_operator(args, paths, spec, dataset_factory, trainer_factory, search_spa
                         (str(paths.root), str(paths.root / "src"), os.environ.get("PYTHONPATH"))))}}),
             )), None, None)
     if stages.train:
-        if tuning is not None:
-            config = dict(tuning.best_config)
-        elif args.train_config == "best":
-            config = runner.artifacts.read_best_config()
-        else:
-            config = json.loads(Path(args.train_config).read_text())
+        config, source = resolve_train_config(stages.train_config, runner, tuning=tuning)
         config["epochs"] = args.epochs
-        trainer = trainer_factory(config, context)
-        with opened_datasets(dataset_factory, ("train", "valid", "test"), args.max_cases) as data:
-            result = runner.run(trainer, data[0], data[1], data[2], config=trainer.config, evaluator=evaluator, tuning=tuning)
-        if after_run is not None:
-            try:
-                after_run(trainer, result)
-            except BaseException as error:
-                runner.artifacts.mark_failed(error)
-                raise
+
+        def train_one(run_runner, run_context, run_config):
+            trainer = trainer_factory(run_config, run_context)
+            with opened_datasets(dataset_factory, ("train", "valid", "test"), args.max_cases) as data:
+                result = run_runner.run(trainer, data[0], data[1], data[2], config=trainer.config,
+                                        evaluator=evaluator, tuning=tuning if run_runner is runner else None)
+            if after_run is not None:
+                try:
+                    after_run(trainer, result)
+                except BaseException as error:
+                    run_runner.artifacts.mark_failed(error)
+                    raise
+            return result
+
+        train_final(runner, stages, config=config, tuning=tuning, train_one=train_one,
+                    train_config_source=source)
     print(f"Run artifacts: {context.paths.run_dir}")
     return context
 

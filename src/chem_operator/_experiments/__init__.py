@@ -11,16 +11,24 @@ from .artifacts import (
     validate_manifest,
 )
 from .comparison import (
+    AggregateSeries,
     ComparisonRecord,
     ComparisonSeries,
+    MetricSummary,
     RunArtifacts,
+    aggregate_history,
+    aggregate_metrics,
     comparison_records,
+    final_metric_summaries,
     final_metrics,
     load_run,
     metric_matrix,
+    metric_summary_matrix,
     read_best_config,
     read_reconstructions,
+    seed_member_dirs,
     shared_history,
+    validate_complete_run,
     validate_model_comparison,
 )
 from .device import hardware_metadata, resolve_device, resolve_dtype, seed_worker
@@ -30,7 +38,8 @@ from .deeponet_workflow import (
 )
 from .evaluation import deeponet_training_config, evaluate_deeponet
 from .metrics import History, MetricEvent, StreamingRegressionMetrics, TimingRecorder
-from .runner import ExperimentResult, ExperimentRunner, ExperimentSpec
+from .runner import ExperimentResult, ExperimentRunner, ExperimentSpec, SeedTrainer
+from .seeds import recent_tuned_run, resolve_train_config, train_final
 from .trainers import (
     OperatorTrainer,
     DeepONetTrainer,
@@ -55,10 +64,18 @@ from .operator_workflow import parse_operator_args, operator_spec, run_operator,
 __all__ = [
     "parse_operator_args", "operator_spec", "run_operator", "evaluate_fields", "unwrap_dataset",
     "ARTIFACT_SCHEMA_VERSION",
+    "AggregateSeries",
     "ArtifactStore",
     "ArtifactValidationError",
     "ComparisonSeries",
     "ComparisonRecord",
+    "MetricSummary",
+    "aggregate_history",
+    "aggregate_metrics",
+    "final_metric_summaries",
+    "metric_summary_matrix",
+    "seed_member_dirs",
+    "validate_complete_run",
     "OperatorTrainer",
     "DeepONetTrainer",
     "DeepONetTuningSettings",
@@ -73,6 +90,7 @@ __all__ = [
     "RunContext",
     "RunPaths",
     "RayRuntimeConfig",
+    "SeedTrainer",
     "StreamingRegressionMetrics",
     "TimingRecorder",
     "Trainer",
@@ -102,11 +120,14 @@ __all__ = [
     "mse_loss_term",
     "read_best_config",
     "read_reconstructions",
+    "recent_tuned_run",
     "resolve_device",
     "resolve_dtype",
+    "resolve_train_config",
     "run_context_from_namespace",
     "seed_worker",
     "shared_history",
+    "train_final",
     "validate_model_comparison",
     "validate_manifest",
 ]
