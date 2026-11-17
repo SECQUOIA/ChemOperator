@@ -129,6 +129,8 @@ def train_final(
     if stages.seeds is None:
         # Flat layout: the root context seeds training, so a config loaded
         # from elsewhere (or tuned under --tune-seed) must follow it.
+        if tuning is None:
+            runner.record_train_config_source(train_config_source)
         return (train_one(runner, runner.context, dict(config, seed=runner.context.seed)),)
     return runner.run_seeds(
         stages.seeds,

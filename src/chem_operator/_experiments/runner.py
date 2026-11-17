@@ -14,6 +14,34 @@ from .types import EvaluationOutcome, RunContext, Trainer, TrainingOutcome
 
 Evaluator = Callable[[Trainer, Any, RunContext], EvaluationOutcome]
 
+_OWN_RUN_SOURCES = frozenset({"tuning", "best"})
+
+
+def source_tuning_seconds(train_config_source: str) -> float:
+    """Return the tuning time behind hyperparameters loaded from another run.
+
+    ``train_config_source`` is the label from ``resolve_train_config``. Only a
+    run directory carries a tuning time; this run's own tuning (``tuning``,
+    ``best``, ``best:<run>``) and JSON files give 0. A source that was itself
+    trained from a saved configuration is followed back to the run that tuned.
+    """
+    seen: set[Path] = set()
+    source = train_config_source
+    while source and source not in _OWN_RUN_SOURCES and not source.startswith("best:"):
+        manifest_path = Path(source) / "manifest.json"
+        if not manifest_path.is_file():
+            break
+        resolved = manifest_path.resolve()
+        if resolved in seen:
+            raise ValueError(f"train_config_source cycle through {source}")
+        seen.add(resolved)
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        seconds = float((manifest.get("timings") or {}).get("tuning_seconds") or 0.0)
+        if seconds:
+            return seconds
+        source = str((manifest.get("provenance") or {}).get("train_config_source") or "")
+    return 0.0
+
 
 @dataclass(frozen=True, slots=True)
 class ExperimentSpec:
@@ -132,6 +160,29 @@ class ExperimentRunner:
             self.artifacts.mark_failed(error)
             raise
 
+    def record_train_config_source(self, train_config_source: str) -> None:
+        """Record where a tuning-free run's hyperparameters came from.
+
+        The run inherits the source run's tuning time unless it already has
+        one, so its manifest reports the full cost of its hyperparameters.
+        """
+        self.start()
+        try:
+            manifest = self.artifacts.read_manifest()
+            self.artifacts.update_manifest(
+                provenance={
+                    **manifest.get("provenance", {}),
+                    "train_config_source": train_config_source,
+                },
+            )
+            if not manifest["timings"].get("tuning_seconds"):
+                self.artifacts.update_manifest(
+                    timings={"tuning_seconds": source_tuning_seconds(train_config_source)}
+                )
+        except BaseException as error:
+            self.artifacts.mark_failed(error)
+            raise
+
     def run(
         self,
         trainer: Trainer,
@@ -218,7 +269,9 @@ class ExperimentRunner:
             if tuning is None:
                 if not self.artifacts.paths.tuning_trials.is_file():
                     self.artifacts.write_tuning_trials(())
-                tuning_seconds = float(manifest["timings"].get("tuning_seconds") or 0.0)
+                tuning_seconds = float(
+                    manifest["timings"].get("tuning_seconds") or 0.0
+                ) or source_tuning_seconds(train_config_source)
             else:
                 self.artifacts.write_tuning_trials(tuning.trials)
                 tuning_seconds = tuning.tuning_seconds

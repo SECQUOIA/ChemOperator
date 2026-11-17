@@ -498,3 +498,37 @@ def test_train_config_recent_picks_newest_tuned_run(tmp_path: Path) -> None:
     train_final(target_runner, WorkflowStages(tune=False, train_config="recent", seeds=(1, 2)),
                 config=config, tuning=None, train_one=train_one, train_config_source=source)
     assert recent_tuned_run(model_dir) == newest  # the seed run has no trials
+
+
+def test_runs_trained_from_another_run_inherit_its_tuning_time(tmp_path: Path) -> None:
+    def context(run_id: str) -> RunContext:
+        return RunContext.create(tmp_path, problem="synthetic", model="fno", run_id=run_id, seed=1, device="cpu")
+
+    tuned = context("tuned")
+    tuned_runner = ExperimentRunner(tuned, spec(tmp_path))
+    train_final(tuned_runner, WorkflowStages(tune=False), config={"seed": 1}, tuning=None, train_one=train_one)
+    tuned_runner.artifacts.update_manifest(timings={"tuning_seconds": 12.5})
+    source = str(tuned.paths.run_dir)
+
+    flat = ExperimentRunner(context("flat"), spec(tmp_path))
+    train_final(flat, WorkflowStages(tune=False), config={"seed": 1}, tuning=None,
+                train_one=train_one, train_config_source=source)
+    manifest = flat.artifacts.read_manifest()
+    assert manifest["timings"]["tuning_seconds"] == pytest.approx(12.5)
+    assert manifest["provenance"]["train_config_source"] == source
+
+    nested = ExperimentRunner(context("nested"), spec(tmp_path))
+    train_final(nested, WorkflowStages(tune=False, seeds=(1, 2)), config={"seed": 1}, tuning=None,
+                train_one=train_one, train_config_source=source)
+    assert nested.artifacts.read_manifest()["timings"]["tuning_seconds"] == pytest.approx(12.5)
+
+    # A chain through a run that predates inheritance reaches the tuned run.
+    flat.artifacts.update_manifest(timings={"tuning_seconds": 0.0})
+    chained = ExperimentRunner(context("chained"), spec(tmp_path))
+    train_final(chained, WorkflowStages(tune=False), config={"seed": 1}, tuning=None,
+                train_one=train_one, train_config_source=str(flat.context.paths.run_dir))
+    assert chained.artifacts.read_manifest()["timings"]["tuning_seconds"] == pytest.approx(12.5)
+
+    own = ExperimentRunner(context("own"), spec(tmp_path))
+    train_final(own, WorkflowStages(tune=False), config={"seed": 1}, tuning=None, train_one=train_one)
+    assert own.artifacts.read_manifest()["timings"]["tuning_seconds"] == 0.0
