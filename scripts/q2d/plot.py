@@ -659,18 +659,21 @@ def main():
     paths = list(plot_selected_runs(runs, args.output_dir, cases=args.cases))
     for run in runs:
         output_dir = args.output_dir / run.manifest["model_id"] / run.path.name
+        # Mesh benchmarks and super-resolution diagnostics are single-model
+        # artifacts; a multi-seed run reports its representative member.
+        member = run.representative
         if args.tolerance_comparison:
             path = output_dir / "tolerance_superresolution_error_vs_time.png"
             plot_tolerance_superresolution(
-                path, run.path, args.data_dir,
+                path, member.path, args.data_dir,
             )
             paths.append(path)
-        benchmark = run.path / "mesh_benchmark.csv"
+        benchmark = member.path / "mesh_benchmark.csv"
         if not benchmark.exists():
             continue
         frame = pd.read_csv(benchmark)
-        cost = json.loads((run.path / "cost_model.json").read_text())
-        shape = tuple(run.manifest["benchmark_metadata"]["training_shape"])
+        cost = json.loads((member.path / "cost_model.json").read_text())
+        shape = tuple(member.manifest["benchmark_metadata"]["training_shape"])
         path = output_dir / "mesh_l2_vs_points.png"
         plot_mesh_l2(path,frame,shape)
         paths.append(path)
@@ -686,7 +689,7 @@ def main():
         path = output_dir / "break_even_speedup_map.png"
         plot_break_even_map(path,cost)
         paths.append(path)
-        with np.load(run.path / "superresolution.npz",allow_pickle=False) as arrays:
+        with np.load(member.path / "superresolution.npz",allow_pickle=False) as arrays:
             for prefix in ("coarse","fine"):
                 paths.append(plot_operator_fields(output_dir / f"{prefix}_superresolution.png",
                     arrays[f"{prefix}_reference"],arrays[f"{prefix}_prediction"],arrays["labels"],

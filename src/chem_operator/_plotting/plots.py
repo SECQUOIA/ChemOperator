@@ -14,6 +14,8 @@ import matplotlib.pyplot as plt
 
 from chem_operator._experiments.comparison import (
     RunArtifacts,
+    aggregate_history,
+    final_metric_summaries,
     load_run,
     metric_matrix,
     read_reconstructions,
@@ -266,7 +268,7 @@ def _plot_deeponet_run_reconstructions(
         raise ValueError("selected_labels cannot be empty.")
     if cases < 1:
         raise ValueError("cases must be positive.")
-    samples = [read_reconstructions(run.path) for run in runs]
+    samples = [read_reconstructions(run.representative.path) for run in runs]
     required = {"case_ids", "coordinates", "reference", "prediction", "labels"}
     for run, sample in zip(runs, samples):
         missing = required.difference(sample)
@@ -442,6 +444,7 @@ def plot_experiment_histories(
     split: str | None = "val",
     panels: Sequence[HistoryPanel] | None = None,
     yscale: str = "auto",
+    band_alpha: float = 0.2,
 ) -> Path:
     """Plot configurable history metrics from one or more canonical runs.
 
@@ -449,7 +452,8 @@ def plot_experiment_histories(
     Provide ``panels`` to select several metrics/splits and show them in
     separate panels. A panel's ``yscale`` overrides the function-level scale.
     ``auto`` uses a log scale only when every plotted value in that panel is
-    positive.
+    positive. A multi-seed run draws the mean across its members with a
+    shaded ±1 standard-deviation band (clipped to the members' range).
     """
     if yscale not in {"auto", "linear", "log"}:
         raise ValueError("yscale must be 'auto', 'linear', or 'log'.")
@@ -489,46 +493,55 @@ def plot_experiment_histories(
             metrics = (panel.metrics_by_model or {}).get(
                 str(run.manifest["model_id"]), panel.metrics
             )
-            events = [
-                event
-                for event in run.history
-                if _matches_metric(event.metric, metrics)
-                and (
-                    panel.splits is None
-                    or event.split in panel.splits
-                    or (
-                        event.split == "validation"
-                        and "val" in panel.splits
-                    )
-                    or (
-                        event.split == "val"
-                        and "validation" in panel.splits
-                    )
-                )
-            ]
-            if not events:
+            # Group every member's events by (split, metric); members that
+            # lack a key simply do not contribute to that curve.
+            grouped: dict[tuple[str, str], list[tuple[RunArtifacts, list]]] = {}
+            for member in run.seed_members:
+                member_series: defaultdict[tuple[str, str], list] = defaultdict(list)
+                for event in _select_history_events(member.history, metrics, panel.splits):
+                    member_series[(event.split, event.metric)].append(event)
+                for key, series in member_series.items():
+                    grouped.setdefault(key, []).append((member, series))
+            if not grouped:
                 continue
-            grouped: defaultdict[tuple[str, str], list] = defaultdict(list)
-            for event in events:
-                grouped[(event.split, event.metric)].append(event)
-            for (event_split, event_metric), series in grouped.items():
-                series.sort(key=lambda event: event.epoch)
+            for (event_split, event_metric), contributions in grouped.items():
                 color_key = (run_index, event_metric)
                 if color_key not in curve_colors:
                     curve_colors[color_key] = colors[len(curve_colors) % len(colors)]
+                color = curve_colors[color_key]
+                linestyle = "--" if _is_validation_split(event_split) else "-"
                 label = (
                     f"{run.label} {event_split}/{event_metric}"
                     if len(loaded) > 1
                     else f"{event_split}/{event_metric}"
                 )
-                axis.plot(
-                    [event.epoch for event in series],
-                    [event.value for event in series],
-                    color=curve_colors[color_key],
-                    linestyle="--" if _is_validation_split(event_split) else "-",
-                    label=label,
+                for _, series in contributions:
+                    panel_values.extend(event.value for event in series)
+                if len(contributions) == 1:
+                    series = sorted(contributions[0][1], key=lambda event: event.epoch)
+                    axis.plot(
+                        [event.epoch for event in series],
+                        [event.value for event in series],
+                        color=color, linestyle=linestyle, label=label,
+                    )
+                    continue
+                summary = aggregate_history(
+                    [member for member, _ in contributions],
+                    metric=event_metric, split=event_split,
                 )
-                panel_values.extend(event.value for event in series)
+                epochs = np.asarray(summary.epochs)
+                mean = np.asarray(summary.mean)
+                std = np.asarray(summary.std)
+                lower = np.maximum(mean - std, np.asarray(summary.minimum))
+                upper = np.minimum(mean + std, np.asarray(summary.maximum))
+                axis.plot(
+                    epochs, mean, color=color, linestyle=linestyle,
+                    label=f"{label} (mean ± std, n={summary.count})",
+                )
+                axis.fill_between(
+                    epochs, lower, upper, color=color, alpha=band_alpha,
+                    linewidth=0, label="_nolegend_",
+                )
         if not panel_values:
             axis.set(xlabel="Epoch", title=panel.title)
             axis.text(
@@ -564,6 +577,38 @@ def plot_experiment_histories(
     figure.savefig(destination, dpi=200)
     plt.close(figure)
     return destination
+
+
+def _select_history_events(history, metrics, splits):
+    """Filter history events by metric patterns and split aliases."""
+    return [
+        event
+        for event in history
+        if _matches_metric(event.metric, metrics)
+        and (
+            splits is None
+            or event.split in splits
+            or (event.split == "validation" and "val" in splits)
+            or (event.split == "val" and "validation" in splits)
+        )
+    ]
+
+
+def member_plot_dirs(run: RunArtifacts, destination: str | Path) -> tuple[tuple[RunArtifacts, Path], ...]:
+    """Pair each seed member with its plot directory.
+
+    The representative member is written at ``destination`` so existing
+    figure paths stay stable; a multi-seed run additionally writes every
+    member under ``destination/seeds/<seed>/``.
+    """
+    destination = Path(destination)
+    pairs = [(run.representative, destination)]
+    if len(run.seed_members) > 1:
+        pairs.extend(
+            (member, destination / "seeds" / str(member.seed))
+            for member in run.seed_members
+        )
+    return tuple(pairs)
 
 
 def plot_experiment_matrix(
@@ -651,14 +696,14 @@ def plot_operator_runs(run_paths, output_dir, *, cases=2):
     """Plot canonical runs using only their manifest, history, and NPZ arrays."""
     if cases < 1:
         raise ValueError("cases must be positive.")
-    runs = tuple(load_run(path) for path in run_paths)
+    runs = tuple(run if isinstance(run, RunArtifacts) else load_run(run) for run in run_paths)
     if not runs:
         raise ValueError("At least one run is required.")
     if len(runs) > 1:
         validate_model_comparison(runs)
-        baseline = read_reconstructions(runs[0].path)
+        baseline = read_reconstructions(runs[0].representative.path)
         for run in runs[1:]:
-            other = read_reconstructions(run.path)
+            other = read_reconstructions(run.representative.path)
             keys = [key for key in baseline if key in ("case_ids", "reference", "coordinates", "t", "r", "z", "labels")
                     or key.endswith("_reference") or key.endswith("_labels")]
             for key in keys:
@@ -685,32 +730,14 @@ def plot_operator_runs(run_paths, output_dir, *, cases=2):
             ),
         )
         saved.append(path)
-        data = read_reconstructions(run.path)
-        count = min(cases, len(data["case_ids"]))
-        for index in range(count):
-            if "pfr_reference" in data:
-                groups = (("pfr", ("z",)), ("wall", ("z", "r")))
-                for prefix, axes in groups:
-                    saved.append(plot_operator_fields(destination / f"case_{index:02d}_{prefix}.png",
-                        data[f"{prefix}_reference"][index], data[f"{prefix}_prediction"][index],
-                        data[f"{prefix}_labels"], [data[axis][index] for axis in axes], axes))
-            else:
-                if "coordinate_names" in data:
-                    axes = data["coordinate_names"].tolist()
-                    reference, prediction = data["reference"][index], data["prediction"][index]
-                    coordinates = [data[axis][index] for axis in axes]
-                else:  # Canonical DeepONet arrays have channels last.
-                    axes = list(run.manifest["coordinates"])
-                    reference = np.moveaxis(data["reference"][index], -1, 0)
-                    prediction = np.moveaxis(data["prediction"][index], -1, 0)
-                    coordinates = [data["coordinates"][index].reshape(-1)]
-                saved.append(plot_operator_fields(destination / f"case_{index:02d}.png",
-                    reference, prediction, data["labels"], coordinates, axes))
+        for member, member_dir in member_plot_dirs(run, destination):
+            saved.extend(_plot_member_reconstructions(member, member_dir, cases))
     if len(runs) > 1:
         fig, axis = plt.subplots(figsize=(8, 5))
-        from chem_operator._experiments.comparison import final_metrics
-        values = final_metrics(runs)
-        axis.bar(range(len(values)), list(values.values()))
+        summaries = final_metric_summaries(runs)
+        values = {label: summary.mean for label, summary in summaries.items()}
+        axis.bar(range(len(values)), list(values.values()),
+                 yerr=[summary.std for summary in summaries.values()], capsize=3)
         axis.set_xticks(range(len(values)), list(values), rotation=15, ha="right", fontsize=7)
         axis.set(ylabel="Test relative L2 (physical units)")
         fig.tight_layout()
@@ -719,3 +746,32 @@ def plot_operator_runs(run_paths, output_dir, *, cases=2):
         plt.close(fig)
         saved.append(path)
     return tuple(saved)
+
+
+def _plot_member_reconstructions(member: RunArtifacts, destination: Path, cases: int) -> list[Path]:
+    """Write the first ``cases`` test reconstructions of one seed member."""
+    destination = Path(destination)
+    destination.mkdir(parents=True, exist_ok=True)
+    saved: list[Path] = []
+    data = read_reconstructions(member.path)
+    count = min(cases, len(data["case_ids"]))
+    for index in range(count):
+        if "pfr_reference" in data:
+            groups = (("pfr", ("z",)), ("wall", ("z", "r")))
+            for prefix, axes in groups:
+                saved.append(plot_operator_fields(destination / f"case_{index:02d}_{prefix}.png",
+                    data[f"{prefix}_reference"][index], data[f"{prefix}_prediction"][index],
+                    data[f"{prefix}_labels"], [data[axis][index] for axis in axes], axes))
+        else:
+            if "coordinate_names" in data:
+                axes = data["coordinate_names"].tolist()
+                reference, prediction = data["reference"][index], data["prediction"][index]
+                coordinates = [data[axis][index] for axis in axes]
+            else:  # Canonical DeepONet arrays have channels last.
+                axes = list(member.manifest["coordinates"])
+                reference = np.moveaxis(data["reference"][index], -1, 0)
+                prediction = np.moveaxis(data["prediction"][index], -1, 0)
+                coordinates = [data["coordinates"][index].reshape(-1)]
+            saved.append(plot_operator_fields(destination / f"case_{index:02d}.png",
+                reference, prediction, data["labels"], coordinates, axes))
+    return saved

@@ -5,7 +5,10 @@ import sys
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from chem_operator._experiments.comparison import load_run, read_reconstructions
 from chem_operator.example_paths import ExamplePaths
-from chem_operator.plotting import add_plot_run_arguments, select_plot_runs, plot_selected_runs, print_plot_paths, use_publication_style
+from chem_operator.plotting import (
+    add_plot_run_arguments, member_plot_dirs, select_plot_runs, plot_selected_runs,
+    print_plot_paths, use_publication_style,
+)
 
 use_publication_style()
 
@@ -103,9 +106,10 @@ def main():
     paths = list(plot_selected_runs(runs, args.output_dir, cases=args.cases))
     for run in runs:
         destination = args.output_dir / run.manifest["model_id"] / run.path.name
-        paths.extend(
-            plot_pfr_profiles(run.path, destination, cases=args.cases)
-        )
+        for member, member_dir in member_plot_dirs(run, destination):
+            paths.extend(
+                plot_pfr_profiles(member.path, member_dir, cases=args.cases)
+            )
     print_plot_paths(paths)
 
 

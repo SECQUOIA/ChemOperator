@@ -12,9 +12,9 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 from chem_operator._experiments.comparison import (
-    RunArtifacts, load_run, read_reconstructions, validate_model_comparison,
+    RunArtifacts, load_run, read_reconstructions, validate_complete_run,
+    validate_model_comparison,
 )
-from chem_operator._experiments.artifacts import ArtifactStore
 from chem_operator._plotting.plots import plot_experiment_histories, plot_operator_runs
 
 
@@ -45,7 +45,9 @@ def add_plot_run_arguments(parser: argparse.ArgumentParser, *, root: Path,
     """
     selection = parser.add_mutually_exclusive_group(required=required)
     selection.add_argument("--run", type=Path, action="append",
-                           help="Canonical run directory; repeat to plot multiple runs.")
+                           help="Canonical run directory; repeat to plot multiple runs. "
+                                "A multi-seed parent aggregates its seeds; pass "
+                                "<run>/seeds/<seed> to plot one seed.")
     selection.add_argument("--recent", action="store_true",
                            help="Plot the newest completed run for every model.")
     parser.add_argument("--runs-root", type=Path, default=root / "artifacts" / "runs",
@@ -99,6 +101,12 @@ def _plot_ready(run: RunArtifacts, arrays: dict[str, np.ndarray]) -> bool:
             and bool(run.manifest.get("coordinates")))
 
 
+def _group_plot_ready(run: RunArtifacts) -> bool:
+    """A run is plot-ready when every seed member is."""
+    return all(_plot_ready(member, read_reconstructions(member.path))
+               for member in run.seed_members)
+
+
 def select_plot_runs(args: argparse.Namespace, parser: argparse.ArgumentParser,
                      *, problem_id: str) -> tuple[RunArtifacts, ...]:
     """Validate explicit paths or find the newest usable completed run per model."""
@@ -111,18 +119,19 @@ def select_plot_runs(args: argparse.Namespace, parser: argparse.ArgumentParser,
             if not model_dir.is_dir():
                 continue
             candidates = []
+            # Only <problem>/<model>/<run_id> is visited, so seed children
+            # under <run_id>/seeds/ are never selected on their own.
             for run_dir in model_dir.iterdir():
                 if not run_dir.is_dir():
                     continue
                 try:
                     run = load_run(run_dir)
-                    ArtifactStore(run_dir).validate_complete()
+                    validate_complete_run(run)
                     manifest = run.manifest
                     if (manifest["problem_id"] != problem_id
                             or manifest["model_id"] != model_dir.name):
                         continue
-                    arrays = read_reconstructions(run_dir)
-                    if not _plot_ready(run, arrays):
+                    if not _group_plot_ready(run):
                         continue
                     candidates.append((_timestamp(manifest), run))
                 except (OSError, ValueError, KeyError, TypeError, AttributeError,
@@ -144,7 +153,7 @@ def _same_array(a: np.ndarray, b: np.ndarray) -> bool:
 
 
 def _reference_arrays(run: RunArtifacts) -> dict[str, np.ndarray]:
-    data = read_reconstructions(run.path)
+    data = read_reconstructions(run.representative.path)
     return {key: value for key, value in data.items()
             if key in {"case_ids", "reference", "coordinates", "coordinate_names",
                        "t", "r", "z", "labels"}
@@ -174,8 +183,11 @@ def comparison_groups(runs: tuple[RunArtifacts, ...]) -> tuple[tuple[RunArtifact
 
 
 def _overlay(group: tuple[RunArtifacts, ...], destination: Path, cases: int) -> Path | None:
-    """Overlay channel-last or channel-first one-dimensional reconstructions."""
-    data = [read_reconstructions(run.path) for run in group]
+    """Overlay channel-last or channel-first one-dimensional reconstructions.
+
+    Multi-seed runs contribute their representative (first) member.
+    """
+    data = [read_reconstructions(run.representative.path) for run in group]
     baseline = data[0]
     if "pfr_reference" in baseline:
         reference_key, prediction_key, labels_key = (
@@ -240,12 +252,19 @@ def _overlay(group: tuple[RunArtifacts, ...], destination: Path, cases: int) -> 
     return path
 
 
+def _run_plot_name(run: RunArtifacts) -> Path:
+    """Mirror the run layout: ``<run_id>`` or ``<run_id>/seeds/<seed>`` for one seed."""
+    if run.path.parent.name == "seeds":
+        return Path(run.path.parent.parent.name) / "seeds" / run.path.name
+    return Path(run.path.name)
+
+
 def plot_selected_runs(runs: tuple[RunArtifacts, ...], output_dir: Path,
                        *, cases: int) -> tuple[Path, ...]:
     saved: list[Path] = []
     for run in runs:
-        destination = output_dir / str(run.manifest["model_id"]) / run.path.name
-        saved.extend(plot_operator_runs((run.path,), destination, cases=cases))
+        destination = output_dir / str(run.manifest["model_id"]) / _run_plot_name(run)
+        saved.extend(plot_operator_runs((run,), destination, cases=cases))
     for index, group in enumerate(comparison_groups(runs), start=1):
         destination = output_dir / "comparisons" / f"group_{index}"
         saved.append(plot_experiment_histories(

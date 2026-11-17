@@ -2,6 +2,7 @@
 
 from chem_operator._plotting.plots import (
     HistoryPanel,
+    member_plot_dirs,
     plot_deeponet_artifacts,
     plot_deeponet_run_set,
     plot_deeponet_runs,
@@ -23,6 +24,7 @@ __all__ = [
     "HistoryPanel",
     "add_plot_run_arguments",
     "comparison_groups",
+    "member_plot_dirs",
     "plot_deeponet_artifacts",
     "plot_deeponet_run_set",
     "plot_deeponet_runs",
