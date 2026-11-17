@@ -6,6 +6,7 @@ from collections.abc import Mapping
 from typing import Any
 
 import torch
+from torch.utils.data import Subset
 
 from .deeponet import (CheckpointCallback, CoordinateScaler,
                        DeepONetTrainingConfig, DeepONetTrainingHistory,
@@ -15,6 +16,13 @@ from .deeponet import (CheckpointCallback, CoordinateScaler,
 from .deepxde import DeepONetAdapter
 from .pod import PODTransform
 from .deepxde_backend import import_deepxde
+
+
+def _dataset_format(data: Any) -> str | None:
+    """Read the DeepONet layout through any ``Subset`` wrappers."""
+    while isinstance(data, Subset):
+        data = data.dataset
+    return getattr(data, "format", None)
 
 
 def train_deeponet_lazy(
@@ -51,7 +59,7 @@ def train_deeponet_lazy(
         raise ValueError("loss must be 'relative_l2' or 'mse'.")
     if pod is not None and target_transform is not None:
         raise ValueError("Use pod or target_transform, not both.")
-    if train.format != "cartesian_product" or validation.format != train.format:
+    if _dataset_format(train) != "cartesian_product" or _dataset_format(validation) != _dataset_format(train):
         raise ValueError("Lazy DeepONet training requires Cartesian adapters.")
     sample = train[0]
     sample_target = sample["target"]
