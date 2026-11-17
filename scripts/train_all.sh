@@ -27,13 +27,12 @@ SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &> /dev/null && pwd)
 
 # python "$SCRIPT_DIR/pipe_flow_transient/nemo_deeponet.py" --no-tune --train --variant both --seeds 1 2 3 4 5 --train-config recent "$@"
 # python "$SCRIPT_DIR/pipe_flow_transient/transient_nemo_fno.py" --no-tune --train --variant both --seeds 1 2 3 4 5 --train-config recent "$@"
-# No completed tuned runs yet:
 # python "$SCRIPT_DIR/pipe_flow_transient/deeponet.py" --no-tune --train --seeds 1 2 3 4 5 --train-config recent "$@"
 # python "$SCRIPT_DIR/pipe_flow_transient/pod_deeponet.py" --no-tune --train --seeds 1 2 3 4 5 --train-config recent "$@"
 # python "$SCRIPT_DIR/pipe_flow_transient/transient_fno.py" --no-tune --train --seeds 1 2 3 4 5 --train-config recent "$@"
 
-python "$SCRIPT_DIR/q2d/deeponet.py" --no-tune --train --seeds 1 2 3 4 5 --train-config recent "$@"
-python "$SCRIPT_DIR/q2d/pod_deeponet.py" --no-tune --train --seeds 1 2 3 4 5 --train-config recent "$@"
-python "$SCRIPT_DIR/q2d/fno.py" --no-tune --train --seeds 1 2 3 4 5 --train-config recent "$@"
+# python "$SCRIPT_DIR/q2d/deeponet.py" --no-tune --train --seeds 1 2 3 4 5 --train-config recent "$@"
+# python "$SCRIPT_DIR/q2d/pod_deeponet.py" --no-tune --train --seeds 1 2 3 4 5 --train-config recent "$@"
+# python "$SCRIPT_DIR/q2d/fno.py" --no-tune --train --seeds 1 2 3 4 5 --train-config recent "$@"
 # python "$SCRIPT_DIR/q2d/tfno.py" --no-tune --train --seeds 1 2 3 4 5 --train-config recent "$@"
 # python "$SCRIPT_DIR/q2d/uno.py" --no-tune --train --seeds 1 2 3 4 5 --train-config recent "$@"
