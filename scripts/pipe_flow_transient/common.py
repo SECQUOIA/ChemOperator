@@ -502,5 +502,3 @@ def run_rollout_experiment(args, normalizer: ZScoreNormalizer, n_radial: int,
             cases=args.plot_cases, max_cases=args.max_cases,
         ),
     )
-
-__all__ = ['PATHS', 'FIELD_NAMES', 'MODEL_CONSTANT_NAMES', 'PHYSICS_CONSTANT_NAMES', 'INPUT_CHANNELS', 'OUTPUT_CHANNELS', 'FILE_STEM', 'METRIC', 'SEED', 'PDE_REGISTRY', 'MAX_TRAIN_TRAJECTORIES', 'CONSTANT_NAMES', 'PhysicsFNOAdapter', 'raw_dataset', 'dataset_pde_name', 'make_adapter', 'fit_normalizer', 'adapter_radial_spacing', 'training_pde_name', 'PROBLEM_ID', 'experiment_spec', 'parse_args']
