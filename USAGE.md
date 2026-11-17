@@ -63,7 +63,9 @@ The direct and POD DeepONet scripts accept these options:
 | `--run-id ID` | UTC timestamp | Select the final run-directory component. |
 | `--device DEVICE` | `auto` | Select `auto`, `cpu`, `cuda`, or another PyTorch device. |
 | `--plot-cases N` | `2` | Number of test reconstructions to store. |
-| `--train-config CONFIG` | `best` | Select the final configuration; these scripts currently require `best`. |
+| `--train-config CONFIG` | `best` | Hyperparameters for final training: `best` (this run's `best_config.json`), `recent` (the newest tuned run of this model), a completed run directory, or a JSON file. |
+| `--seeds SEED [SEED ...]` | unset | Train the final model once per seed under `<run>/seeds/<seed>/`; requires `--train`. |
+| `--tune-seed N` | problem `SEED` | Seed for the Optuna study (and for training when `--seeds` is omitted). |
 
 The FNO and physics workflow scripts additionally accept:
 
@@ -76,8 +78,13 @@ The FNO and physics workflow scripts additionally accept:
 | `--max-cases N` | Limit the number of cases per split for a smoke test. |
 
 At least one of tuning or training must remain enabled. When training with
-`--no-tune`, use the same `--run-id` and `--runs-root` as a completed tuning
-run so the workflow can read its saved best configuration.
+`--no-tune --train-config best`, use the same `--run-id` and `--runs-root` as a
+completed tuning run so the workflow can read its saved best configuration;
+pass another run's directory to `--train-config` to reuse its hyperparameters
+under a new `--run-id`. `--train-config recent` does the same with the newest
+completed run of the same problem and model that ran a tuning study (a
+non-empty `tuning_trials.csv`, not a `--max-cases` smoke run); runs trained
+from a saved configuration are never chosen.
 
 For example:
 
@@ -94,6 +101,54 @@ python scripts/pipe_flow_transient/transient_fno.py \
   --device cpu --max-cases 8 --samples 1 --tune-epochs 1 --epochs 1 \
   --plot-cases 1
 ```
+
+### Multi-seed runs
+
+Without `--seeds` a run directory holds one trained model (the "flat"
+layout). With `--seeds`, tuning artifacts stay in the run directory and each
+seed is trained from the same best configuration into a complete child run at
+`<run>/seeds/<seed>/`:
+
+```
+artifacts/runs/<problem>/<model>/<run-id>/
+  manifest.json          seeds: [42, 43, 44], tuning_seed, status
+  best_config.json       tuning_trials.csv   ray_results/
+  seeds/42/              manifest.json history.csv metrics.csv checkpoint.pt reconstructions.npz
+  seeds/43/  seeds/44/
+```
+
+A run's *members* are the root directory when it holds `metrics.csv` (every
+flat run) plus every completed `seeds/*` child, so a completed flat run can be
+extended with more seeds under the same `--run-id`, and completed children are
+skipped when a run is resumed. Plotters and the paper tables average over
+members at read time; nothing aggregated is stored.
+
+```bash
+# Tune once, then train seeds 42-44 into the same run.
+python scripts/cstr/deeponet.py --run-id cstr_do_01 --seeds 42 43 44
+
+# Add two more seeds to that run later.
+python scripts/cstr/deeponet.py --run-id cstr_do_01 --no-tune --seeds 45 46
+
+# Train five seeds from whichever run of this model was tuned most recently.
+python scripts/cstr/deeponet.py --no-tune --train-config recent --seeds 1 2 3 4 5
+
+# Reuse a specific completed run's hyperparameters under a new run id.
+python scripts/cstr/deeponet.py --run-id cstr_do_02 --no-tune \
+  --train-config artifacts/runs/cstr_non_isothermal/deeponet/cstr_do_01 \
+  --seeds 1 2 3 4 5
+
+# Plot the aggregate (mean ± std bands) or one seed.
+python scripts/cstr/plot.py --run artifacts/runs/cstr_non_isothermal/deeponet/cstr_do_02
+python scripts/cstr/plot.py --run artifacts/runs/cstr_non_isothermal/deeponet/cstr_do_02/seeds/3
+```
+
+For a multi-seed run, `training_validation_loss.png` and the comparison
+`validation_history.png` show the mean curve with a ±1 standard-deviation
+band over the epochs all seeds reached. Reconstruction plots are written per
+seed under `<plots>/<model>/<run-id>/seeds/<seed>/`, with the first member's
+copies kept at the usual top-level paths. `paper/export_model_tables.py`
+reports the test error as mean ± std with a `Seeds` column.
 
 ## `scripts/cstr`
 
