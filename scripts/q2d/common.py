@@ -40,7 +40,9 @@ from chem_operator.experiments import (
     operator_spec,
     parse_operator_args,
     run_operator,
+    resolve_train_config,
     run_context_from_namespace,
+    train_final,
 )
 PATHS = ExamplePaths.from_script(__file__, dataset="q2d_cmr")
 
@@ -679,7 +681,6 @@ def run_deeponet(
 ) -> RunContext:
     """Run the shared fixed-mesh DeepXDE tuning and final-training workflow."""
     from functools import partial
-    import json
 
     os.environ.setdefault("DDE_BACKEND", "pytorch")
     stages = WorkflowStages.from_namespace(args)
@@ -723,32 +724,33 @@ def run_deeponet(
             experiment_name=f"{PROBLEM_ID}_{model_id}_{context.paths.run_dir.name}",
         )
     if stages.train:
-        if tuning is not None:
-            config = dict(tuning.best_config)
-        elif args.train_config == "best":
-            config = runner.artifacts.read_best_config()
-        else:
-            config = json.loads(Path(args.train_config).read_text())
-        config.update(epochs=args.epochs, seed=SEED, loss="relative_l2")
+        config, source = resolve_train_config(stages.train_config, runner, tuning=tuning)
+        config.update(epochs=args.epochs, loss="relative_l2")
         if pod is not None:
             config.update(latent_width=pod.n_components, trunk_hidden_layers=0)
-        trainer = DeepONetTrainer(
-            deeponet_training_config(config), pod=pod,
-            pin_memory=context.device.type == "cuda",
-            checkpoint_metadata={
-                "normalizer": normalizer.state_dict(), "geometry": list(geometry),
-                "training_shape": [len(value) for value in coordinates],
-                "input_channels": [channel.label for channel in INPUT_CHANNELS],
-                "output_channels": [channel.label for channel in OUTPUT_CHANNELS],
-                "coordinate_names": ["z", "r"],
-                "training_coordinates": {axis: value.clone() for axis, value in zip(("z", "r"), coordinates)},
-            },
-        )
-        with data_factory(("train", "valid", "test")) as (train, valid, test):
-            runner.run(
-                trainer, train, valid, test, config=trainer.config.to_dict(), tuning=tuning,
-                evaluator=partial(evaluate_q2d_deeponet, cases=args.plot_cases),
+
+        def train_one(run_runner, run_context, run_config):
+            trainer = DeepONetTrainer(
+                deeponet_training_config(run_config), pod=pod,
+                pin_memory=run_context.device.type == "cuda",
+                checkpoint_metadata={
+                    "normalizer": normalizer.state_dict(), "geometry": list(geometry),
+                    "training_shape": [len(value) for value in coordinates],
+                    "input_channels": [channel.label for channel in INPUT_CHANNELS],
+                    "output_channels": [channel.label for channel in OUTPUT_CHANNELS],
+                    "coordinate_names": ["z", "r"],
+                    "training_coordinates": {axis: value.clone() for axis, value in zip(("z", "r"), coordinates)},
+                },
             )
+            with data_factory(("train", "valid", "test")) as (train, valid, test):
+                return run_runner.run(
+                    trainer, train, valid, test, config=trainer.config.to_dict(),
+                    tuning=tuning if run_runner is runner else None,
+                    evaluator=partial(evaluate_q2d_deeponet, cases=args.plot_cases),
+                )
+
+        train_final(runner, stages, config=config, tuning=tuning, train_one=train_one,
+                    train_config_source=source)
     print(f"Run artifacts: {context.paths.run_dir}")
     return context
 
