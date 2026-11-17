@@ -41,6 +41,7 @@ class FNOAdapter(Dataset):
         time_coordinate: str = "t",
         space_coordinate: str = "r",
         max_trajectories: int | None = None,
+        spatial_shape: Sequence[int] | None = None,
     ) -> None:
         configured_interface = (
             input_channels is not None
@@ -100,6 +101,14 @@ class FNOAdapter(Dataset):
             raise ValueError("FNO channel labels must be globally unique.")
         if max_trajectories is not None and max_trajectories < 1:
             raise ValueError("max_trajectories must be positive.")
+        if spatial_shape is not None:
+            spatial_shape = tuple(int(value) for value in spatial_shape)
+            if len(spatial_shape) != len(resolved_coordinates) or any(
+                value < 1 for value in spatial_shape
+            ):
+                raise ValueError(
+                    "spatial_shape must give one positive size per coordinate."
+                )
 
         self.dataset = dataset
         self.normalizer = normalizer
@@ -120,6 +129,7 @@ class FNOAdapter(Dataset):
             else None
         )
         self.max_trajectories = max_trajectories
+        self.spatial_shape = spatial_shape
 
     def checkpoint_config(self) -> dict[str, Any]:
         """Return the JSON-compatible adapter definition for a checkpoint."""
@@ -133,6 +143,7 @@ class FNOAdapter(Dataset):
             ],
             "coordinate_names": list(self.coordinate_names),
             "max_trajectories": self.max_trajectories,
+            "spatial_shape": None if self.spatial_shape is None else list(self.spatial_shape),
         }
 
     @staticmethod
@@ -321,6 +332,11 @@ class FNOAdapter(Dataset):
                 f"{tuple(field_outputs[0].shape)}."
             )
         shape = tuple(field_outputs[0].shape)
+        if self.spatial_shape is not None and shape != self.spatial_shape:
+            raise ValueError(
+                f"FNO case {index} has spatial shape {shape}; expected "
+                f"{self.spatial_shape}."
+            )
         output = torch.stack(
             [
                 self._as_grid(value, shape, channel.label)
