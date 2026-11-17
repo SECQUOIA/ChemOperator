@@ -135,7 +135,7 @@ def test_dataset_script_defines_resolution_and_tolerance_sweeps() -> None:
 
 @pytest.mark.parametrize(("arguments", "expected"), [
     (None, [("base", 7), "resolution", "tolerance"]),
-    ([], [("base", 80), "resolution", "tolerance"]),
+    ([], [("base", 100), "resolution", "tolerance"]),
     (["--suite", "all", "--n-cases", "7"], [("base", 7), "resolution", "tolerance"]),
     (["--suite", "base", "--n-cases", "7"], [("base", 7)]),
     (["--suite", "resolution"], ["resolution"]),
