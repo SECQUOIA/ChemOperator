@@ -1,17 +1,39 @@
+#!/bin/bash
 
+# Passing --device cuda explicitly will warn if no GPU avaliable.
 
+SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &> /dev/null && pwd)
 
-# uv run scripts/pipe_flow_transient/plot.py --run artifacts/runs/pipe_flow_transient/transient_nemo_fno_data/20261006T192356Z --run artifacts/runs/pipe_flow_transient/transient_nemo_fno_physics/20261006T193132Z --cases 3
+# python "$SCRIPT_DIR/cstr/deeponet.py" --no-tune --train --seeds 1 2 3 4 5 --train-config recent "$@"
+# python "$SCRIPT_DIR/cstr/pod_deeponet.py" --no-tune --train --seeds 1 2 3 4 5 --train-config recent "$@"
+# python "$SCRIPT_DIR/cstr/fno.py" --no-tune --train --seeds 1 2 3 4 5 --train-config recent "$@"
 
-# uv run scripts/pipe_flow_transient/plot.py \
-# --run artifacts/runs/pipe_flow_transient/nemo_deeponet_data/20261014T001004Z \
-# --run artifacts/runs/pipe_flow_transient/nemo_deeponet_physics/20261014T014630Z \
-# --cases 2 \
+# python "$SCRIPT_DIR/packed_bed_1d/deeponet.py" --no-tune --train --seeds 1 2 3 4 5 --train-config recent "$@"
+# python "$SCRIPT_DIR/packed_bed_1d/pod_deeponet.py" --no-tune --train --seeds 1 2 3 4 5 --train-config recent "$@"
+# python "$SCRIPT_DIR/packed_bed_1d/fno.py" --no-tune --train --seeds 1 2 3 4 5 --train-config recent "$@"
 
-# --run artifacts/runs/pfr_heat/deeponet_fno_data/20260930T071100Z \
+# python "$SCRIPT_DIR/pfr/deeponet.py" --no-tune --train --seeds 1 2 3 4 5 --train-config recent "$@"
+# python "$SCRIPT_DIR/pfr/pod_deeponet.py" --no-tune --train --seeds 1 2 3 4 5 --train-config recent "$@"
+# python "$SCRIPT_DIR/pfr/fno.py" --no-tune --train --seeds 1 2 3 4 5 --train-config recent "$@"
 
-# uv run scripts/pfr_heat/plot.py --cases 3 \
-# --run artifacts/runs/pfr_heat/deeponet_fno_data/20260930T131008Z
-# --run artifacts/runs/pfr_heat/deeponet_fno_physics/20260930T071420Z \
-# --run artifacts/runs/pfr_heat/fno_data/20260930T095726Z \
-# --run artifacts/runs/pfr_heat/fno_physics/20260930T104259Z \
+# python "$SCRIPT_DIR/pfr_heat/deeponet_fno.py" --no-tune --train --variant both --seeds 1 2 3 4 5 --train-config recent "$@"
+# python "$SCRIPT_DIR/pfr_heat/fno.py" --no-tune --train --variant both --seeds 1 2 3 4 5 --train-config recent "$@"
+
+# python "$SCRIPT_DIR/pipe_flow/deeponet.py" --no-tune --train --seeds 1 2 3 4 5 --train-config recent "$@"
+# python "$SCRIPT_DIR/pipe_flow/pod_deeponet.py" --no-tune --train --seeds 1 2 3 4 5 --train-config recent "$@"
+# python "$SCRIPT_DIR/pipe_flow/fno.py" --no-tune --train --variant both --seeds 1 2 3 4 5 --train-config recent "$@"
+# No completed tuned runs yet:
+# python "$SCRIPT_DIR/pipe_flow/physics_deeponet.py" --no-tune --train --variant both --seeds 1 2 3 4 5 --train-config recent "$@"
+
+# python "$SCRIPT_DIR/pipe_flow_transient/nemo_deeponet.py" --no-tune --train --variant both --seeds 1 2 3 4 5 --train-config recent "$@"
+# python "$SCRIPT_DIR/pipe_flow_transient/transient_nemo_fno.py" --no-tune --train --variant both --seeds 1 2 3 4 5 --train-config recent "$@"
+# No completed tuned runs yet:
+# python "$SCRIPT_DIR/pipe_flow_transient/deeponet.py" --no-tune --train --seeds 1 2 3 4 5 --train-config recent "$@"
+# python "$SCRIPT_DIR/pipe_flow_transient/pod_deeponet.py" --no-tune --train --seeds 1 2 3 4 5 --train-config recent "$@"
+# python "$SCRIPT_DIR/pipe_flow_transient/transient_fno.py" --no-tune --train --seeds 1 2 3 4 5 --train-config recent "$@"
+
+python "$SCRIPT_DIR/q2d/deeponet.py" --no-tune --train --seeds 1 2 3 4 5 --train-config recent "$@"
+python "$SCRIPT_DIR/q2d/pod_deeponet.py" --no-tune --train --seeds 1 2 3 4 5 --train-config recent "$@"
+python "$SCRIPT_DIR/q2d/fno.py" --no-tune --train --seeds 1 2 3 4 5 --train-config recent "$@"
+# python "$SCRIPT_DIR/q2d/tfno.py" --no-tune --train --seeds 1 2 3 4 5 --train-config recent "$@"
+# python "$SCRIPT_DIR/q2d/uno.py" --no-tune --train --seeds 1 2 3 4 5 --train-config recent "$@"
