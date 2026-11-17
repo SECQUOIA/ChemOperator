@@ -20,7 +20,6 @@ from torch import nn
 from torch.utils.data import DataLoader
 
 from chem_operator.experiments import (
-    ArtifactStore,
     EvaluationOutcome,
     LossTerm,
     OperatorTrainer,
@@ -42,7 +41,7 @@ from scripts.pipe_flow.common import (
 
 MODEL_IDS = {"data": "physics_deeponet_data", "physics": "physics_deeponet_physics"}
 SEED = 42
-PHYSICS_WEIGHT_RANGE = (1.0e-4, 1.0)
+PHYSICS_WEIGHT_RANGE = (1.0e-4, 1.0e-1)
 
 
 class DeepONet(nn.Module):
@@ -238,10 +237,7 @@ def evaluate_run(trainer,data,context,statistics,cases=3):
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--variant", choices=("data", "physics", "both"), default="both")
-    parser.add_argument("--physics-samples", type=int, default=5)
     args = parse_operator_args(PATHS, epochs=40, tune_epochs=20, samples=8, parser=parser)
-    if args.physics_samples < 1:
-        parser.error("--physics-samples must be positive.")
 
     verify_exact_residual()
     statistics = fit_physics_normalization(load_physics_split(args.data_dir, "train", args.max_cases))
@@ -252,21 +248,17 @@ def main() -> None:
         )
         return data, data
 
-    data_context = None
     variants = ("data", "physics") if args.variant == "both" else (args.variant,)
     for variant in variants:
         model_id = MODEL_IDS[variant]
-        space = dict(search_space(), physics_weight=0.0)
-        if variant == "physics":
-            if data_context is not None:
-                space = ArtifactStore(data_context).read_best_config()
-            space["physics_weight"] = tune.loguniform(*PHYSICS_WEIGHT_RANGE)
-
-        variant_args = argparse.Namespace(**vars(args))
-        if variant == "physics" and args.variant == "both":
-            variant_args.samples = args.physics_samples
-        context = run_operator(
-            variant_args, PATHS, physics_experiment_spec(variant_args, model_id), dataset_factory,
+        space = dict(
+            search_space(),
+            physics_weight=(
+                tune.loguniform(*PHYSICS_WEIGHT_RANGE) if variant == "physics" else 0.0
+            ),
+        )
+        run_operator(
+            args, PATHS, physics_experiment_spec(args, model_id), dataset_factory,
             lambda config, run_context, selected=variant: make_trainer(
                 dict(config, physics_weight=0.0) if selected == "data" else config, run_context, statistics
             ),
@@ -274,8 +266,6 @@ def main() -> None:
             lambda trainer, data, run_context: evaluate_run(trainer, data, run_context, statistics, args.plot_cases),
             seed=SEED,
         )
-        if variant == "data":
-            data_context = context
 
 
 if __name__ == "__main__":

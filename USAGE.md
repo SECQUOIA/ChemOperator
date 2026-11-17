@@ -298,9 +298,6 @@ python scripts/pipe_flow/physics_deeponet.py --variant both
 # Run only one variant.
 python scripts/pipe_flow/physics_deeponet.py --variant data
 python scripts/pipe_flow/physics_deeponet.py --variant physics
-
-# Shrink the physics-weight budget of the sequential comparison.
-python scripts/pipe_flow/physics_deeponet.py --variant both --physics-samples 4
 ```
 
 Its additional options are:
@@ -308,11 +305,10 @@ Its additional options are:
 | Option | Default | Purpose |
 | --- | --- | --- |
 | `--variant {both,data,physics}` | `both` | Select the data-only baseline, physics-informed model, or sequential comparison. |
-| `--physics-samples N` | `5` | Physics-weight trials for the physics run when `--variant both`. |
 
 The search space, seed, and physics-weight range are module constants in the
-script, as in `fno.py`. With `--variant both`, the physics run reuses the best
-data-only architecture and tunes only the physics-loss weight.
+script, as in `fno.py`. Both variants search the same architecture and
+optimizer space; the physics variant additionally tunes the physics-loss weight.
 
 Plot one or more canonical physics/operator runs:
 

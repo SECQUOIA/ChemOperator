@@ -17,7 +17,6 @@ from torch import nn
 from torch.utils.data import Dataset
 
 from chem_operator.experiments import (
-    ArtifactStore,
     LossTerm,
     OperatorTrainer,
     evaluate_fields,
@@ -205,10 +204,7 @@ def make_trainer(
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--variant", choices=("data", "physics", "both"), default="both")
-    parser.add_argument("--physics-samples", type=int, default=5)
     args = parse_operator_args(PATHS, epochs=40, tune_epochs=20, samples=8, parser=parser)
-    if args.physics_samples < 1:
-        parser.error("--physics-samples must be positive.")
 
     training = load_physics_split(args.data_dir, "train", args.max_cases)
     statistics = fit_physics_normalization(training)
@@ -219,27 +215,19 @@ def main() -> None:
         )
         return data, data
 
-    data_context = None
     variants = ("data", "physics") if args.variant == "both" else (args.variant,)
     for variant in variants:
         model_id = MODEL_IDS[variant]
         space = search_space()
-        if variant == "data":
-            space["physics_weight"] = 0.0
-        elif data_context is not None:
-            space = ArtifactStore(data_context).read_best_config()
-        if variant == "physics":
-            space["physics_weight"] = tune.loguniform(1e-4, 1.0)
-
-        variant_args = argparse.Namespace(**vars(args))
-        if variant == "physics" and args.variant == "both":
-            variant_args.samples = args.physics_samples
+        space["physics_weight"] = (
+            tune.loguniform(1e-4, 1e-1) if variant == "physics" else 0.0
+        )
         spec = operator_spec(
-            variant_args, PATHS, PROBLEM_ID, model_id, FILE_STEM,
+            args, PATHS, PROBLEM_ID, model_id, FILE_STEM,
             FIELDS, UNITS, ("r",),
         )
-        context = run_operator(
-            variant_args, PATHS, spec, dataset_factory,
+        run_operator(
+            args, PATHS, spec, dataset_factory,
             lambda config, run_context: make_trainer(config, run_context, statistics),
             space,
             lambda trainer, data, run_context: evaluate_fields(
@@ -253,8 +241,6 @@ def main() -> None:
             seed=SEED,
             selection_metric="data_loss",
         )
-        if variant == "data":
-            data_context = context
 
 
 if __name__ == "__main__":
