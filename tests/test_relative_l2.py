@@ -8,7 +8,7 @@ import torch
 from chem_operator.experiments import StreamingRegressionMetrics
 from chem_operator.models import relative_l2_loss
 from scripts.cstr.fno import relative_l2
-from scripts.q2d.common import relative_l2_per_field, relative_l2_per_sample
+from scripts.q2d.common import relative_l2_per_case
 
 
 @pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
@@ -38,11 +38,10 @@ def test_script_metrics_preserve_case_and_field_axes():
     prediction = target.clone()
     prediction[:, 0] -= 1.
     prediction[:, 1] = 1e-10
-    fields = relative_l2_per_field(prediction, target)
+    cases, fields = relative_l2_per_case(prediction, target)
     torch.testing.assert_close(fields, torch.tensor([
         [1., math.sqrt(6) / 100], [0.1, math.sqrt(6) / 100],
     ], dtype=torch.float64))
-    cases = relative_l2_per_sample(prediction, target)
     torch.testing.assert_close(cases, torch.tensor([1., 0.1], dtype=torch.float64))
     torch.testing.assert_close(relative_l2(prediction, target, {}), cases.mean())
     # The CSTR adapter must retain its 1e-8 safeguard, not the dtype default.

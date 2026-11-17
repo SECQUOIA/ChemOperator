@@ -15,7 +15,7 @@ import torch
 from chem_operator.datasets import SimulationDatasetGenerator, SimulationRecord
 from chem_operator.experiments import (
     DeepONetTrainer, ExperimentRunner, RunContext, deeponet_training_config,
-    evaluate_fields, load_run, validate_model_comparison,
+    evaluate_fields, load_run, unwrap_dataset, validate_model_comparison,
 )
 from chem_operator.reactors.q2d.dataset_generator import CMRSim
 from chem_operator.normalization import normalizer_from_state_dict
@@ -174,7 +174,7 @@ def test_rejects_incompatible_selected_cases_and_closes_files(data_dir, monkeypa
         return raw
 
     monkeypatch.setattr(common, "raw_dataset", tracked)
-    with pytest.raises(ValueError, match="training (coordinate grid|geometry)"):
+    with pytest.raises(ValueError, match="training (coordinate grid|geometry)|spatial shape"):
         with common.deeponet_data(data_dir, ("train", "valid"), normalizer, geometry, coordinates):
             pytest.fail("Incompatible data must fail before entering the context")
     assert all(raw._file_handle is None for raw in opened)
@@ -286,11 +286,11 @@ def test_tuning_setup_and_train_validation_factory(data_dir, tmp_path, monkeypat
         assert tuner.config.resources_per_trial == {"cpu": 2, "gpu": 0}
         with tuner.dataset_factory(runner.context) as (training, valid):
             assert len(training) == len(valid) == 2
-            assert training.dataset.dataset.path.name == "q2d_cmr_train.h5"
-            assert valid.dataset.dataset.path.name == "q2d_cmr_valid.h5"
+            assert unwrap_dataset(training).dataset.dataset.path.name == "q2d_cmr_train.h5"
+            assert unwrap_dataset(valid).dataset.dataset.path.name == "q2d_cmr_valid.h5"
             trial = tuner.trainer_factory(config())
             assert trial.pod is pod
-        assert training.dataset.dataset._file_handle is None
+        assert unwrap_dataset(training).dataset.dataset._file_handle is None
         captured.append(tuner)
 
     monkeypatch.setattr(ExperimentRunner, "tune", tune_without_ray)

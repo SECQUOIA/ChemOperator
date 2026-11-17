@@ -12,7 +12,6 @@ import pandas as pd
 import matplotlib.pyplot as plt
 from matplotlib.ticker import LogLocator, LogFormatterMathtext, NullFormatter
 from matplotlib.colors import LogNorm
-from scipy.interpolate import RegularGridInterpolator
 from chem_operator.example_paths import ExamplePaths
 from chem_operator.plotting import (
     add_plot_run_arguments, plot_operator_fields, plot_selected_runs,
@@ -22,39 +21,6 @@ from chem_operator.plotting import (
 use_publication_style()
 PATHS = ExamplePaths.from_script(__file__, dataset="q2d_cmr")
 PROBLEM_ID = "q2d_cmr"
-SLIDE_DPI = 220
-
-
-def _interpolate_fields(
-    fields: np.ndarray,
-    source_z: np.ndarray,
-    source_r: np.ndarray,
-    target_z: np.ndarray,
-    target_r: np.ndarray,
-) -> np.ndarray:
-    """Interpolate channel-first cell-centre fields on physical coordinates."""
-    z, r = np.meshgrid(target_z, target_r, indexing="ij")
-    # The meshes store cell centres, so edge centres can fall just outside the
-    # other mesh. Hold the nearest value there instead of extrapolating it.
-    points = np.column_stack((
-        np.clip(z.ravel(), source_z[0], source_z[-1]),
-        np.clip(r.ravel(), source_r[0], source_r[-1]),
-    ))
-    interpolator = RegularGridInterpolator(
-        (source_z, source_r), np.moveaxis(fields, 0, -1), method="linear"
-    )
-    return np.moveaxis(
-        interpolator(points).reshape(len(target_z), len(target_r), -1), -1, 0
-    )
-
-
-def _relative_field_errors(prediction: np.ndarray, reference: np.ndarray) -> np.ndarray:
-    """Return physical relative L2 errors, one per output channel."""
-    difference = (prediction - reference).reshape(len(reference), -1)
-    truth = reference.reshape(len(reference), -1)
-    return np.linalg.norm(difference, axis=1) / np.maximum(
-        np.linalg.norm(truth, axis=1), 1.0e-8
-    )
 
 
 def plot_tolerance_superresolution(
@@ -64,32 +30,47 @@ def plot_tolerance_superresolution(
     *,
     target_shape: tuple[int, int] = (14, 20),
 ) -> None:
-    """Compare coarse interpolation and FNO against the 1e-6 fine solution."""
+    """Compare coarse interpolation and FNO against the 1e-6 fine solution.
+
+    The comparison grid keeps the coarse file's axial cell centres (the
+    solver spaces them by ``L / (n_z - 1)``) and refines only the radial
+    axis, so the FNO's axial pixels keep the meaning they had in training.
+    """
     import torch
 
+    from chem_operator.experiments import OperatorTrainer, RunContext
     from chem_operator.normalization import normalizer_from_state_dict
-    from scripts.q2d.common import OUTPUT_CHANNELS, make_adapter
-    from scripts.q2d.fno import (
-        _complete_fno_evaluation,
-        inference_latency,
-        model_from_config,
+    from scripts.q2d.common import (
+        OUTPUT_CHANNELS, interpolate_fields, make_adapter, relative_l2_per_case,
     )
+    from scripts.q2d.fno import complete_fno_evaluation, inference_latency, model_from_config
 
-    checkpoint = torch.load(run_path / "checkpoint.pt", map_location="cpu", weights_only=True)
-    metadata = checkpoint["metadata"]
+    device = torch.device("cpu")
+    context = RunContext(paths=run_path, seed=0, dtype=torch.float32, device=device)
+    trainer = OperatorTrainer(lambda config: model_from_config(config, device), {"batch_size": 1})
+    trainer.load_checkpoint(run_path / "checkpoint.pt", context)
+    metadata = trainer.checkpoint_metadata
     training_shape = tuple(metadata["training_shape"])
     if training_shape != (14, 6):
         raise ValueError(f"Tolerance comparison requires a 14x6 FNO, got {training_shape}.")
+    if target_shape[0] != training_shape[0]:
+        raise ValueError("The comparison grid must keep the coarse axial resolution.")
     normalizer = normalizer_from_state_dict(metadata["normalizer"])
     geometry = tuple(metadata["geometry"])
     fine_path = data_dir / "q2d_cmr_tolerance_20_10_test.h5"
     coarse_path = data_dir / "q2d_cmr_tolerance_14_6_test.h5"
-    fine_raw, fine = make_adapter(fine_path, normalizer, geometry)
+    fine_raw, fine = make_adapter(fine_path, normalizer, geometry, (20, 10))
     try:
-        coarse_raw, coarse = make_adapter(coarse_path, normalizer, geometry)
+        coarse_raw, coarse = make_adapter(coarse_path, normalizer, geometry, training_shape)
     except Exception:
         fine_raw.close()
         raise
+
+    def field_errors(prediction: np.ndarray, reference: np.ndarray) -> np.ndarray:
+        return relative_l2_per_case(
+            torch.as_tensor(prediction)[None], torch.as_tensor(reference)[None],
+        )[1][0].numpy()
+
     try:
         fine_cases = {
             float(fine.physical_item(index)["metadata"]["params"]["rtol_ss"]): index
@@ -98,18 +79,16 @@ def plot_tolerance_superresolution(
         if 1.0e-6 not in fine_cases:
             raise ValueError(f"{fine_path.name} has no rtol=1e-6 reference case.")
         reference_item = fine.physical_item(fine_cases[1.0e-6])
-        fine_sample = fine[fine_cases[1.0e-6]]
-        target_z = (np.arange(target_shape[0]) + 0.5) * geometry[0] / target_shape[0]
+        target_z = coarse.physical_item(0)["z"].numpy()
         target_r = (np.arange(target_shape[1]) + 0.5) * geometry[1] / target_shape[1]
-        reference = _interpolate_fields(
+        reference = interpolate_fields(
             reference_item["y"].numpy(),
-            fine_sample["z"].numpy(), fine_sample["r"].numpy(),
+            reference_item["z"].numpy(), reference_item["r"].numpy(),
             target_z, target_r,
         )
         rows = []
         for index in range(len(coarse)):
             item = coarse.physical_item(index)
-            sample = coarse[index]
             case_metadata = item["metadata"]
             if any(
                 not math.isclose(float(case_metadata["params"][key]),
@@ -117,27 +96,22 @@ def plot_tolerance_superresolution(
                 for key in ("T0", "P0", "sccm")
             ):
                 raise ValueError("Tolerance sweep cases do not share physical controls.")
-            interpolated = _interpolate_fields(
-                item["y"].numpy(), sample["z"].numpy(), sample["r"].numpy(),
+            interpolated = interpolate_fields(
+                item["y"].numpy(), item["z"].numpy(), item["r"].numpy(),
                 target_z, target_r,
             )
             rows.append((
                 float(case_metadata["params"]["rtol_ss"]),
                 float(case_metadata["wall_time"]),
-                _relative_field_errors(interpolated, reference),
+                field_errors(interpolated, reference),
             ))
-        model = model_from_config(checkpoint["config"], torch.device("cpu"))
-        model.load_state_dict(checkpoint["state_dict"])
-        model.eval()
         physical_input = coarse.physical_item(0)["x"]
         with torch.no_grad():
-            prediction = _complete_fno_evaluation(
-                model, physical_input, coarse,
-                training_shape, target_shape, device=torch.device("cpu"),
+            prediction = complete_fno_evaluation(
+                trainer.model, physical_input, coarse, target_shape, device=device,
             ).numpy()
         fno_seconds = inference_latency(
-            model, physical_input, coarse,
-            training_shape, target_shape, device=torch.device("cpu"),
+            trainer.model, physical_input, coarse, target_shape, device=device,
         )
     finally:
         coarse_raw.close()
@@ -147,7 +121,7 @@ def plot_tolerance_superresolution(
     rtols = np.asarray([row[0] for row in rows])
     seconds = np.asarray([row[1] for row in rows])
     errors = np.stack([row[2] for row in rows])
-    fno_errors = _relative_field_errors(prediction, reference)
+    fno_errors = field_errors(prediction, reference)
     figure, axes = plt.subplots(1, len(OUTPUT_CHANNELS), figsize=(17, 5),
                                constrained_layout=True)
     colors = plt.get_cmap("viridis")
@@ -172,7 +146,7 @@ def plot_tolerance_superresolution(
         "(20×10, rtol=1e-6 reference)"
     )
     path.parent.mkdir(parents=True, exist_ok=True)
-    figure.savefig(path, dpi=SLIDE_DPI)
+    figure.savefig(path)
     # import matplotlib
     # matplotlib.use('Qt5Agg')
     # plt.show()
@@ -260,7 +234,7 @@ def plot_cumulative_break_even(
         "Cumulative cost and FNO break-even "
         f"(offline cost = {offline_seconds:.1f} s)"
     )
-    figure.savefig(path, dpi=SLIDE_DPI)
+    figure.savefig(path)
     plt.close(figure)
 
 
@@ -342,7 +316,7 @@ def plot_amortized_pareto(
     axes[0].set_ylabel("Requested resolution [mesh points]")
     axes[-1].legend()
     figure.suptitle("Amortized cost-resolution Pareto frontiers")
-    figure.savefig(path, dpi=SLIDE_DPI)
+    figure.savefig(path)
     plt.close(figure)
 
 
@@ -428,7 +402,7 @@ def plot_break_even_map(
     axis.set_ylabel("Number of new evaluations, N")
     axis.set_title("FNO-to-numerical cumulative-cost speedup")
     figure.colorbar(image, ax=axis, label="Speedup")
-    figure.savefig(path, dpi=SLIDE_DPI)
+    figure.savefig(path)
     plt.close(figure)
 
 
@@ -527,7 +501,7 @@ def plot_mesh_l2(
     _mark_training_resolution(axis, summary, training_shape)
     axis.grid(alpha=0.28)
     axis.legend(ncols=3, loc="upper left")
-    figure.savefig(path, dpi=SLIDE_DPI)
+    figure.savefig(path)
     plt.close(figure)
 
 
@@ -640,7 +614,7 @@ def plot_mesh_wall_time(
     offline_axis.set_title("One-time offline cost components")
     offline_axis.grid(axis="y", alpha=0.28)
     offline_axis.tick_params(axis="y", labelleft=False)
-    figure.savefig(path, dpi=SLIDE_DPI)
+    figure.savefig(path)
     plt.close(figure)
 
 def main():
