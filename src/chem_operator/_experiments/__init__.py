@@ -59,10 +59,13 @@ from .workflow import (
     run_context_from_namespace,
 )
 
-from .operator_workflow import parse_operator_args, operator_spec, run_operator, evaluate_fields, unwrap_dataset
+from .operator_workflow import (
+    parse_operator_args, operator_spec, operator_ray_runtime, run_operator, evaluate_fields, unwrap_dataset,
+)
 
 __all__ = [
-    "parse_operator_args", "operator_spec", "run_operator", "evaluate_fields", "unwrap_dataset",
+    "parse_operator_args", "operator_spec", "operator_ray_runtime", "run_operator", "evaluate_fields",
+    "unwrap_dataset",
     "ARTIFACT_SCHEMA_VERSION",
     "AggregateSeries",
     "ArtifactStore",

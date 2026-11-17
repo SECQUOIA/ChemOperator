@@ -322,3 +322,52 @@ def test_comparison_records_form_problem_by_model_matrix(tmp_path: Path) -> None
         "synthetic": {"deeponet": 0.4, "fno": 0.4}
     }
     assert len(validate_model_comparison((direct, fno))) == 2
+
+
+class _IdentityFields(TinyFields):
+    """Normalized fields whose physical values are twice the stored ones."""
+
+    def denormalize_output(self, output: torch.Tensor) -> torch.Tensor:
+        return 2.0 * output
+
+
+def test_evaluate_fields_accepts_external_predictions_and_normalized_scores(
+    tmp_path: Path,
+) -> None:
+    from torch.utils.data import Subset
+
+    from chem_operator.experiments import evaluate_fields
+
+    data = Subset(_IdentityFields(), [1, 3])
+    targets = torch.stack([data[index]["y"] for index in range(len(data))])
+
+    class SavedPredictions:
+        config = {"batch_size": 1}
+
+        def predict(self, _data, _context):
+            return 0.5 * targets
+
+    calls = []
+    outcome = evaluate_fields(
+        SavedPredictions(), data, context(tmp_path), labels=("f",), coordinate_names=(),
+        cases=1, batch_size=2, normalized_relative_l2=True,
+        predict=lambda trainer, selected, run_context: calls.append(selected) or trainer.predict(selected, run_context),
+    )
+    assert calls == [data]
+    assert outcome.metrics["normalized_relative_l2"] == pytest.approx(0.5)
+    assert outcome.metrics["normalized_relative_l2_f"] == pytest.approx(0.5)
+    assert outcome.metrics["relative_l2"] == pytest.approx(0.5)
+    assert outcome.metrics["f/relative_l2"] == pytest.approx(0.5)
+    np.testing.assert_allclose(outcome.reconstructions["prediction"], (targets[:1]).numpy())
+    np.testing.assert_allclose(outcome.reconstructions["reference"], (2.0 * targets[:1]).numpy())
+    assert outcome.reconstructions["case_ids"].tolist() == [0]
+
+    class ShortPredictions(SavedPredictions):
+        def predict(self, _data, _context):
+            return targets[:1]
+
+    with pytest.raises(ValueError, match="returned 1 cases for 2 references"):
+        evaluate_fields(
+            ShortPredictions(), data, context(tmp_path), labels=("f",), coordinate_names=(),
+            predict=lambda trainer, selected, run_context: trainer.predict(selected, run_context),
+        )
