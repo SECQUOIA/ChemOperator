@@ -662,10 +662,15 @@ def plot_operator_fields(path, reference, prediction, labels, coordinates, coord
     reference, prediction = np.asarray(reference), np.asarray(prediction)
     if reference.shape != prediction.shape or reference.shape[0] != len(labels):
         raise ValueError("Field shapes and labels do not agree.")
-    coordinate_names = [{"r": "Radius [m]", "z": "Axial position [m]", "t": "Time [s]"}.get(str(name), str(name)) for name in coordinate_names]
     dimensions = reference.ndim - 1
     if dimensions not in (1, 2) or len(coordinates) != dimensions:
         raise ValueError("Expected one or two coordinate axes.")
+    # Display spatial axes in millimeters; stored coordinates stay in meters.
+    axes_display = {"r": ("Radius [mm]", 1e3), "z": ("Axial position [mm]", 1e3), "t": ("Time [s]", 1.0)}
+    names = [str(name) for name in coordinate_names]
+    coordinate_names = [axes_display.get(name, (name, 1.0))[0] for name in names]
+    coordinates = [np.asarray(values) * axes_display.get(name, (name, 1.0))[1]
+                   for values, name in zip(coordinates, names)]
     if dimensions == 1:
         fig, axes = plt.subplots(len(labels), 1, squeeze=False, figsize=(8, 3 * len(labels)))
         for i, label in enumerate(labels):
