@@ -169,6 +169,62 @@ def test_run_seeds_resumes_by_skipping_completed_children(tmp_path: Path) -> Non
         runner.start()
 
 
+def test_run_seeds_rejects_resume_with_different_config(tmp_path: Path) -> None:
+    root = RunContext.create(tmp_path, problem="synthetic", model="fno", run_id="multi", seed=1, device="cpu")
+    runner = ExperimentRunner(root, spec(tmp_path))
+    runner.run_seeds((1,), train_one, config={"seed": 1, "width": 4})
+    before = runner.artifacts.read_manifest()
+    with pytest.raises(ValueError, match="seed 1 was trained with different width"):
+        runner.run_seeds((1, 2), train_one, config={"seed": 1, "width": 8})
+    assert runner.artifacts.read_manifest() == before
+    assert runner.artifacts.read_best_config() == {"seed": 1, "width": 4}
+    assert not root.seed_child(2).paths.run_dir.exists()
+    assert load_run(root.paths.run_dir).seeds == (1,)
+    # Per-seed keys may change on resume.
+    runner.run_seeds((1, 2), train_one, config={"seed": 1, "width": 4, "epochs": 2})
+    assert load_run(root.paths.run_dir).seeds == (1, 2)
+
+
+def test_run_seeds_rejects_config_unlike_completed_flat_run(tmp_path: Path) -> None:
+    root = RunContext.create(tmp_path, problem="synthetic", model="fno", run_id="flat", seed=42, device="cpu")
+    runner = ExperimentRunner(root, spec(tmp_path))
+    train_final(runner, WorkflowStages(tune=False), config={"seed": 42, "width": 4},
+                tuning=None, train_one=train_one)
+    with pytest.raises(ValueError, match="existing run was trained with different width"):
+        train_final(runner, WorkflowStages(tune=False, seeds=(43,)), config={"seed": 42, "width": 8},
+                    tuning=None, train_one=train_one)
+    assert runner.artifacts.read_manifest()["status"] == "completed"
+    assert runner.artifacts.read_best_config()["width"] == 4
+
+
+def test_run_operator_passes_tune_seed_to_optuna(tmp_path: Path, monkeypatch) -> None:
+    from types import SimpleNamespace
+
+    from chem_operator._experiments import operator_workflow
+
+    class Captured(Exception):
+        pass
+
+    def fake_tuner(*args, config, **kwargs):
+        raise Captured(config)
+
+    class Raw:
+        def close(self) -> None:
+            pass
+
+    paths = SimpleNamespace(root=tmp_path, data=tmp_path, ray=tmp_path / "ray")
+    monkeypatch.setattr(operator_workflow, "Tuner", fake_tuner)
+    monkeypatch.setattr("sys.argv", ["fno.py", "--no-train", "--tune-seed", "19", "--device", "cpu",
+                                     "--runs-root", str(tmp_path / "runs"), "--run-id", "r"])
+    args = operator_workflow.parse_operator_args(paths, epochs=1, tune_epochs=1, samples=1)
+    with pytest.raises(Captured) as captured:
+        operator_workflow.run_operator(
+            args, paths, spec(tmp_path), lambda split: (Raw(), TinyFields()),
+            trainer_factory=None, search_space={}, evaluator=evaluate, seed=42,
+        )
+    assert captured.value.args[0].optuna_seed == 19
+
+
 def test_run_seeds_marks_child_and_parent_failed(tmp_path: Path) -> None:
     root = RunContext.create(tmp_path, problem="synthetic", model="fno", run_id="multi", seed=1, device="cpu")
     runner = ExperimentRunner(root, spec(tmp_path))

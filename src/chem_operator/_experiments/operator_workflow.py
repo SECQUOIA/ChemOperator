@@ -106,7 +106,7 @@ def run_operator(args, paths, spec, dataset_factory, trainer_factory, search_spa
         return Tuner(trial_trainer, space, dataset_factory=trial_data, config=TuningConfig(
             metric=f"best_valid_{selection_metric}", mode="min", num_samples=args.samples,
             max_epochs=args.tune_epochs, grace_period=max(1, args.tune_epochs // 3),
-            max_concurrent_trials=1, optuna_seed=seed,
+            max_concurrent_trials=1, optuna_seed=context.seed,
             resources_per_trial={"cpu": cpus, "gpu": gpus},
             ray_runtime=operator_ray_runtime(paths, cpus=cpus, gpus=gpus)))
 
