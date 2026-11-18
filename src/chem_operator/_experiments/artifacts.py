@@ -1,4 +1,8 @@
-"""Atomic persistence and validation for versioned experiment artifacts."""
+"""Atomic persistence and validation for versioned experiment artifacts.
+
+Optional manifest keys written by multi-seed runs: ``seeds`` (child seeds
+trained under ``seeds/<seed>/``) and ``tuning_seed`` (the Optuna study seed).
+"""
 
 from __future__ import annotations
 
@@ -439,20 +443,30 @@ class ArtifactStore:
         )
 
     def validate_complete(self) -> None:
+        """Validate a completed run.
+
+        A multi-seed parent (manifest ``seeds`` non-empty) must hold the
+        tuning artifacts and one complete child per listed seed; its own
+        training files are required only when the root is itself a member
+        (a flat run later extended with seeds).
+        """
         manifest = self.read_manifest()
         if manifest["status"] != "completed":
             raise ArtifactValidationError("Run manifest is not completed.")
-        required = (
-            self.paths.best_config,
-            self.paths.history,
-            self.paths.metrics,
-            self.paths.reconstructions,
-            self.paths.tuning_trials,
-        )
+        seeds = manifest.get("seeds") or ()
+        root_is_member = not seeds or self.paths.metrics.is_file()
+        required = [self.paths.best_config, self.paths.tuning_trials]
+        if root_is_member:
+            required.extend((self.paths.history, self.paths.metrics, self.paths.reconstructions))
         missing = [path.name for path in required if not path.is_file()]
-        checkpoints = tuple(self.paths.run_dir.glob("checkpoint.*"))
-        if not checkpoints:
+        if root_is_member and not tuple(self.paths.run_dir.glob("checkpoint.*")):
             missing.append("checkpoint.*")
+        for seed in seeds:
+            child = self.paths.seed_child(int(seed))
+            try:
+                ArtifactStore(child).validate_complete()
+            except (OSError, ArtifactValidationError) as error:
+                missing.append(f"{child.run_dir.relative_to(self.paths.run_dir)} ({error})")
         if missing:
             raise ArtifactValidationError(
                 "Completed run is missing artifacts: " + ", ".join(missing)

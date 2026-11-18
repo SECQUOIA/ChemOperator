@@ -1,4 +1,4 @@
-"""Shared packed-bed dataset and DeepONet experiment configuration."""
+"""Shared packed-bed dataset and operator experiment configuration."""
 
 from __future__ import annotations
 
@@ -73,7 +73,7 @@ UNITS = {
 }
 
 COORDINATE_STRIDE = 1
-RESAMPLE_POINTS = 128
+RESAMPLE_POINTS = 512
 SEED = 7
 RECONSTRUCTION_CASES = 2
 MAX_TRAJECTORIES: int | None = None
@@ -220,8 +220,8 @@ def experiment_spec(model_id: str) -> ExperimentSpec:
 
 
 def validate_stages(stages: WorkflowStages) -> None:
-    if stages.train_config != "best":
-        raise ValueError("DeepONet training currently requires --train-config best.")
+    if not (stages.tune or stages.train):
+        raise ValueError("Select --tune or --train.")
 
 
 def tuning_settings() -> DeepONetTuningSettings:

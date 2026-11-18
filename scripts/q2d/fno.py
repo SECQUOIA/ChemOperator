@@ -14,7 +14,6 @@ import numpy as np
 import pandas as pd
 from ray import tune
 import torch
-from torch.nn import functional as torch_functional
 from chem_operator.models import FNOAdapter
 from chem_operator.normalization import ZScoreNormalizer
 from scripts.q2d.common import (
@@ -25,18 +24,19 @@ from scripts.q2d.common import (
     REPRESENTATIVE_RESOLUTION_COUNT,
     INPUT_CHANNELS,
     OUTPUT_CHANNELS,
+    OUTPUT_LABELS,
     MeshFile,
+    case_controls,
     raw_dataset,
     make_adapter,
     discover_mesh_files,
     find_superresolution_pair,
     parse_args,
+    relative_l2_per_case,
     run_model,
-    relative_l2_per_field as _relative_l2_per_field,
-    relative_l2_per_sample as _relative_l2_per_sample,
 )
 
-from scripts.q2d.common import _case_controls
+
 def model_from_config(
     config: Mapping[str, Any],
     device: torch.device,
@@ -53,25 +53,28 @@ def model_from_config(
     ).to(device)
 
 
-def resize_model_input(
-    model_input: torch.Tensor,
+def evaluation_input(
+    dataset: FNOAdapter,
+    physical_input: torch.Tensor,
     shape: tuple[int, int],
 ) -> torch.Tensor:
-    """Resize channel-first inputs to a requested FNO evaluation mesh.
+    """Normalize the scalar controls and broadcast them over a requested mesh.
 
-    Broadcast scalar channels remain exactly constant. This interpolation also
-    makes future continuous physical input fields configuration-compatible
-    with zero-shot superresolution. Evaluating directly on the requested mesh
-    also keeps NeuralOperator domain padding and unpadding resolution-consistent.
+    Every Q2D input channel is a case-wide control, so the FNO input at any
+    resolution is the same normalized vector repeated at each mesh point.
+    Evaluating directly on the requested mesh keeps NeuralOperator domain
+    padding and unpadding resolution-consistent.
     """
-    if tuple(model_input.shape[-2:]) == tuple(shape):
-        return model_input
-    return torch_functional.interpolate(
-        model_input.unsqueeze(0),
-        size=shape,
-        mode="bilinear",
-        align_corners=True,
-    )[0]
+    flat = physical_input.flatten(1)
+    if not torch.equal(flat, flat[:, :1].expand_as(flat)):
+        raise ValueError("Q2D FNO inputs must be spatially constant controls.")
+    normalized = torch.stack(
+        [
+            dataset.normalizer.normalize(flat[index, 0], channel.label)
+            for index, channel in enumerate(dataset.input_channels)
+        ]
+    )
+    return normalized.reshape(-1, 1, 1).expand(-1, *shape).contiguous()
 
 
 def _synchronize(device: torch.device) -> None:
@@ -79,28 +82,17 @@ def _synchronize(device: torch.device) -> None:
         torch.cuda.synchronize(device)
 
 
-def _complete_fno_evaluation(
+def complete_fno_evaluation(
     model: FNO,
     physical_input: torch.Tensor,
     dataset: FNOAdapter,
-    training_shape: tuple[int, int],
     output_shape: tuple[int, int],
     *,
     device: torch.device,
 ) -> torch.Tensor:
-    """Run preprocessing, resampling, inference, and postprocessing once."""
-    normalized_input = torch.stack(
-        [
-            dataset.normalizer.normalize(
-                physical_input[index],
-                channel.label,
-            )
-            for index, channel in enumerate(dataset.input_channels)
-        ]
-    )
-    training_input = resize_model_input(normalized_input, training_shape)
-    evaluation_input = resize_model_input(training_input, output_shape)
-    normalized_output = model(evaluation_input.unsqueeze(0).to(device)).cpu()[0]
+    """Run preprocessing, inference, and postprocessing once."""
+    model_input = evaluation_input(dataset, physical_input, output_shape)
+    normalized_output = model(model_input.unsqueeze(0).to(device)).cpu()[0]
     return dataset.denormalize_output(normalized_output)
 
 
@@ -108,7 +100,6 @@ def inference_latency(
     model: FNO,
     physical_input: torch.Tensor,
     dataset: FNOAdapter,
-    training_shape: tuple[int, int],
     output_shape: tuple[int, int],
     *,
     device: torch.device,
@@ -117,11 +108,10 @@ def inference_latency(
     model.eval()
     with torch.no_grad():
         for _ in range(LATENCY_WARMUPS):
-            _complete_fno_evaluation(
+            complete_fno_evaluation(
                 model,
                 physical_input,
                 dataset,
-                training_shape,
                 output_shape,
                 device=device,
             )
@@ -130,11 +120,10 @@ def inference_latency(
         for _ in range(LATENCY_REPEATS):
             _synchronize(device)
             tic = time.perf_counter()
-            _complete_fno_evaluation(
+            complete_fno_evaluation(
                 model,
                 physical_input,
                 dataset,
-                training_shape,
                 output_shape,
                 device=device,
             )
@@ -148,7 +137,6 @@ def benchmark_meshes(  # pylint: disable=too-many-locals
     normalizer: ZScoreNormalizer,
     geometry: tuple[float, float],
     mesh_files: Sequence[MeshFile],
-    training_shape: tuple[int, int],
     *,
     device: torch.device,
 ) -> pd.DataFrame:
@@ -156,31 +144,18 @@ def benchmark_meshes(  # pylint: disable=too-many-locals
     rows: list[dict[str, Any]] = []
     model.eval()
     for mesh_file in mesh_files:
-        raw, dataset = make_adapter(mesh_file.path, normalizer, geometry)
+        # The adapter rejects any case whose stored mesh differs from the file name.
+        raw, dataset = make_adapter(mesh_file.path, normalizer, geometry, mesh_file.shape)
         try:
             for case_index in range(len(dataset)):
-                sample = dataset[case_index]
-                target = sample["y"].unsqueeze(0).to(device)
-                target_shape = tuple(int(value) for value in target.shape[-2:])
-                if target_shape != (mesh_file.n_z, mesh_file.n_r):
-                    raise ValueError(
-                        f"{mesh_file.path.name} declares "
-                        f"{mesh_file.n_z}x{mesh_file.n_r} but stores {target_shape}."
-                    )
-                training_input = resize_model_input(sample["x"], training_shape)
-                prediction_input = resize_model_input(
-                    training_input,
-                    target_shape,
-                )
-                with torch.no_grad():
-                    prediction = model(prediction_input.unsqueeze(0).to(device))
-                global_l2 = float(
-                    _relative_l2_per_sample(prediction, target).cpu()[0]
-                )
-                field_l2 = _relative_l2_per_field(prediction, target).cpu()[0]
                 physical = dataset.physical_item(case_index)
+                target = dataset[case_index]["y"].unsqueeze(0).to(device)
+                model_input = evaluation_input(dataset, physical["x"], mesh_file.shape)
+                with torch.no_grad():
+                    prediction = model(model_input.unsqueeze(0).to(device))
+                global_l2, field_l2 = relative_l2_per_case(prediction, target)
                 metadata = physical["metadata"]
-                t0, sccm = _case_controls(metadata)
+                t0, sccm = case_controls(metadata)
                 row: dict[str, Any] = {
                     "dataset_file": mesh_file.path.name,
                     "case_index": case_index,
@@ -189,20 +164,19 @@ def benchmark_meshes(  # pylint: disable=too-many-locals
                     "mesh_points": mesh_file.mesh_points,
                     "T0_K": t0,
                     "SCCM": sccm,
-                    "normalized_relative_l2": global_l2,
+                    "normalized_relative_l2": float(global_l2.cpu()[0]),
                     "solver_wall_time_s": float(metadata["wall_time"]),
                     "fno_wall_time_s": inference_latency(
                         model,
                         physical["x"],
                         dataset,
-                        training_shape,
-                        target_shape,
+                        mesh_file.shape,
                         device=device,
                     ),
                 }
-                for field_index, spec in enumerate(OUTPUT_CHANNELS):
-                    row[f"normalized_relative_l2_{spec.label}"] = float(
-                        field_l2[field_index]
+                for field_index, label in enumerate(OUTPUT_LABELS):
+                    row[f"normalized_relative_l2_{label}"] = float(
+                        field_l2.cpu()[0, field_index]
                     )
                 rows.append(row)
         finally:
@@ -374,7 +348,7 @@ def build_cost_model(
             ),
             "fno_evaluation_includes": [
                 "input normalization",
-                "interpolation or resampling",
+                "broadcast of the controls onto the requested mesh",
                 "device transfer",
                 "model inference",
                 "output denormalization",
@@ -404,7 +378,7 @@ def save_benchmarks(trainer, result, *, data_dir, normalizer, geometry, shape):
     from chem_operator.experiments import ArtifactStore, fingerprint_path
     output = result.context.paths.run_dir
     mesh_files = discover_mesh_files(data_dir)
-    frame = benchmark_meshes(trainer.model,normalizer,geometry,mesh_files,shape,device=result.context.device)
+    frame = benchmark_meshes(trainer.model,normalizer,geometry,mesh_files,device=result.context.device)
     frame.to_csv(output / "mesh_benchmark.csv",index=False)
     store = ArtifactStore(result.context)
     timings = store.read_manifest()["timings"]
@@ -415,17 +389,16 @@ def save_benchmarks(trainer, result, *, data_dir, normalizer, geometry, shape):
     coarse,ci,fine,fi = find_superresolution_pair(mesh_files,normalizer,geometry,shape)
     arrays = {}
     for label,item,index in (("coarse",coarse,ci),("fine",fine,fi)):
-        raw,data = make_adapter(item.path,normalizer,geometry)
+        raw,data = make_adapter(item.path,normalizer,geometry,item.shape)
         try:
-            sample = data[index]
+            physical = data.physical_item(index)
             with torch.no_grad():
-                x = resize_model_input(resize_model_input(sample["x"],shape),(item.n_z,item.n_r))
-                pred = trainer.model(x[None].to(result.context.device)).cpu()[0]
+                pred = complete_fno_evaluation(trainer.model,physical["x"],data,item.shape,
+                                               device=result.context.device)
             arrays.update({f"{label}_{name}": value.numpy() for name,value in
-                (("reference",data.denormalize_output(sample["y"])),("prediction",data.denormalize_output(pred)),
-                 ("z",sample["z"]),("r",sample["r"]))})
+                (("reference",physical["y"]),("prediction",pred),("z",physical["z"]),("r",physical["r"]))})
         finally: raw.close()
-    arrays["labels"] = np.asarray([c.label for c in OUTPUT_CHANNELS])
+    arrays["labels"] = np.asarray(OUTPUT_LABELS)
     np.savez_compressed(output / "superresolution.npz",**arrays)
     store.update_manifest(benchmark_metadata={"dataset_fingerprints": provenance, "training_shape": list(shape),
                           "coarse_case": [coarse.path.name,ci], "fine_case": [fine.path.name,fi]})

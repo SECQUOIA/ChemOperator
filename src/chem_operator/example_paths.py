@@ -23,6 +23,11 @@ class ExamplePaths:
         return self.root / "datasets"
 
     @property
+    def plots(self) -> Path:
+        """Return the project-level plot directory, keyed by problem ID below it."""
+        return self.root / "artifacts" / "plots"
+
+    @property
     def ray(self) -> Path:
         """Return the project-level Ray temporary directory."""
         return self.root / ".ray"

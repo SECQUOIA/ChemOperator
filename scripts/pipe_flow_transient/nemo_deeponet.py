@@ -18,7 +18,7 @@ from torch import nn
 from torch.nn import functional as F
 
 from chem_operator.experiments import (
-    CompositeLossTrainer,
+    OperatorTrainer,
     LossTerm,
     run_operator,
 )
@@ -172,7 +172,7 @@ def make_trainer(config, context, normalizer, n_radial: int, *, pde_name: str,
             batch["physics_loss"], batch["constraint_loss"] = zero, zero
         return prediction
 
-    return CompositeLossTrainer(
+    return OperatorTrainer(
         lambda cfg: model_from_config(cfg, n_radial, context.device), config,
         batch_adapter=adapt, forward_adapter=forward,
         loss_terms=[

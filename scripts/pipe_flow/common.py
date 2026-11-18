@@ -182,8 +182,8 @@ def experiment_spec(model_id: str) -> ExperimentSpec:
 
 
 def validate_stages(stages: WorkflowStages) -> None:
-    if stages.train_config != "best":
-        raise ValueError("DeepONet training currently requires --train-config best.")
+    if not (stages.tune or stages.train):
+        raise ValueError("Select --tune or --train.")
 
 
 def tuning_settings() -> DeepONetTuningSettings:

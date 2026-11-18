@@ -26,7 +26,8 @@ python scripts/<folder>/<script>.py [options]
 
 Pass `--help` to a model or plotting entry point to see its effective CLI.
 Generated datasets are written below `datasets/`; canonical model runs are
-written below `artifacts/runs/` unless `--runs-root` is supplied.
+written below `artifacts/runs/` unless `--runs-root` is supplied, and plots are
+written below `artifacts/plots/<problem_id>/` unless `--output-dir` is supplied.
 
 Each workflow keeps separate entry points for dataset generation, model runs,
 and artifact plotting:
@@ -37,10 +38,18 @@ and artifact plotting:
 | Tune and train | `python scripts/<folder>/<model>.py` |
 | Plot saved runs | `python scripts/<folder>/plot.py --run PATH [--run PATH ...]` |
 
-Plotters require at least one `--run`. Repeat it to compare compatible runs;
-`--output-dir PATH` selects the plot directory and `--cases N` limits plotted
-test cases. Use `python scripts/plot_all.py` to plot the newest available
-runs across workflows.
+Plotters require `--run` or `--recent`, which are mutually exclusive. Repeat
+`--run` to compare compatible runs. Use `--recent` instead of `--run` to plot
+the newest completed run for every model, or `bash scripts/plot_all.sh` to do
+so across workflows. Every plotter shares the same output options:
+
+| Option | Default | Purpose |
+| --- | --- | --- |
+| `--output-dir PATH` | `artifacts/plots/<problem_id>` | Plot directory; mirrors `artifacts/runs/<problem_id>`. |
+| `--cases N` | per workflow (1 to 3) | Number of test cases to plot; must be positive. |
+
+Within the plot directory, each run is written to `<model_id>/<run-id>/` and
+compatible runs are overlaid under `comparisons/group_N/`.
 
 ## Common model options
 
@@ -54,7 +63,9 @@ The direct and POD DeepONet scripts accept these options:
 | `--run-id ID` | UTC timestamp | Select the final run-directory component. |
 | `--device DEVICE` | `auto` | Select `auto`, `cpu`, `cuda`, or another PyTorch device. |
 | `--plot-cases N` | `2` | Number of test reconstructions to store. |
-| `--train-config CONFIG` | `best` | Select the final configuration; these scripts currently require `best`. |
+| `--train-config CONFIG` | `best` | Hyperparameters for final training: `best` (this run's `best_config.json`), `recent` (the newest tuned run of this model), a completed run directory, or a JSON file. |
+| `--seeds SEED [SEED ...]` | unset | Train the final model once per seed under `<run>/seeds/<seed>/`; requires `--train`. |
+| `--tune-seed N` | problem `SEED` | Seed for the Optuna study (and for training when `--seeds` is omitted). |
 
 The FNO and physics workflow scripts additionally accept:
 
@@ -67,8 +78,13 @@ The FNO and physics workflow scripts additionally accept:
 | `--max-cases N` | Limit the number of cases per split for a smoke test. |
 
 At least one of tuning or training must remain enabled. When training with
-`--no-tune`, use the same `--run-id` and `--runs-root` as a completed tuning
-run so the workflow can read its saved best configuration.
+`--no-tune --train-config best`, use the same `--run-id` and `--runs-root` as a
+completed tuning run so the workflow can read its saved best configuration;
+pass another run's directory to `--train-config` to reuse its hyperparameters
+under a new `--run-id`. `--train-config recent` does the same with the newest
+completed run of the same problem and model that ran a tuning study (a
+non-empty `tuning_trials.csv`, not a `--max-cases` smoke run); runs trained
+from a saved configuration are never chosen.
 
 For example:
 
@@ -85,6 +101,62 @@ python scripts/pipe_flow_transient/transient_fno.py \
   --device cpu --max-cases 8 --samples 1 --tune-epochs 1 --epochs 1 \
   --plot-cases 1
 ```
+
+### Multi-seed runs
+
+Without `--seeds` a run directory holds one trained model (the "flat"
+layout). With `--seeds`, tuning artifacts stay in the run directory and each
+seed is trained from the same best configuration into a complete child run at
+`<run>/seeds/<seed>/`:
+
+```
+artifacts/runs/<problem>/<model>/<run-id>/
+  manifest.json          seeds: [42, 43, 44], tuning_seed, status
+  best_config.json       tuning_trials.csv   ray_results/
+  seeds/42/              manifest.json history.csv metrics.csv checkpoint.pt reconstructions.npz
+  seeds/43/  seeds/44/
+```
+
+A run's *members* are the root directory when it holds `metrics.csv` (every
+flat run) plus every completed `seeds/*` child, so a completed flat run can be
+extended with more seeds under the same `--run-id`, and completed children are
+skipped when a run is resumed. Plotters and the paper tables average over
+members at read time; nothing aggregated is stored.
+
+Once a run has completed members, extending it requires the saved configuration's
+hyperparameter keys and values, except for `seed` and `epochs`. Added or removed
+keys are rejected before artifacts change, since omission can select a different
+trainer default. This also applies to a flat root after an interrupted extension.
+Use `--no-tune --train-config best` to reuse the saved configuration (including
+trainer defaults stored by flat runs), or choose a new `--run-id` for a different
+configuration. A partial JSON override is not sufficient when it omits saved keys.
+
+```bash
+# Tune once, then train seeds 42-44 into the same run.
+python scripts/cstr/deeponet.py --run-id cstr_do_01 --seeds 42 43 44
+
+# Add two more seeds to that run later.
+python scripts/cstr/deeponet.py --run-id cstr_do_01 --no-tune --seeds 45 46
+
+# Train five seeds from whichever run of this model was tuned most recently.
+python scripts/cstr/deeponet.py --no-tune --train-config recent --seeds 1 2 3 4 5
+
+# Reuse a specific completed run's hyperparameters under a new run id.
+python scripts/cstr/deeponet.py --run-id cstr_do_02 --no-tune \
+  --train-config artifacts/runs/cstr_non_isothermal/deeponet/cstr_do_01 \
+  --seeds 1 2 3 4 5
+
+# Plot the aggregate (mean ± std bands) or one seed.
+python scripts/cstr/plot.py --run artifacts/runs/cstr_non_isothermal/deeponet/cstr_do_02
+python scripts/cstr/plot.py --run artifacts/runs/cstr_non_isothermal/deeponet/cstr_do_02/seeds/3
+```
+
+For a multi-seed run, `training_validation_loss.png` and the comparison
+`validation_history.png` show the mean curve with a ±1 standard-deviation
+band over the epochs all seeds reached. Reconstruction plots are written per
+seed under `<plots>/<model>/<run-id>/seeds/<seed>/`, with the first member's
+copies kept at the usual top-level paths. `paper/export_model_tables.py`
+reports the test error as mean ± std with a `Seeds` column.
 
 ## `scripts/cstr`
 
@@ -124,7 +196,6 @@ python scripts/cstr/plot.py \
   --run artifacts/runs/cstr_non_isothermal/deeponet/<run-id> \
   --run artifacts/runs/cstr_non_isothermal/pod_deeponet/<run-id> \
   --run artifacts/runs/cstr_non_isothermal/fno/<run-id> \
-  --output-dir scripts/cstr/results/deeponet_comparison \
   --cases 2
 ```
 
@@ -135,7 +206,7 @@ opt-in diagnostic:
 ```bash
 python scripts/cstr/plot.py --co-histories \
   --dataset datasets/cstr/cstr_non_isothermal_train.h5 \
-  --co-output scripts/cstr/results/train_set_CO.png
+  --co-output artifacts/plots/cstr_non_isothermal/diagnostics/train_set_CO.png
 ```
 
 The diagnostic may also be combined with `--run`. Text rendering uses
@@ -155,21 +226,23 @@ corresponding splits:
 python scripts/pfr/generate_dataset.py
 ```
 
-Tune and train the direct or POD-compressed chain-of-reactors model:
+Tune and train the direct DeepONet, POD-DeepONet, or supervised FNO on the
+chain-of-reactors dataset:
 
 ```bash
 python scripts/pfr/deeponet.py
 python scripts/pfr/pod_deeponet.py
+python scripts/pfr/fno.py
 ```
 
-Both predict temperature, pressure, composition, and velocity along `z`.
+All three predict temperature, pressure, composition, and velocity along `z`.
 Compare their saved runs with:
 
 ```bash
 python scripts/pfr/plot.py \
   --run artifacts/runs/pfr_chain/deeponet/<run-id> \
   --run artifacts/runs/pfr_chain/pod_deeponet/<run-id> \
-  --output-dir scripts/pfr/results/deeponet_comparison \
+  --run artifacts/runs/pfr_chain/fno/<run-id> \
   --cases 2
 ```
 
@@ -184,11 +257,12 @@ existing splits:
 python scripts/packed_bed_1d/generate_dataset.py
 ```
 
-Tune and train the direct or POD-compressed DeepONet:
+Tune and train the direct DeepONet, POD-compressed DeepONet, or supervised FNO:
 
 ```bash
 python scripts/packed_bed_1d/deeponet.py
 python scripts/packed_bed_1d/pod_deeponet.py
+python scripts/packed_bed_1d/fno.py
 ```
 
 Compare saved runs:
@@ -197,11 +271,15 @@ Compare saved runs:
 python scripts/packed_bed_1d/plot.py \
   --run artifacts/runs/packed_bed_1d/deeponet/<run-id> \
   --run artifacts/runs/packed_bed_1d/pod_deeponet/<run-id> \
-  --output-dir scripts/packed_bed_1d/results/deeponet_comparison \
+  --run artifacts/runs/packed_bed_1d/fno/<run-id> \
   --cases 2
 ```
 
 `common.py` contains the shared packed-bed data and experiment configuration.
+The FNO resamples every profile to 128 fixed physical positions from `0` to
+`0.05 m`. The DeepONet adapters instead resample to 128 relative positions
+through each case's recorded endpoint, which may extend slightly beyond
+`0.05 m` because the solver overshoots the nominal bed length.
 
 ## `scripts/pipe_flow`
 
@@ -228,33 +306,25 @@ python scripts/pipe_flow/physics_deeponet.py --variant both
 # Run only one variant.
 python scripts/pipe_flow/physics_deeponet.py --variant data
 python scripts/pipe_flow/physics_deeponet.py --variant physics
-
-# Use another experiment configuration.
-python scripts/pipe_flow/physics_deeponet.py \
-  --config path/to/physics_deeponet.yaml \
-  --variant both --physics-samples 4
 ```
 
 Its additional options are:
 
 | Option | Default | Purpose |
 | --- | --- | --- |
-| `--config PATH` | `scripts/pipe_flow/physics_deeponet.yaml` | Architecture choices, search ranges, seed, and physics-weight settings. |
 | `--variant {both,data,physics}` | `both` | Select the data-only baseline, physics-informed model, or sequential comparison. |
-| `--physics-samples N` | YAML budget | Override physics-weight trials when running the physics variant. |
 
-The YAML does not replace the Ray search space: the script converts its
-`search` values into `tune.choice` and `tune.loguniform` distributions. With
-`--variant both`, the physics run reuses the best data-only architecture and
-tunes the physics-loss weight.
+The search space, seed, and physics-weight range are module constants in the
+script, as in `fno.py`. Both variants search the same architecture and
+optimizer space; the physics variant additionally tunes the physics-loss weight.
 
 Plot one or more canonical physics/operator runs:
 
 ```bash
 python scripts/pipe_flow/plot.py \
   --run artifacts/runs/pipe_flow/physics_deeponet_data/<run-id> \
-  --run artifacts/runs/pipe_flow/physics_deeponet/<run-id> \
-  --output-dir scripts/pipe_flow/results/comparison --cases 3
+  --run artifacts/runs/pipe_flow/physics_deeponet_physics/<run-id> \
+  --cases 3
 ```
 
 Or compare the standard direct/POD pair:
@@ -309,7 +379,6 @@ python scripts/pipe_flow_transient/plot.py \
   --run artifacts/runs/pipe_flow_transient/transient_fno/<run-id> \
   --run artifacts/runs/pipe_flow_transient/transient_nemo_fno_data/<run-id> \
   --run artifacts/runs/pipe_flow_transient/transient_nemo_fno_physics/<run-id> \
-  --output-dir scripts/pipe_flow_transient/results/comparison \
   --cases 2
 ```
 
@@ -353,7 +422,6 @@ Plot one or more saved runs:
 python scripts/pfr_heat/plot.py \
   --run artifacts/runs/pfr_heat/fno_physics/<run-id> \
   --run artifacts/runs/pfr_heat/deeponet_fno_physics/<run-id> \
-  --output-dir scripts/pfr_heat/results/comparison \
   --cases 2
 ```
 
@@ -401,12 +469,47 @@ For example, train without the post-training benchmark:
 python scripts/q2d/fno.py --no-benchmark
 ```
 
+Tune and train fixed-mesh direct and POD-DeepONets on the same Q2D channels:
+
+```bash
+python scripts/q2d/deeponet.py
+python scripts/q2d/pod_deeponet.py
+```
+
+Both use `T0` and `SCCM` to predict methane, hydrogen, and surface carbon fields.
+They accept the common run, tuning, and training options, including `--data-dir`,
+`--epochs`, `--tune-epochs`, `--samples`, `--max-cases`, and `--plot-cases`.
+They require the same geometry and coordinate grid across selected cases and do
+not expose `--benchmark`. POD is fitted only on selected training cases, requires
+at least two cases, and retains 99.9% of normalized output variance.
+
+Train directly from a JSON configuration, or reuse a run's saved best configuration:
+
+```bash
+python scripts/q2d/deeponet.py --no-tune --train-config config.json --epochs 100
+python scripts/q2d/pod_deeponet.py --run-id q2d_pod_01 --no-train
+python scripts/q2d/pod_deeponet.py --run-id q2d_pod_01 --no-tune
+```
+
+The JSON configuration uses `width`, `latent_width`, `branch_hidden_layers`,
+`trunk_hidden_layers`, `activation`, `learning_rate`, `weight_decay`, and
+`batch_size`. For POD, the fitted basis determines `latent_width` and disables the
+learned trunk. Epochs and seed follow the Q2D CLI and shared defaults.
+
+Compare their saved fields and metrics with another Q2D model:
+
+```bash
+python scripts/q2d/plot.py \
+  --run artifacts/runs/q2d_cmr/deeponet/<run-id> \
+  --run artifacts/runs/q2d_cmr/pod_deeponet/<run-id> \
+  --run artifacts/runs/q2d_cmr/fno/<run-id>
+```
+
 Plot a saved run and, when present, its benchmark artifacts:
 
 ```bash
 python scripts/q2d/plot.py \
   --run artifacts/runs/q2d_cmr/fno/<run-id> \
-  --output-dir scripts/q2d/results/fno \
   --cases 1
 ```
 

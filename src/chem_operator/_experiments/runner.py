@@ -9,10 +9,39 @@ from pathlib import Path
 from typing import Any
 
 from .artifacts import ArtifactStore, build_manifest
+from .comparison import config_differences
 from .tuning import Tuner, TuningOutcome
 from .types import EvaluationOutcome, RunContext, Trainer, TrainingOutcome
 
 Evaluator = Callable[[Trainer, Any, RunContext], EvaluationOutcome]
+
+_OWN_RUN_SOURCES = frozenset({"tuning", "best"})
+
+
+def source_tuning_seconds(train_config_source: str) -> float:
+    """Return the tuning time behind hyperparameters loaded from another run.
+
+    ``train_config_source`` is the label from ``resolve_train_config``. Only a
+    run directory carries a tuning time; this run's own tuning (``tuning``,
+    ``best``, ``best:<run>``) and JSON files give 0. A source that was itself
+    trained from a saved configuration is followed back to the run that tuned.
+    """
+    seen: set[Path] = set()
+    source = train_config_source
+    while source and source not in _OWN_RUN_SOURCES and not source.startswith("best:"):
+        manifest_path = Path(source) / "manifest.json"
+        if not manifest_path.is_file():
+            break
+        resolved = manifest_path.resolve()
+        if resolved in seen:
+            raise ValueError(f"train_config_source cycle through {source}")
+        seen.add(resolved)
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        seconds = float((manifest.get("timings") or {}).get("tuning_seconds") or 0.0)
+        if seconds:
+            return seconds
+        source = str((manifest.get("provenance") or {}).get("train_config_source") or "")
+    return 0.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -61,9 +90,10 @@ class ExperimentRunner:
     """Own model-independent experiment lifecycle and artifact mechanics."""
 
     def __init__(self, context: RunContext, spec: ExperimentSpec) -> None:
-        if context.paths.run_dir.parent.name != spec.model_id:
+        root = context.paths.root_run_dir
+        if root.parent.name != spec.model_id:
             raise ValueError("RunContext model path and ExperimentSpec.model_id differ.")
-        if context.paths.run_dir.parent.parent.name != spec.problem_id:
+        if root.parent.parent.name != spec.problem_id:
             raise ValueError("RunContext problem path and ExperimentSpec.problem_id differ.")
         self.context = context
         self.spec = spec
@@ -74,7 +104,9 @@ class ExperimentRunner:
         *,
         parameter_count: int = 0,
         timings: Mapping[str, float | None] | None = None,
+        allow_completed: bool = False,
     ) -> None:
+        """Create the manifest or reopen an unfinished (or, if allowed, completed) run."""
         if self.artifacts.paths.manifest.is_file():
             manifest = self.artifacts.read_manifest()
             for name in ("problem_id", "model_id", "benchmark_protocol_id"):
@@ -84,7 +116,7 @@ class ExperimentRunner:
                 expected = json.loads(json.dumps(getattr(self.spec, name)))
                 if manifest[name] != expected:
                     raise ValueError(f"Existing manifest has a different {name}.")
-            if manifest["status"] == "completed":
+            if manifest["status"] == "completed" and not allow_completed:
                 raise FileExistsError(
                     f"Completed run already exists at {self.context.paths.run_dir}."
                 )
@@ -125,6 +157,29 @@ class ExperimentRunner:
                 artifact_store=self.artifacts,
                 **kwargs,
             )
+        except BaseException as error:
+            self.artifacts.mark_failed(error)
+            raise
+
+    def record_train_config_source(self, train_config_source: str) -> None:
+        """Record where a tuning-free run's hyperparameters came from.
+
+        The run inherits the source run's tuning time unless it already has
+        one, so its manifest reports the full cost of its hyperparameters.
+        """
+        self.start()
+        try:
+            manifest = self.artifacts.read_manifest()
+            self.artifacts.update_manifest(
+                provenance={
+                    **manifest.get("provenance", {}),
+                    "train_config_source": train_config_source,
+                },
+            )
+            if not manifest["timings"].get("tuning_seconds"):
+                self.artifacts.update_manifest(
+                    timings={"tuning_seconds": source_tuning_seconds(train_config_source)}
+                )
         except BaseException as error:
             self.artifacts.mark_failed(error)
             raise
@@ -181,5 +236,122 @@ class ExperimentRunner:
             self.artifacts.mark_failed(error)
             raise
 
+    def run_seeds(
+        self,
+        seeds: Sequence[int],
+        train_one: SeedTrainer,
+        *,
+        config: Mapping[str, Any],
+        tuning: TuningOutcome | None = None,
+        train_config_source: str = "best",
+    ) -> tuple[ExperimentResult, ...]:
+        """Train ``config`` once per seed into ``<run>/seeds/<seed>/``.
 
-__all__ = ["Evaluator", "ExperimentResult", "ExperimentRunner", "ExperimentSpec"]
+        The parent run keeps tuning artifacts and records the child seeds in
+        its manifest. Completed children are skipped so an interrupted or
+        extended run can be resumed with the same ``--run-id``. Once members
+        complete, saved hyperparameters must retain their keys and values,
+        except for seed and epoch overrides.
+        """
+        if self.context.paths.is_seed_child:
+            raise ValueError("run_seeds must be called on the parent run.")
+        requested = tuple(int(seed) for seed in seeds)
+        if not requested or len(set(requested)) != len(requested):
+            raise ValueError("seeds must be non-empty and unique.")
+        # Before touching any artifact, so a rejected resume leaves the group valid.
+        self._check_seed_group_config(config)
+        self.start(allow_completed=True)
+        try:
+            manifest = self.artifacts.read_manifest()
+            self.artifacts.update_manifest(
+                tuning_seed=self.context.seed,
+                provenance={
+                    **manifest.get("provenance", {}),
+                    "train_config_source": train_config_source,
+                },
+            )
+            self.artifacts.write_best_config(config)
+            if tuning is None:
+                if not self.artifacts.paths.tuning_trials.is_file():
+                    self.artifacts.write_tuning_trials(())
+                tuning_seconds = float(
+                    manifest["timings"].get("tuning_seconds") or 0.0
+                ) or source_tuning_seconds(train_config_source)
+            else:
+                self.artifacts.write_tuning_trials(tuning.trials)
+                tuning_seconds = tuning.tuning_seconds
+            results: list[ExperimentResult] = []
+            for seed in requested:
+                child = self.context.seed_child(seed)
+                child_store = ArtifactStore(child)
+                if child_store.paths.manifest.is_file() and child_store.read_manifest()["status"] == "completed":
+                    print(f"Seed {seed}: completed run exists at {child.paths.run_dir}; skipping.")
+                    continue
+                child_runner = ExperimentRunner(child, self.spec)
+                results.append(train_one(child_runner, child, dict(config, seed=seed)))
+            completed = self.completed_seeds()
+            missing = [seed for seed in requested if seed not in completed]
+            if missing:
+                raise RuntimeError(f"Seeds {missing} did not produce completed runs.")
+            training_seconds = 0.0
+            inference_seconds = 0.0
+            for seed in completed:
+                timings = ArtifactStore(self.context.seed_child(seed)).read_manifest()["timings"]
+                training_seconds += float(timings.get("final_training_seconds") or 0.0)
+                inference_seconds += float(timings.get("inference_seconds") or 0.0)
+            self.artifacts.update_manifest(seeds=list(completed))
+            self.artifacts.mark_completed(
+                timings={
+                    "data_generation_seconds": float(manifest["timings"].get("data_generation_seconds") or 0.0),
+                    "tuning_seconds": tuning_seconds,
+                    "final_training_seconds": training_seconds,
+                    "inference_seconds": inference_seconds,
+                }
+            )
+            return tuple(results)
+        except BaseException as error:
+            self.artifacts.mark_failed(error)
+            raise
+
+    def _check_seed_group_config(self, config: Mapping[str, Any]) -> None:
+        """Reject ``config`` if a completed member of this run trained another one."""
+        trained = [
+            (f"seed {seed}", ArtifactStore(self.context.seed_child(seed)).paths.best_config, False)
+            for seed in self.completed_seeds()
+        ]
+        # Reuse the saved parent config, including trainer defaults for a flat
+        # root. Its metrics remain part of the group even if an extension failed.
+        if (trained or self.artifacts.paths.metrics.is_file()
+                or (self.artifacts.paths.manifest.is_file()
+                    and self.artifacts.read_manifest()["status"] == "completed")):
+            trained.append(("the existing run", self.artifacts.paths.best_config, True))
+        for label, path, require_same_keys in trained:
+            if not path.is_file():
+                continue
+            with path.open(encoding="utf-8") as stream:
+                differing = config_differences(config, json.load(stream), require_same_keys=require_same_keys)
+            if differing:
+                raise ValueError(
+                    f"Cannot resume {self.context.paths.run_dir}: {label} was trained with "
+                    f"different {', '.join(differing)}. Pass the original configuration "
+                    "(--train-config best) or use a new --run-id."
+                )
+
+    def completed_seeds(self) -> tuple[int, ...]:
+        """Return the sorted seeds with a completed child run on disk."""
+        seeds_dir = self.context.paths.seeds_dir
+        if not seeds_dir.is_dir():
+            return ()
+        completed = []
+        for child in seeds_dir.iterdir():
+            if not child.is_dir() or not child.name.isdigit():
+                continue
+            store = ArtifactStore(child)
+            if store.paths.manifest.is_file() and store.read_manifest()["status"] == "completed":
+                completed.append(int(child.name))
+        return tuple(sorted(completed))
+
+
+SeedTrainer = Callable[[ExperimentRunner, RunContext, dict[str, Any]], ExperimentResult]
+
+__all__ = ["Evaluator", "ExperimentResult", "ExperimentRunner", "ExperimentSpec", "SeedTrainer"]

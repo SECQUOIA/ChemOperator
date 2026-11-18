@@ -22,7 +22,7 @@ from torch import nn
 from torch.utils.data import DataLoader
 
 from chem_operator.experiments import (
-    CompositeLossTrainer,
+    OperatorTrainer,
     EvaluationOutcome,
     LossTerm,
     StreamingRegressionMetrics,
@@ -241,7 +241,7 @@ def make_trainer(config, context, pfr, wall, shape, *, variant="physics"):
             )
         )
 
-    return CompositeLossTrainer(
+    return OperatorTrainer(
         lambda cfg: model_from_config(cfg, pfr, wall, context.device),
         config,
         batch_adapter=adapt,

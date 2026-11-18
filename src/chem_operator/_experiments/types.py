@@ -13,14 +13,41 @@ if TYPE_CHECKING:
     from .metrics import MetricEvent
 
 
+SEEDS_DIRNAME = "seeds"
+
+
 @dataclass(frozen=True, slots=True)
 class RunPaths:
-    """Canonical paths for one versioned experiment run."""
+    """Canonical paths for one versioned experiment run.
+
+    A multi-seed run keeps tuning artifacts in ``run_dir`` and one complete
+    child run per seed in ``run_dir/seeds/<seed>/``.
+    """
 
     run_dir: Path
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "run_dir", Path(self.run_dir))
+
+    @property
+    def is_seed_child(self) -> bool:
+        return self.run_dir.parent.name == SEEDS_DIRNAME
+
+    @property
+    def root_run_dir(self) -> Path:
+        """The run directory that owns tuning artifacts (self for flat runs)."""
+        return self.run_dir.parent.parent if self.is_seed_child else self.run_dir
+
+    @property
+    def seeds_dir(self) -> Path:
+        return self.run_dir / SEEDS_DIRNAME
+
+    def seed_child(self, seed: int) -> "RunPaths":
+        if self.is_seed_child:
+            raise ValueError("Seed children cannot be nested.")
+        if int(seed) < 0:
+            raise ValueError("seed cannot be negative.")
+        return RunPaths(self.seeds_dir / str(int(seed)))
 
     @classmethod
     def create(
@@ -120,6 +147,20 @@ class RunContext:
             dtype=self.dtype,
             device=self.device,
             provenance={**self.provenance, "trial_id": trial_id},
+        )
+
+    def seed_child(self, seed: int) -> "RunContext":
+        """Return the context for one seed of a multi-seed run."""
+        return RunContext(
+            paths=self.paths.seed_child(seed),
+            seed=int(seed),
+            dtype=self.dtype,
+            device=self.device,
+            provenance={
+                **self.provenance,
+                "parent_run_id": self.paths.run_dir.name,
+                "seed": int(seed),
+            },
         )
 
 

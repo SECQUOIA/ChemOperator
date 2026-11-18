@@ -117,7 +117,7 @@ def generate_tolerance_datasets() -> None:
     )
 
 
-def generate_all_datasets(n_cases: int = 80) -> None:
+def generate_all_datasets(n_cases: int = 100) -> None:
     """Generate the canonical, resolution-sweep, and tolerance datasets."""
     generate_dataset(n_cases=n_cases)
     generate_multiresolution_datasets()
@@ -128,7 +128,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--suite", choices=("all", "base", "resolution", "tolerance"), default="all",
                         help="Dataset suite to generate (default: all).")
-    parser.add_argument("--n-cases", type=int, default=80,
+    parser.add_argument("--n-cases", type=int, default=100,
                         help="Number of canonical cases for the all/base suites (default: 80).")
     args = parser.parse_args()
     if args.n_cases < 1:

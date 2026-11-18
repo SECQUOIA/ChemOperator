@@ -28,7 +28,9 @@ from chem_operator.experiments import (
     deeponet_training_config,
     deeponet_tuner,
     evaluate_deeponet,
+    resolve_train_config,
     run_context_from_namespace,
+    train_final,
 )
 
 
@@ -85,31 +87,34 @@ def main() -> None:
         result = tuning
 
     if stages.train:
-        config = (
-            dict(tuning.best_config)
-            if tuning is not None
-            else runner.artifacts.read_best_config()
-        )
-        trainer = DeepONetTrainer(
-            deeponet_training_config(config, epoch_multiplier=2.0),
-            num_workers=DATALOADER_WORKERS,
-            pin_memory=PIN_MEMORY,
-            checkpoint_metadata={"normalizer": normalizer.state_dict()},
-        )
-        with final_data(normalizer=normalizer) as (training, validation, test):
-            result = runner.run(
-                trainer,
-                training,
-                validation,
-                test,
-                config=config,
-                tuning=tuning,
-                evaluator=partial(
-                    evaluate_deeponet,
-                    normalizer=normalizer,
-                    reconstruction_cases=RECONSTRUCTION_CASES,
-                ),
+        config, source = resolve_train_config(stages.train_config, runner, tuning=tuning)
+
+        def train_one(run_runner, run_context, run_config):
+            trainer = DeepONetTrainer(
+                deeponet_training_config(run_config, epoch_multiplier=2.0),
+                num_workers=DATALOADER_WORKERS,
+                pin_memory=PIN_MEMORY,
+                checkpoint_metadata={"normalizer": normalizer.state_dict()},
             )
+            with final_data(normalizer=normalizer) as (training, validation, test):
+                return run_runner.run(
+                    trainer,
+                    training,
+                    validation,
+                    test,
+                    config=run_config,
+                    tuning=tuning if run_runner is runner else None,
+                    evaluator=partial(
+                        evaluate_deeponet,
+                        normalizer=normalizer,
+                        reconstruction_cases=RECONSTRUCTION_CASES,
+                    ),
+                )
+
+        result = train_final(
+            runner, stages, config=config, tuning=tuning,
+            train_one=train_one, train_config_source=source,
+        )
 
     print(f"{MODEL_ID}: {result}")
 

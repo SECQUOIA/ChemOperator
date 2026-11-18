@@ -135,7 +135,7 @@ def test_dataset_script_defines_resolution_and_tolerance_sweeps() -> None:
 
 @pytest.mark.parametrize(("arguments", "expected"), [
     (None, [("base", 7), "resolution", "tolerance"]),
-    ([], [("base", 80), "resolution", "tolerance"]),
+    ([], [("base", 100), "resolution", "tolerance"]),
     (["--suite", "all", "--n-cases", "7"], [("base", 7), "resolution", "tolerance"]),
     (["--suite", "base", "--n-cases", "7"], [("base", 7)]),
     (["--suite", "resolution"], ["resolution"]),
@@ -156,7 +156,9 @@ def test_generation_defaults_and_explicit_suites(monkeypatch, arguments, expecte
 
 def test_q2d_tolerance_interpolation_uses_physical_coordinates() -> None:
     """A linear field remains exact on a different cell-centre mesh."""
-    from scripts.q2d.plot import _interpolate_fields, _relative_field_errors
+    import torch
+
+    from scripts.q2d.common import interpolate_fields, relative_l2_per_case
 
     z = np.array([0.5, 1.5, 2.5])
     r = np.array([0.25, 0.75, 1.25])
@@ -165,7 +167,8 @@ def test_q2d_tolerance_interpolation_uses_physical_coordinates() -> None:
     field = (2 * z[:, None] + 3 * r[None, :])[None]
     expected = (2 * target_z[:, None] + 3 * target_r[None, :])[None]
 
-    prediction = _interpolate_fields(field, z, r, target_z, target_r)
+    prediction = interpolate_fields(field, z, r, target_z, target_r)
 
     np.testing.assert_allclose(prediction, expected)
-    np.testing.assert_allclose(_relative_field_errors(prediction, expected), [0.0])
+    errors = relative_l2_per_case(torch.as_tensor(prediction)[None], torch.as_tensor(expected)[None])
+    np.testing.assert_allclose(errors[1][0].numpy(), [0.0])
