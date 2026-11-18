@@ -249,8 +249,8 @@ class ExperimentRunner:
 
         The parent run keeps tuning artifacts and records the child seeds in
         its manifest. Completed children are skipped so an interrupted or
-        extended run can be resumed with the same ``--run-id``. Once children
-        complete, input hyperparameters must retain their keys and values,
+        extended run can be resumed with the same ``--run-id``. Once members
+        complete, saved hyperparameters must retain their keys and values,
         except for seed and epoch overrides.
         """
         if self.context.paths.is_seed_child:
@@ -319,11 +319,12 @@ class ExperimentRunner:
             (f"seed {seed}", ArtifactStore(self.context.seed_child(seed)).paths.best_config, False)
             for seed in self.completed_seeds()
         ]
-        # Compare saved parent inputs strictly, even after a later seed failed.
-        # A flat run stores an expanded trainer config, not group input keys.
-        if trained or (self.artifacts.paths.manifest.is_file()
-                       and self.artifacts.read_manifest()["status"] == "completed"):
-            trained.append(("the existing run", self.artifacts.paths.best_config, bool(trained)))
+        # Reuse the saved parent config, including trainer defaults for a flat
+        # root. Its metrics remain part of the group even if an extension failed.
+        if (trained or self.artifacts.paths.metrics.is_file()
+                or (self.artifacts.paths.manifest.is_file()
+                    and self.artifacts.read_manifest()["status"] == "completed")):
+            trained.append(("the existing run", self.artifacts.paths.best_config, True))
         for label, path, require_same_keys in trained:
             if not path.is_file():
                 continue
