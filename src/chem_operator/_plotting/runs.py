@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import argparse
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 from datetime import datetime
 from pathlib import Path
 from zipfile import BadZipFile
@@ -15,7 +15,9 @@ from chem_operator._experiments.comparison import (
     RunArtifacts, load_run, read_reconstructions, validate_complete_run,
     validate_model_comparison,
 )
-from chem_operator._plotting.plots import plot_experiment_histories, plot_operator_runs
+from chem_operator._plotting.plots import (
+    plot_experiment_histories, plot_operator_runs, select_channels,
+)
 
 
 def print_plot_paths(paths: Iterable[Path]) -> None:
@@ -182,7 +184,8 @@ def comparison_groups(runs: tuple[RunArtifacts, ...]) -> tuple[tuple[RunArtifact
     return tuple(tuple(group) for group in groups if len(group) > 1)
 
 
-def _overlay(group: tuple[RunArtifacts, ...], destination: Path, cases: int) -> Path | None:
+def _overlay(group: tuple[RunArtifacts, ...], destination: Path, cases: int,
+             labels: Sequence[str] | None = None) -> Path | None:
     """Overlay channel-last or channel-first one-dimensional reconstructions.
 
     Multi-seed runs contribute their representative (first) member.
@@ -218,7 +221,10 @@ def _overlay(group: tuple[RunArtifacts, ...], destination: Path, cases: int) -> 
     if not (channel_last or channel_first):
         return None
     count = min(cases, len(reference))
-    channels = len(baseline[labels_key])
+    selected = select_channels(baseline[labels_key], labels)
+    channels = len(selected)
+    if channels == 0:
+        return None
     points = reference.shape[1] if channel_last else reference.shape[2]
     if count == 0 or x.shape[0] < count or x[0].size != points:
         return None
@@ -229,13 +235,14 @@ def _overlay(group: tuple[RunArtifacts, ...], destination: Path, cases: int) -> 
                             figsize=(5 * count, 2.8 * channels))
     for column in range(count):
         coordinate = x[column].reshape(-1)
-        for row, label in enumerate(baseline[labels_key]):
+        for row, channel in enumerate(selected):
+            label = baseline[labels_key][channel]
             axis = axes[row, column]
-            actual = reference[column, :, row] if channel_last else reference[column, row]
+            actual = reference[column, :, channel] if channel_last else reference[column, channel]
             axis.plot(coordinate, actual, color="black", label="Reference")
             for run, sample in zip(group, data):
                 prediction = sample[prediction_key]
-                values = prediction[column, :, row] if channel_last else prediction[column, row]
+                values = prediction[column, :, channel] if channel_last else prediction[column, channel]
                 axis.plot(coordinate, values, label=str(run.manifest["model_id"]))
             axis.set_ylabel(str(label))
             axis.grid(alpha=0.2)
@@ -260,17 +267,22 @@ def _run_plot_name(run: RunArtifacts) -> Path:
 
 
 def plot_selected_runs(runs: tuple[RunArtifacts, ...], output_dir: Path,
-                       *, cases: int) -> tuple[Path, ...]:
+                       *, cases: int, labels: Sequence[str] | None = None) -> tuple[Path, ...]:
+    """Plot each run and overlay comparable runs.
+
+    ``labels`` limits reconstruction figures and overlays to those channels,
+    which keeps problems with many saved fields (e.g. CSTR species) bounded.
+    """
     saved: list[Path] = []
     for run in runs:
         destination = output_dir / str(run.manifest["model_id"]) / _run_plot_name(run)
-        saved.extend(plot_operator_runs((run,), destination, cases=cases))
+        saved.extend(plot_operator_runs((run,), destination, cases=cases, labels=labels))
     for index, group in enumerate(comparison_groups(runs), start=1):
         destination = output_dir / "comparisons" / f"group_{index}"
         saved.append(plot_experiment_histories(
             group, output=destination / "validation_history.png",
             metric="relative_l2", split="val"))
-        overlay = _overlay(group, destination, cases)
+        overlay = _overlay(group, destination, cases, labels)
         if overlay is not None:
             saved.append(overlay)
     return tuple(saved)

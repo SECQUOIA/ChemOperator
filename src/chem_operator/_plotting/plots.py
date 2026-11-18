@@ -697,8 +697,37 @@ def plot_operator_fields(path, reference, prediction, labels, coordinates, coord
     return path
 
 
-def plot_operator_runs(run_paths, output_dir, *, cases=2):
-    """Plot canonical runs using only their manifest, history, and NPZ arrays."""
+def select_channels(available: Sequence[str], labels: Sequence[str] | None) -> list[int]:
+    """Return channel indices for ``labels`` (every channel when ``None``).
+
+    Labels absent from ``available`` are ignored here; callers check that every
+    requested label exists somewhere in the run.
+    """
+    available = [str(label) for label in available]
+    if labels is None:
+        return list(range(len(available)))
+    return [available.index(str(label)) for label in labels if str(label) in available]
+
+
+def _check_plot_labels(member: RunArtifacts, labels: Sequence[str] | None) -> None:
+    if labels is None:
+        return
+    if not labels:
+        raise ValueError("labels cannot be empty.")
+    data = read_reconstructions(member.path)
+    available = {str(label) for key, value in data.items()
+                 if key == "labels" or key.endswith("_labels") for label in value}
+    missing = [label for label in labels if str(label) not in available]
+    if missing:
+        raise ValueError(f"Labels not found in {member.path}: {missing}")
+
+
+def plot_operator_runs(run_paths, output_dir, *, cases=2, labels=None):
+    """Plot canonical runs using only their manifest, history, and NPZ arrays.
+
+    ``labels`` restricts reconstruction figures to the named channels; by
+    default every saved channel is drawn.
+    """
     if cases < 1:
         raise ValueError("cases must be positive.")
     runs = tuple(run if isinstance(run, RunArtifacts) else load_run(run) for run in run_paths)
@@ -736,7 +765,8 @@ def plot_operator_runs(run_paths, output_dir, *, cases=2):
         )
         saved.append(path)
         for member, member_dir in member_plot_dirs(run, destination):
-            saved.extend(_plot_member_reconstructions(member, member_dir, cases))
+            _check_plot_labels(member, labels)
+            saved.extend(_plot_member_reconstructions(member, member_dir, cases, labels))
     if len(runs) > 1:
         fig, axis = plt.subplots(figsize=(8, 5))
         summaries = final_metric_summaries(runs)
@@ -753,7 +783,8 @@ def plot_operator_runs(run_paths, output_dir, *, cases=2):
     return tuple(saved)
 
 
-def _plot_member_reconstructions(member: RunArtifacts, destination: Path, cases: int) -> list[Path]:
+def _plot_member_reconstructions(member: RunArtifacts, destination: Path, cases: int,
+                                 labels: Sequence[str] | None = None) -> list[Path]:
     """Write the first ``cases`` test reconstructions of one seed member."""
     destination = Path(destination)
     destination.mkdir(parents=True, exist_ok=True)
@@ -764,9 +795,12 @@ def _plot_member_reconstructions(member: RunArtifacts, destination: Path, cases:
         if "pfr_reference" in data:
             groups = (("pfr", ("z",)), ("wall", ("z", "r")))
             for prefix, axes in groups:
+                channels = select_channels(data[f"{prefix}_labels"], labels)
+                if not channels:
+                    continue
                 saved.append(plot_operator_fields(destination / f"case_{index:02d}_{prefix}.png",
-                    data[f"{prefix}_reference"][index], data[f"{prefix}_prediction"][index],
-                    data[f"{prefix}_labels"], [data[axis][index] for axis in axes], axes))
+                    data[f"{prefix}_reference"][index][channels], data[f"{prefix}_prediction"][index][channels],
+                    data[f"{prefix}_labels"][channels], [data[axis][index] for axis in axes], axes))
         else:
             if "coordinate_names" in data:
                 axes = data["coordinate_names"].tolist()
@@ -777,6 +811,7 @@ def _plot_member_reconstructions(member: RunArtifacts, destination: Path, cases:
                 reference = np.moveaxis(data["reference"][index], -1, 0)
                 prediction = np.moveaxis(data["prediction"][index], -1, 0)
                 coordinates = [data["coordinates"][index].reshape(-1)]
+            channels = select_channels(data["labels"], labels)
             saved.append(plot_operator_fields(destination / f"case_{index:02d}.png",
-                reference, prediction, data["labels"], coordinates, axes))
+                reference[channels], prediction[channels], data["labels"][channels], coordinates, axes))
     return saved

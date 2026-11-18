@@ -22,6 +22,7 @@ from chem_operator.plotting import (
 PATHS = ExamplePaths.from_script(__file__)
 PROBLEM_ID = "cstr_non_isothermal"
 MECHANISM = "n-heptane-NUIG-2016.yaml"
+FUEL = "NC7H16"
 DATASET = PATHS.root / "datasets" / "cstr" / "cstr_non_isothermal_train.h5"
 OUTPUT = PATHS.plots / PROBLEM_ID / "diagnostics" / "train_set_CO.png"
 
@@ -93,7 +94,10 @@ def main() -> None:
     if not (args.run or args.recent):
         return
     runs = select_plot_runs(args, parser, problem_id=PROBLEM_ID)
-    paths = plot_selected_runs(runs, args.output_dir, cases=args.cases)
+    # The mechanism saves every species; plot only temperature, pressure, and fuel.
+    fuel_index = ct.Solution(MECHANISM).species_index(FUEL)
+    paths = plot_selected_runs(runs, args.output_dir, cases=args.cases,
+                               labels=("T", "P", f"X[{fuel_index}]"))
     print_plot_paths(paths)
 
 
