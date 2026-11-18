@@ -2,7 +2,7 @@
 
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &> /dev/null && pwd)
 
-# python "$SCRIPT_DIR/cstr/plot.py" --recent
+python "$SCRIPT_DIR/cstr/plot.py" --recent
 python "$SCRIPT_DIR/packed_bed_1d/plot.py" --recent
 python "$SCRIPT_DIR/pfr/plot.py" --recent
 python "$SCRIPT_DIR/pfr_heat/plot.py" --recent
