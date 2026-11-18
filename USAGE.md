@@ -123,6 +123,12 @@ extended with more seeds under the same `--run-id`, and completed children are
 skipped when a run is resumed. Plotters and the paper tables average over
 members at read time; nothing aggregated is stored.
 
+Once a seed group has completed children, resuming it requires the saved input
+hyperparameter keys and values, except for `seed` and `epochs`. Added or removed
+keys are rejected before artifacts change, since omission can select a different
+trainer default. Use `--no-tune --train-config best` to reuse the saved inputs,
+or choose a new `--run-id` for a different configuration.
+
 ```bash
 # Tune once, then train seeds 42-44 into the same run.
 python scripts/cstr/deeponet.py --run-id cstr_do_01 --seeds 42 43 44

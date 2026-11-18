@@ -35,18 +35,23 @@ MEMBER_MANIFEST_FIELDS = ("model_id", *COMPARABLE_MANIFEST_FIELDS)
 PER_SEED_CONFIG_KEYS = ("seed", "epochs")
 
 
-def config_differences(expected: Mapping[str, Any], actual: Mapping[str, Any]) -> list[str]:
-    """Return the hyperparameters named by both configs whose values differ.
+def config_differences(
+    expected: Mapping[str, Any], actual: Mapping[str, Any], *, require_same_keys: bool = False,
+) -> list[str]:
+    """Return differing hyperparameters, ignoring per-seed keys.
 
-    Children store the trainer's full config, so keys named by only one side
-    are ignored, as are the per-seed keys.
+    Children store the trainer's full config, so missing keys are normally
+    ignored. Comparing saved and incoming parent inputs requires the same keys
+    too: omission can select a different trainer default.
     """
     expected = json.loads(json.dumps(dict(expected), default=_json_default))
     actual = json.loads(json.dumps(dict(actual), default=_json_default))
-    return [
-        key for key in expected
-        if key not in PER_SEED_CONFIG_KEYS and key in actual and actual[key] != expected[key]
-    ]
+    keys = expected.keys() | actual.keys() if require_same_keys else expected.keys() & actual.keys()
+    return sorted(
+        key for key in keys
+        if key not in PER_SEED_CONFIG_KEYS
+        and (key not in expected or key not in actual or actual[key] != expected[key])
+    )
 
 
 @dataclass(frozen=True, slots=True)

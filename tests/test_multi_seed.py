@@ -169,19 +169,32 @@ def test_run_seeds_resumes_by_skipping_completed_children(tmp_path: Path) -> Non
         runner.start()
 
 
-def test_run_seeds_rejects_resume_with_different_config(tmp_path: Path) -> None:
+@pytest.mark.parametrize("parent_failed", [False, True], ids=["completed", "interrupted"])
+@pytest.mark.parametrize(
+    "original, changed, differing",
+    [
+        ({"width": 4}, {"width": 8}, "width"),
+        ({"weight_decay": 0.2}, {}, "weight_decay"),
+        ({}, {"weight_decay": 0.2}, "weight_decay"),
+    ],
+    ids=["changed-value", "removed-key", "added-key"],
+)
+def test_run_seeds_rejects_resume_with_different_config(
+    tmp_path: Path, original: dict, changed: dict, differing: str, parent_failed: bool,
+) -> None:
     root = RunContext.create(tmp_path, problem="synthetic", model="fno", run_id="multi", seed=1, device="cpu")
     runner = ExperimentRunner(root, spec(tmp_path))
-    runner.run_seeds((1,), train_one, config={"seed": 1, "width": 4})
-    before = runner.artifacts.read_manifest()
-    with pytest.raises(ValueError, match="seed 1 was trained with different width"):
-        runner.run_seeds((1, 2), train_one, config={"seed": 1, "width": 8})
-    assert runner.artifacts.read_manifest() == before
-    assert runner.artifacts.read_best_config() == {"seed": 1, "width": 4}
+    runner.run_seeds((1,), train_one, config={"seed": 1, **original})
+    if parent_failed:
+        runner.artifacts.mark_failed(RuntimeError("interrupted after seed 1"))
+    before = {path: path.read_bytes() for path in root.paths.run_dir.rglob("*") if path.is_file()}
+    with pytest.raises(ValueError, match=f"different.*{differing}"):
+        runner.run_seeds((1, 2), train_one, config={"seed": 1, **changed})
+    assert {path: path.read_bytes() for path in root.paths.run_dir.rglob("*") if path.is_file()} == before
     assert not root.seed_child(2).paths.run_dir.exists()
-    assert load_run(root.paths.run_dir).seeds == (1,)
+    assert load_run(root.paths.run_dir, require_complete=not parent_failed).seeds == (1,)
     # Per-seed keys may change on resume.
-    runner.run_seeds((1, 2), train_one, config={"seed": 1, "width": 4, "epochs": 2})
+    runner.run_seeds((1, 2), train_one, config={**original, "seed": 9, "epochs": 2})
     assert load_run(root.paths.run_dir).seeds == (1, 2)
 
 
