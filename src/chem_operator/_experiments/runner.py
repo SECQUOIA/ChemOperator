@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from .artifacts import ArtifactStore, build_manifest
+from .comparison import config_differences
 from .tuning import Tuner, TuningOutcome
 from .types import EvaluationOutcome, RunContext, Trainer, TrainingOutcome
 
@@ -255,6 +256,8 @@ class ExperimentRunner:
         requested = tuple(int(seed) for seed in seeds)
         if not requested or len(set(requested)) != len(requested):
             raise ValueError("seeds must be non-empty and unique.")
+        # Before touching any artifact, so a rejected resume leaves the group valid.
+        self._check_seed_group_config(config)
         self.start(allow_completed=True)
         try:
             manifest = self.artifacts.read_manifest()
@@ -307,6 +310,28 @@ class ExperimentRunner:
         except BaseException as error:
             self.artifacts.mark_failed(error)
             raise
+
+    def _check_seed_group_config(self, config: Mapping[str, Any]) -> None:
+        """Reject ``config`` if a completed member of this run trained another one."""
+        trained = [
+            (f"seed {seed}", ArtifactStore(self.context.seed_child(seed)).paths.best_config)
+            for seed in self.completed_seeds()
+        ]
+        # A completed flat run is itself a member of the group.
+        if (self.artifacts.paths.manifest.is_file()
+                and self.artifacts.read_manifest()["status"] == "completed"):
+            trained.append(("the existing run", self.artifacts.paths.best_config))
+        for label, path in trained:
+            if not path.is_file():
+                continue
+            with path.open(encoding="utf-8") as stream:
+                differing = config_differences(config, json.load(stream))
+            if differing:
+                raise ValueError(
+                    f"Cannot resume {self.context.paths.run_dir}: {label} was trained with "
+                    f"different {', '.join(differing)}. Pass the original configuration "
+                    "(--train-config best) or use a new --run-id."
+                )
 
     def completed_seeds(self) -> tuple[int, ...]:
         """Return the sorted seeds with a completed child run on disk."""

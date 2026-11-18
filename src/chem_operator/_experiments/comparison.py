@@ -16,7 +16,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from .artifacts import ARTIFACT_SCHEMA_VERSION, ArtifactStore, ArtifactValidationError
+from .artifacts import ARTIFACT_SCHEMA_VERSION, ArtifactStore, ArtifactValidationError, _json_default
 from .metrics import MetricEvent
 from .types import SEEDS_DIRNAME
 
@@ -31,6 +31,22 @@ COMPARABLE_MANIFEST_FIELDS = (
     "selected_test_case_ids",
 )
 MEMBER_MANIFEST_FIELDS = ("model_id", *COMPARABLE_MANIFEST_FIELDS)
+# Seed members of one run may differ only in these configuration keys.
+PER_SEED_CONFIG_KEYS = ("seed", "epochs")
+
+
+def config_differences(expected: Mapping[str, Any], actual: Mapping[str, Any]) -> list[str]:
+    """Return the hyperparameters named by both configs whose values differ.
+
+    Children store the trainer's full config, so keys named by only one side
+    are ignored, as are the per-seed keys.
+    """
+    expected = json.loads(json.dumps(dict(expected), default=_json_default))
+    actual = json.loads(json.dumps(dict(actual), default=_json_default))
+    return [
+        key for key in expected
+        if key not in PER_SEED_CONFIG_KEYS and key in actual and actual[key] != expected[key]
+    ]
 
 
 @dataclass(frozen=True, slots=True)
@@ -197,14 +213,7 @@ def _validate_members(
             if member_config_path.is_file():
                 with member_config_path.open(encoding="utf-8") as stream:
                     member_config = json.load(stream)
-                # Children store the trainer's full config, so compare only
-                # the hyperparameters both files name; seed and epochs vary.
-                differing = [
-                    key for key in parent_config
-                    if key not in ("seed", "epochs")
-                    and key in member_config
-                    and member_config[key] != parent_config[key]
-                ]
+                differing = config_differences(parent_config, member_config)
                 if differing:
                     raise ValueError(
                         f"Member {member.label} trained a different best_config than "
