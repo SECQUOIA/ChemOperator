@@ -18,7 +18,6 @@ from chem_operator.plotting import (
     print_plot_paths, select_plot_runs, use_publication_style
 )
 
-use_publication_style()
 PATHS = ExamplePaths.from_script(__file__, dataset="q2d_cmr")
 PROBLEM_ID = "q2d_cmr"
 
@@ -625,6 +624,7 @@ def main():
                         help="For FNO runs only: plot coarse interpolation and FNO error versus wall time.")
     parser.add_argument("--data-dir", type=Path, default=PATHS.data)
     args = parser.parse_args()
+    use_publication_style(use_tex=args.use_tex)
     runs = select_plot_runs(args, parser, problem_id=PROBLEM_ID)
     if args.tolerance_comparison:
         for run in runs:
@@ -634,8 +634,8 @@ def main():
     for run in runs:
         output_dir = args.output_dir / run.manifest["model_id"] / run.path.name
         # Mesh benchmarks and super-resolution diagnostics are single-model
-        # artifacts; a multi-seed run reports its representative member.
-        member = run.representative
+        # artifacts; a multi-seed run reports its best member.
+        member = run.best_member
         if args.tolerance_comparison:
             path = output_dir / "tolerance_superresolution_error_vs_time.png"
             plot_tolerance_superresolution(

@@ -15,8 +15,6 @@ from chem_operator.plotting import (
     select_plot_runs, use_publication_style,
 )
 
-use_publication_style()
-
 PATHS = ExamplePaths.from_script(__file__)
 PROBLEM_ID = "packed_bed_1d"
 
@@ -26,6 +24,7 @@ def main() -> None:
     add_plot_run_arguments(parser, root=PATHS.root, problem_id=PROBLEM_ID,
                            cases=3)
     args = parser.parse_args()
+    use_publication_style(use_tex=args.use_tex)
     runs = select_plot_runs(args, parser, problem_id=PROBLEM_ID)
     paths = plot_selected_runs(runs, args.output_dir, cases=args.cases)
     print_plot_paths(paths)

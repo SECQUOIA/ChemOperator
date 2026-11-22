@@ -16,13 +16,14 @@ import numpy as np
 from chem_operator.example_paths import ExamplePaths
 from chem_operator.plotting import (
     add_plot_run_arguments, plot_selected_runs, print_plot_paths,
-    select_plot_runs, use_publication_style,
+    select_plot_runs, set_log_xscale, use_publication_style,
 )
 
 PATHS = ExamplePaths.from_script(__file__)
 PROBLEM_ID = "cstr_non_isothermal"
 MECHANISM = "n-heptane-NUIG-2016.yaml"
-FUEL = "NC7H16"
+# Species drawn alongside temperature and pressure in reconstruction plots.
+PLOT_SPECIES = ("NC7H16", "O2", "CO")
 DATASET = PATHS.root / "datasets" / "cstr" / "cstr_non_isothermal_train.h5"
 OUTPUT = PATHS.plots / PROBLEM_ID / "diagnostics" / "train_set_CO.png"
 
@@ -42,23 +43,15 @@ def plot_co_histories(dataset: Path = DATASET, output: Path = OUTPUT) -> Path:
             np.linspace(0.0, 1.0, len(case_names))
         )
         figure, axis = plt.subplots(figsize=(8.0, 5.0))
-        all_positive = True
-        minimum_nonzero = np.inf
+        times = []
         for color, case_name in zip(colors, case_names):
             case = cases[case_name]
             time = np.asarray(case["coordinates/t"])
             co = np.asarray(case["fields/X"][:, co_index])
             axis.plot(time, co, color=color, linewidth=0.9, alpha=0.75)
-            all_positive = all_positive and bool(np.all(time > 0.0))
-            nonzero = np.abs(time[time != 0.0])
-            if nonzero.size:
-                minimum_nonzero = min(minimum_nonzero, float(nonzero.min()))
+            times.append(time)
 
-    if all_positive:
-        axis.set_xscale("log")
-    else:
-        linthresh = minimum_nonzero / 2.0 if np.isfinite(minimum_nonzero) else 1.0e-12
-        axis.set_xscale("symlog", linthresh=linthresh)
+    set_log_xscale(axis, times)
     axis.set(
         xlabel="Time [s]",
         ylabel="CO mole fraction",
@@ -82,8 +75,6 @@ def main() -> None:
                         help="Training archive for --co-histories.")
     parser.add_argument("--co-output", type=Path, default=OUTPUT,
                         help="Output image for --co-histories.")
-    parser.add_argument("--use-tex", action="store_true",
-                        help="Render text with an external LaTeX installation.")
     args = parser.parse_args()
     if not (args.run or args.recent or args.co_histories):
         parser.error("Provide --run, --recent, or --co-histories.")
@@ -94,10 +85,12 @@ def main() -> None:
     if not (args.run or args.recent):
         return
     runs = select_plot_runs(args, parser, problem_id=PROBLEM_ID)
-    # The mechanism saves every species; plot only temperature, pressure, and fuel.
-    fuel_index = ct.Solution(MECHANISM).species_index(FUEL)
+    # The mechanism saves every species; plot only T, P, and a few key species.
+    # A log time axis keeps the early ignition transient visible.
+    gas = ct.Solution(MECHANISM)
+    labels = ("T", "P", *(f"X[{gas.species_index(name)}]" for name in PLOT_SPECIES))
     paths = plot_selected_runs(runs, args.output_dir, cases=args.cases,
-                               labels=("T", "P", f"X[{fuel_index}]"))
+                               labels=labels, xlog=True)
     print_plot_paths(paths)
 
 
