@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import csv
 import os
 import sys
 from pathlib import Path
 
 import torch
 
+from chem_operator._experiments.artifacts import ArtifactStore
 from chem_operator.experiments import (
     RayRuntimeConfig,
     RunContext,
@@ -28,7 +30,9 @@ def test_tuner_owns_ray_and_returns_portable_best_trial(tmp_path: Path) -> None:
 
         assert sys.executable == driver_python
         assert "working_dir" not in ray.get_runtime_context().runtime_env
-        report({"score": abs(float(config["value"]) - 2.0)})
+        score = abs(float(config["value"]) - 2.0)
+        for epoch in (1, 2):
+            report({"epoch": epoch, "valid_relative_l2": 0.1 / epoch, "score": score})
 
     context = RunContext(
         RunPaths(tmp_path / "run"),
@@ -43,7 +47,7 @@ def test_tuner_owns_ray_and_returns_portable_best_trial(tmp_path: Path) -> None:
             metric="score",
             mode="min",
             num_samples=1,
-            max_epochs=1,
+            max_epochs=2,
             resources_per_trial={"cpu": 1},
             max_concurrent_trials=1,
             optuna_seed=7,
@@ -64,9 +68,20 @@ def test_tuner_owns_ray_and_returns_portable_best_trial(tmp_path: Path) -> None:
         context,
         storage_path=tmp_path / "results",
         experiment_name="single_trial",
+        artifact_store=ArtifactStore(context),
     )
 
     assert outcome.best_config == {"value": 2.0}
     assert outcome.best_metrics["score"] == 0.0
     assert outcome.trials[0]["status"] == "completed"
     assert outcome.tuning_seconds >= 0.0
+
+    with context.paths.tuning_progress.open(encoding="utf-8", newline="") as stream:
+        progress = list(csv.DictReader(stream))
+    assert [int(row["training_iteration"]) for row in progress] == [1, 2]
+    assert [float(row["valid_relative_l2"]) for row in progress] == [0.1, 0.05]
+    assert {row["trial_id"] for row in progress} == {outcome.trials[0]["trial_id"]}
+    assert all(float(row["timestamp"]) > 0 for row in progress)
+    columns = set(progress[0])
+    assert not any(name.startswith("config/") for name in columns)
+    assert not columns & {"hostname", "node_ip", "pid", "date", "done"}

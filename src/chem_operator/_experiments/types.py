@@ -90,6 +90,10 @@ class RunPaths:
     def tuning_trials(self) -> Path:
         return self.run_dir / "tuning_trials.csv"
 
+    @property
+    def tuning_progress(self) -> Path:
+        return self.run_dir / "tuning_progress.csv"
+
     def checkpoint(self, suffix: str = ".pt") -> Path:
         if not suffix.startswith(".") or Path(suffix).name != suffix:
             raise ValueError("checkpoint suffix must start with '.' and be a suffix.")

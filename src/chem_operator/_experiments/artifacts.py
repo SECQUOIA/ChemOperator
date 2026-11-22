@@ -367,6 +367,17 @@ class ArtifactStore:
             fieldnames = ("trial_id", "status", "metric", "value")
         return self._write_csv(self.paths.tuning_trials, fieldnames, rows)
 
+    def write_tuning_progress(self, rows: Iterable[Mapping[str, Any]]) -> Path:
+        """Write every trial's per-epoch reports (one row per trial iteration)."""
+        rows = [dict(row) for row in rows]
+        fieldnames = _ordered_fieldnames(
+            rows,
+            ("trial_id", "training_iteration", "timestamp", "time_total_s"),
+        )
+        if not fieldnames:
+            fieldnames = ("trial_id", "training_iteration", "timestamp")
+        return self._write_csv(self.paths.tuning_progress, fieldnames, rows)
+
     def write_reconstructions(self, **arrays: Any) -> Path:
         if not arrays:
             raise ArtifactValidationError("reconstructions.npz cannot be empty.")

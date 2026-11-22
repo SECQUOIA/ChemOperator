@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import time
+import warnings
 from collections.abc import Callable, Mapping, Sequence
 from contextlib import AbstractContextManager, nullcontext
 from dataclasses import dataclass, field
@@ -86,6 +87,9 @@ class TuningConfig:
     time_budget_s: float | None = None
     grace_period: int | None = None
     reduction_factor: int = 2
+    # False skips LossTerm(physics=True) residuals in trial validation unless
+    # the tuning or selection metric depends on them.
+    validation_physics: bool = False
     optuna_seed: int = 0
     optuna_startup_trials: int = 2
     optuna_multivariate: bool = True
@@ -235,6 +239,7 @@ class Tuner:
                     )
                     if hasattr(trainer, "reporter"):
                         trainer.reporter = report
+                    _configure_validation_physics(trainer, self.config)
                     result = trainer.fit(trial_train, trial_validation, trial_context)
             if not reported:
                 report(_result_metrics(result, self.config.metric))
@@ -318,6 +323,9 @@ class Tuner:
             if artifact_store is not None:
                 artifact_store.write_best_config(best_config)
                 artifact_store.write_tuning_trials(trials)
+                artifact_store.write_tuning_progress(
+                    row for result in results for row in _trial_progress(result)
+                )
                 if artifact_store.paths.manifest.is_file():
                     artifact_store.update_manifest(
                         timings={"tuning_seconds": tuning_seconds}
@@ -393,6 +401,55 @@ def _trial_record(result: Any, *, metric: str) -> dict[str, Any]:
     if result.error is not None:
         record["error"] = str(result.error)
     return record
+
+
+def _configure_validation_physics(trainer: Any, config: TuningConfig) -> None:
+    """Skip trial-validation physics unless the tuning metric needs it."""
+    if not hasattr(trainer, "validation_physics"):
+        return
+    keep = config.validation_physics
+    needs = getattr(trainer, "metric_needs_validation_physics", None)
+    if not keep and needs is not None and needs(config.metric):
+        warnings.warn(
+            f"Ray metric {config.metric!r} depends on physics terms; keeping "
+            "validation physics in tuning.",
+            stacklevel=2,
+        )
+        keep = True
+    trainer.validation_physics = keep
+
+
+# Ray bookkeeping columns that say nothing about the trial's learning curve.
+_PROGRESS_DROPPED_COLUMNS = frozenset(
+    {"pid", "hostname", "node_ip", "date", "checkpoint_dir_name", "done"}
+)
+
+
+def _trial_progress(result: Any) -> list[dict[str, Any]]:
+    """Return one row per reported iteration of a trial, from Ray's progress log.
+
+    ``config/*`` columns are dropped because ``tuning_trials.csv`` already
+    holds each trial's configuration; only numeric values are kept.
+    """
+    frame = getattr(result, "metrics_dataframe", None)
+    if frame is None or frame.empty:
+        return []
+    fallback_id = (result.metrics or {}).get("trial_id", Path(str(result.path)).name)
+    rows: list[dict[str, Any]] = []
+    for record in frame.to_dict("records"):
+        row: dict[str, Any] = {"trial_id": record.get("trial_id") or fallback_id}
+        for name, value in record.items():
+            if (
+                name == "trial_id"
+                or name in _PROGRESS_DROPPED_COLUMNS
+                or name.startswith("config/")
+                or isinstance(value, bool)
+                or not isinstance(value, (int, float))
+            ):
+                continue
+            row[name] = value.item() if hasattr(value, "item") else value
+        rows.append(row)
+    return rows
 
 
 __all__ = [
