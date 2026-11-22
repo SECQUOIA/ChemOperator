@@ -41,6 +41,11 @@ FILE_STEM = "transient_hagen_poiseuille_pipe_flow"
 METRIC = "best_valid_relative_l2"
 SEED = 42
 
+# One tuning/training budget shared by every rollout and field script.
+TUNE_EPOCHS = 10
+EPOCHS = 2 * TUNE_EPOCHS
+NUM_SAMPLES = 15
+
 PDE_REGISTRY: dict[str, type[PDE]] = {
     TransientHagenPoiseuille.__name__: TransientHagenPoiseuille,
 }
@@ -221,12 +226,12 @@ def experiment_spec(args, model_id):
     return operator_spec(args, PATHS, PROBLEM_ID, model_id, FILE_STEM,
                          FIELD_NAMES, {"velocity": "m/s"}, ("t", "r"))
 
-def parse_args(*, epochs, tune_epochs, samples, parser=None):
+def parse_args(*, parser=None):
     return parse_operator_args(
         PATHS,
-        epochs=epochs,
-        tune_epochs=tune_epochs,
-        samples=samples,
+        epochs=EPOCHS,
+        tune_epochs=TUNE_EPOCHS,
+        samples=NUM_SAMPLES,
         parser=parser,
     )
 
@@ -483,7 +488,7 @@ def rollout_search_space() -> dict[str, Any]:
 
 def prepare_rollout_run():
     """Parse common CLI options and fit training-only preprocessing."""
-    args = parse_args(epochs=20, tune_epochs=10, samples=8)
+    args = parse_args()
     normalizer = fit_rollout_normalizer(args.data_dir)
     raw = rollout_raw_dataset(args.data_dir, "train")
     try:

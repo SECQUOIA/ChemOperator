@@ -166,7 +166,7 @@ def opened_data(
                     limited(item, MAX_TRAJECTORIES),
                     coordinate_name="z",
                     target_coordinate=torch.linspace(0.0, BED_LENGTH, GRID_POINTS),
-                    cache=False,
+                    cache=True,
                 ),
                 normalizer,
             )
@@ -194,10 +194,10 @@ def search_space() -> dict[str, Any]:
     return {
         "modes": tune.choice([8, 16, 32]),
         "hidden_channels": tune.choice([32, 64]),
-        "n_layers": tune.choice([3, 4]),
-        "learning_rate": tune.loguniform(5e-4, 5e-3),
+        "n_layers": tune.choice([3, 4, 5]),
+        "learning_rate": tune.loguniform(1e-4, 5e-3),
         "weight_decay": tune.loguniform(1e-6, 1e-4),
-        "batch_size": tune.choice([2, 4]),
+        "batch_size": tune.choice([16, 32, 64]),
         "seed": SEED,
     }
 

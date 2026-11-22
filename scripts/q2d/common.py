@@ -39,13 +39,14 @@ from chem_operator.experiments import (
     run_operator,
     unwrap_dataset,
 )
-PATHS = ExamplePaths.from_script(__file__, dataset="q2d_cmr")
+from ray import tune
+PATHS =ExamplePaths.from_script(__file__, dataset="q2d_cmr")
 
 FILE_STEM = "q2d_cmr"
 SEED = 42
 METRIC = "best_valid_loss"
 
-TUNE_SAMPLES = 20
+TUNE_SAMPLES = 15
 TUNE_EPOCHS = 30
 FINAL_EPOCHS = 100
 EVALUATION_BATCH_SIZE = 2
@@ -609,14 +610,12 @@ def prepare_deeponet_data(
 
 def deeponet_search_space() -> dict[str, Any]:
     """Shared branch architecture and optimizer search for both DeepONets."""
-    from ray import tune
-
     return {
         "loss": "relative_l2",
         "width": tune.choice([64, 128, 256]),
         "branch_hidden_layers": tune.choice([2, 3, 4]),
         "activation": tune.choice(["gelu", "tanh"]),
-        "learning_rate": tune.loguniform(1e-4, 3e-3),
+        "learning_rate": tune.loguniform(1e-4, 5e-3),
         "weight_decay": tune.loguniform(1e-8, 1e-4),
         "batch_size": tune.choice([4, 8, 16]),
         "epochs": TUNE_EPOCHS,

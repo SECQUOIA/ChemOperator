@@ -47,14 +47,14 @@ POD_VARIANCE_THRESHOLD = 0.999
 def search_space(pod_components: int) -> dict[str, Any]:
     return {
         "loss": "relative_l2",
-        "width": tune.choice([512, 768, 1024, 1280]),
+        "width": tune.choice([512, 1024, 2048]),
         "latent_width": pod_components,
         "branch_hidden_layers": tune.choice([2, 3, 4]),
         "trunk_hidden_layers": 0,
         "activation": tune.choice(["gelu", "tanh"]),
-        "learning_rate": tune.loguniform(5e-4, 5e-3),
+        "learning_rate": tune.loguniform(1e-4, 5e-3),
         "weight_decay": tune.loguniform(1e-6, 1e-4),
-        "batch_size": 16,
+        "batch_size": tune.choice([4, 8, 16]),
         "epochs": MAX_EPOCHS,
         "seed": SEED,
     }

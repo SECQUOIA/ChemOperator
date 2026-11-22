@@ -45,9 +45,9 @@ def search_space() -> dict[str, Any]:
         "branch_hidden_layers": tune.choice([2, 3]),
         "trunk_hidden_layers": tune.choice([2, 3]),
         "activation": tune.choice(["gelu", "tanh"]),
-        "learning_rate": tune.loguniform(1.0e-4, 3.0e-3),
+        "learning_rate": tune.loguniform(1e-4, 5e-3),
         "weight_decay": tune.loguniform(1.0e-8, 1.0e-4),
-        "batch_size": tune.choice([64, 128]),
+        "batch_size": tune.choice([64, 128, 256]),
         "epochs": MAX_EPOCHS,
         "seed": SEED,
     }

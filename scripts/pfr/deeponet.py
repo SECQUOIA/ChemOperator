@@ -40,14 +40,14 @@ MODEL_ID = "deeponet"
 def search_space() -> dict[str, Any]:
     return {
         "loss": "relative_l2",
-        "width": tune.choice([512, 768, 1024, 1280]),
+        "width": tune.choice([512, 1024]),
         "latent_width": 64,
         "branch_hidden_layers": tune.choice([2, 3, 4]),
         "trunk_hidden_layers": tune.choice([2, 3, 4]),
         "activation": tune.choice(["gelu", "tanh"]),
-        "learning_rate": tune.loguniform(5e-4, 5e-3),
+        "learning_rate": tune.loguniform(1e-4, 5e-3),
         "weight_decay": tune.loguniform(1e-6, 1e-4),
-        "batch_size": 16,
+        "batch_size": tune.choice([8, 16, 32]),
         "epochs": MAX_EPOCHS,
         "seed": SEED,
     }

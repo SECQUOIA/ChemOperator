@@ -27,6 +27,8 @@ from scripts.pipe_flow.common import (
     BRANCH_NAMES,
     FIELDS,
     FILE_STEM,
+    MAX_EPOCHS,
+    NUM_SAMPLES,
     PATHS,
     PROBLEM_ID,
     UNITS,
@@ -114,12 +116,12 @@ def model_from_config(config: Mapping[str, Any], device: torch.device) -> FNO:
 
 def search_space() -> dict[str, Any]:
     return {
-        "modes": tune.choice([8, 16, 24]),
+        "modes": tune.choice([8, 16, 32]),
         "hidden_channels": tune.choice([16, 32]),
-        "n_layers": tune.choice([3, 4]),
-        "learning_rate": tune.loguniform(1e-4, 3e-3),
+        "n_layers": tune.choice([3, 4, 5]),
+        "learning_rate": tune.loguniform(1e-4, 5e-3),
         "weight_decay": tune.loguniform(1e-8, 1e-4),
-        "batch_size": tune.choice([8, 16]),
+        "batch_size": tune.choice([64, 128, 256]),
         "seed": SEED,
     }
 
@@ -204,7 +206,9 @@ def make_trainer(
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--variant", choices=("data", "physics", "both"), default="both")
-    args = parse_operator_args(PATHS, epochs=40, tune_epochs=20, samples=8, parser=parser)
+    args = parse_operator_args(
+        PATHS, epochs=2 * MAX_EPOCHS, tune_epochs=MAX_EPOCHS, samples=NUM_SAMPLES, parser=parser
+    )
 
     training = load_physics_split(args.data_dir, "train", args.max_cases)
     statistics = fit_physics_normalization(training)

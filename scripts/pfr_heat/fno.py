@@ -189,11 +189,11 @@ def search_space(variant="physics"):
         'wall_modes_z': tune.choice([8, 12, 16]), 
         'wall_modes_r': tune.choice([4, 6]), 
         'latent_channels': tune.choice([8, 16, 24]), 
-        'n_layers': 3, # tune.choice([3, 4]), 
+        'n_layers': tune.choice([3, 4, 5]), 
         'padding': 4, #tune.choice([0, 4]), 
         'decoder_layers': tune.choice([1, 2]), 
         'decoder_layer_size': tune.choice([16, 32]), 
-        'learning_rate': tune.loguniform(1.0e-4, 3.0e-3), 
+        'learning_rate': tune.loguniform(1e-4, 5e-3), 
         'weight_decay': tune.loguniform(1.0e-8, 1.0e-4), 
         'batch_size': tune.choice([8, 16, 32])
     }

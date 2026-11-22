@@ -86,9 +86,9 @@ def search_space() -> dict[str, Any]:
     for key in ("width", "branch_hidden_layers", "activation"):
         space.pop(key)
     space.update({
-        "modes": tune.choice([8, 16]),
+        "modes": tune.choice([8, 16, 32]),
         "hidden_channels": tune.choice([16, 32]),
-        "n_layers": tune.choice([3, 4]),
+        "n_layers": tune.choice([3, 4, 5]),
     })
     return space
 

@@ -30,6 +30,8 @@ from chem_operator.experiments import (
 from chem_operator.reactors.pipe_flow.dataset_generator import HagenPoiseuille, hagen_poiseuille_velocity
 from scripts.pipe_flow.common import (
     BRANCH_NAMES,
+    MAX_EPOCHS,
+    NUM_SAMPLES,
     PATHS,
     Normalization,
     PhysicsPipeDataset,
@@ -115,7 +117,7 @@ def search_space() -> dict[str, Any]:
         "activation": tune.choice(["gelu", "tanh"]),
         "learning_rate": tune.loguniform(1.0e-4, 3.0e-3),
         "weight_decay": tune.loguniform(1.0e-8, 1.0e-4),
-        "batch_size": tune.choice([64, 128]),
+        "batch_size": tune.choice([64, 128, 256]),
         "seed": SEED,
     }
 
@@ -237,7 +239,9 @@ def evaluate_run(trainer,data,context,statistics,cases=3):
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--variant", choices=("data", "physics", "both"), default="both")
-    args = parse_operator_args(PATHS, epochs=40, tune_epochs=20, samples=8, parser=parser)
+    args = parse_operator_args(
+        PATHS, epochs=2 * MAX_EPOCHS, tune_epochs=MAX_EPOCHS, samples=NUM_SAMPLES, parser=parser
+    )
 
     verify_exact_residual()
     statistics = fit_physics_normalization(load_physics_split(args.data_dir, "train", args.max_cases))

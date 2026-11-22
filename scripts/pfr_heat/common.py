@@ -33,7 +33,7 @@ WALL_OUTPUTS = ("T_solid",)
 PHYSICS_CONSTANTS = PFR_INPUTS + ("flow_scale", "temperature_scale")
 EXPECTED_PDES = {"reactor": "PlugFlowReactor", "solid": "CylindricalWall"}
 
-TUNE_SAMPLES = 10
+TUNE_SAMPLES = 15
 TUNE_EPOCHS = 60
 FINAL_EPOCHS = 70
 EVALUATION_BATCH_SIZE = 4

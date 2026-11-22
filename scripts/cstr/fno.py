@@ -159,12 +159,12 @@ def model_from_config(
 
 def search_space() -> dict[str, Any]:
     return {
-        "modes": tune.choice([12, 24, 48]),
+        "modes": tune.choice([8, 16, 32]),
         "hidden_channels": tune.choice([32, 64]),
-        "n_layers": tune.choice([3, 4]),
-        "learning_rate": tune.loguniform(5e-4, 5e-3),
+        "n_layers": tune.choice([3, 4, 5]),
+        "learning_rate": tune.loguniform(1e-4, 5e-3),
         "weight_decay": tune.loguniform(1e-6, 1e-4),
-        "batch_size": tune.choice([2, 4]),
+        "batch_size": tune.choice([4, 8, 16]),
         "seed": SEED,
     }
 
