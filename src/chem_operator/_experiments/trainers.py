@@ -174,6 +174,9 @@ class DeepONetTrainer:
                 "relative_l2",
                 float(metrics["valid_relative_l2"]),
             )
+            history.record(
+                epoch, "train", "elapsed_seconds", float(metrics["elapsed_seconds"])
+            )
             if self.reporter is not None:
                 self.reporter(metrics)
 
@@ -583,6 +586,9 @@ class OperatorTrainer:
                 dtype=context.dtype,
                 optimizer=None,
             )
+            # Cumulative training-loop wall clock; per-batch float() calls sync CUDA.
+            elapsed_seconds = time.perf_counter() - started
+            history.record(epoch, "train", "elapsed_seconds", elapsed_seconds)
             for name, value in train_metrics.items():
                 history.record(epoch, "train", name, value)
             for name, value in validation_metrics.items():
@@ -603,6 +609,7 @@ class OperatorTrainer:
                 stale_epochs += 1
             report = {
                 "epoch": epoch,
+                "elapsed_seconds": elapsed_seconds,
                 "train_objective": train_metrics["objective"],
                 "valid_objective": validation_metrics["objective"],
                 f"valid_{self.selection_metric}": selected,

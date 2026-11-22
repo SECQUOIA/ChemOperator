@@ -172,7 +172,7 @@ def test_operator_trainer_implements_contract_and_verifies_checkpoint(
     trainer = OperatorTrainer(
         lambda config: torch.nn.Conv2d(1, 1, kernel_size=1),
         {
-            "epochs": 1,
+            "epochs": 2,
             "batch_size": 2,
             "learning_rate": 1.0e-2,
         },
@@ -186,6 +186,14 @@ def test_operator_trainer_implements_contract_and_verifies_checkpoint(
         "objective",
         "relative_l2",
     }
+    elapsed = [
+        (event.epoch, event.value)
+        for event in outcome.history
+        if event.split == "train" and event.metric == "elapsed_seconds"
+    ]
+    assert [epoch for epoch, _ in elapsed] == [1, 2]
+    assert 0.0 < elapsed[0][1] < elapsed[1][1]
+    assert elapsed[1][1] <= outcome.timings["final_training_seconds"]
     assert trainer.predict(TinyFields(), run_context).shape == (4, 1, 2, 2)
 
 
