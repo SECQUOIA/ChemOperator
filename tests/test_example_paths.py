@@ -27,6 +27,7 @@ def test_from_script_discovers_conventional_paths(tmp_path: Path) -> None:
     assert paths.data == root / "datasets" / "pipe_flow_transient"
     assert paths.example == root / "scripts" / "pipe_flow_transient"
     assert paths.output == paths.example / "results" / "transient_fno"
+    assert paths.plots == root / "artifacts" / "plots"
     assert paths.ray == root / ".ray"
 
 

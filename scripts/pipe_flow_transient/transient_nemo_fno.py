@@ -12,7 +12,7 @@ from ray import tune
 import torch
 from torch.nn import functional as torch_functional
 from chem_operator.normalization import ZScoreNormalizer
-from chem_operator.experiments import CompositeLossTrainer, LossTerm
+from chem_operator.experiments import OperatorTrainer, LossTerm
 from chem_operator.experiments import run_operator, evaluate_fields
 from scripts.pipe_flow_transient.common import (
     PATHS,
@@ -231,7 +231,7 @@ def make_trainer(config, context, normalizer, *, pde_name, radial_spacing, varia
             zero = prediction.new_zeros(())
             batch["physics_loss"], batch["constraint_loss"] = zero, zero
         return prediction
-    return CompositeLossTrainer(
+    return OperatorTrainer(
         lambda cfg: model_from_config(cfg, context.device), config,
         forward_adapter=forward,
         loss_terms=[LossTerm("data_loss", lambda p,t,b: torch_functional.mse_loss(p,t)),

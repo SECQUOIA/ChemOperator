@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 import argparse
-import importlib.util
-import json
 from pathlib import Path
 import subprocess
 import sys
@@ -35,7 +33,12 @@ def test_model_workflow_help_omits_removed_flags() -> None:
 @pytest.mark.parametrize(
     "script",
     (
+        "scripts/cstr/plot.py",
+        "scripts/packed_bed_1d/plot.py",
         "scripts/pfr/plot.py",
+        "scripts/pfr_heat/plot.py",
+        "scripts/pipe_flow/plot.py",
+        "scripts/pipe_flow_transient/plot.py",
         "scripts/q2d/plot.py",
         "scripts/cstr/plot.py",
     ),
@@ -48,6 +51,10 @@ def test_plot_scripts_require_run_paths(script: str) -> None:
     )
     assert help_result.returncode == 0, help_result.stderr
     assert "--run RUN" in help_result.stdout
+    assert "--recent" in help_result.stdout
+    assert "--runs-root RUNS_ROOT" in help_result.stdout
+    assert "--output-dir OUTPUT_DIR" in help_result.stdout
+    assert "--cases CASES" in help_result.stdout
     assert "--deeponet-run" not in help_result.stdout
 
     missing_result = subprocess.run(
@@ -55,50 +62,3 @@ def test_plot_scripts_require_run_paths(script: str) -> None:
     )
     assert missing_result.returncode != 0
     assert "--run" in missing_result.stderr
-
-
-def test_plot_all_uses_repeatable_run_arguments(monkeypatch: pytest.MonkeyPatch) -> None:
-    path = ROOT / "scripts/plot_all.py"
-    spec = importlib.util.spec_from_file_location("plot_all_test", path)
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    calls: list[list[str]] = []
-    monkeypatch.setattr(module.subprocess, "run", lambda command, **_: calls.append(command))
-
-    module.run_plot(
-        "PFR", "scripts/pfr/plot.py", Path("direct"), Path("pod")
-    )
-
-    assert len(calls) == 1
-    assert calls[0][-4:] == ["--run", "direct", "--run", "pod"]
-
-
-def test_plot_all_runs_child_with_current_python_without_uv(tmp_path, monkeypatch):
-    from scripts import plot_all
-
-    script = tmp_path / "child.py"
-    script.write_text(
-        "import json, sys\nfrom pathlib import Path\n"
-        "Path('child.json').write_text(json.dumps([sys.executable, sys.argv[1:]]))\n"
-    )
-    monkeypatch.setattr(plot_all, "ROOT", tmp_path)
-    monkeypatch.setenv("PATH", str(tmp_path))
-    plot_all.run_plot("child", "child.py", Path("saved-run"), cases="1")
-    interpreter, arguments = json.loads((tmp_path / "child.json").read_text())
-    assert interpreter == sys.executable
-    assert arguments == ["--run", "saved-run", "--cases", "1"]
-
-
-def test_plot_all_discovers_transient_physicsnemo_variants(tmp_path, monkeypatch):
-    from scripts import plot_all
-
-    models = ("transient_nemo_fno_data", "transient_nemo_fno_physics")
-    paths = [tmp_path / "artifacts/runs/pipe_flow_transient" / model / "run-1" for model in models]
-    for path in paths:
-        path.mkdir(parents=True)
-    monkeypatch.setattr(plot_all, "ROOT", tmp_path)
-    calls = {}
-    monkeypatch.setattr(plot_all, "run_plot", lambda name, script, *runs: calls.update({name: runs}))
-    plot_all.main()
-    assert tuple(run for run in calls["transient pipe flow"] if run is not None) == tuple(paths)

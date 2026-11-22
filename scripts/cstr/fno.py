@@ -22,14 +22,16 @@ from torch.utils.data import DataLoader, Dataset
 from chem_operator.experiments import (
     EvaluationOutcome,
     ExperimentRunner,
-    FNOTrainer,
+    OperatorTrainer,
     LossTerm,
     RayRuntimeConfig,
     StreamingRegressionMetrics,
     Tuner,
     TuningConfig,
     WorkflowStages,
+    resolve_train_config,
     run_context_from_namespace,
+    train_final,
 )
 from chem_operator.models import relative_l2_loss
 from chem_operator.normalization import ZScoreNormalizer
@@ -177,9 +179,9 @@ def make_trainer(
     config: Mapping[str, Any],
     context: Any,
     normalizer: ZScoreNormalizer,
-) -> FNOTrainer:
+) -> OperatorTrainer:
     n_species = int(normalizer.means["X"].numel())
-    return FNOTrainer(
+    return OperatorTrainer(
         lambda values: model_from_config(values, context.device, n_species),
         config,
         loss_terms=(LossTerm("data_loss", relative_l2),),
@@ -196,7 +198,7 @@ def make_trainer(
 
 
 def evaluate(
-    trainer: FNOTrainer,
+    trainer: OperatorTrainer,
     data: CSTRFNOAdapter,
     context: Any,
     *,
@@ -241,7 +243,7 @@ def evaluate(
     )
 
 
-def tuning_settings() -> TuningConfig:
+def tuning_settings(seed: int = SEED) -> TuningConfig:
     return TuningConfig(
         metric="best_valid_data_loss",
         mode="min",
@@ -250,7 +252,7 @@ def tuning_settings() -> TuningConfig:
         max_concurrent_trials=MAX_CONCURRENT_TRIALS,
         time_budget_s=TIME_BUDGET_S,
         resources_per_trial={"cpu": CPUS_PER_TRIAL, "gpu": GPUS_PER_TRIAL},
-        optuna_seed=SEED,
+        optuna_seed=seed,
         ray_runtime=RayRuntimeConfig(
             num_cpus=CPUS_PER_TRIAL,
             num_gpus=GPUS_PER_TRIAL,
@@ -280,8 +282,6 @@ def main() -> None:
     stages = WorkflowStages.from_namespace(args)
     if not (stages.tune or stages.train):
         raise ValueError("Select --tune or --train.")
-    if stages.train_config != "best":
-        raise ValueError("CSTR FNO training requires --train-config best.")
     normalizer = prepare_normalizer()
     context = run_context_from_namespace(
         args, problem=PROBLEM_ID, model=MODEL_ID, seed=SEED
@@ -302,7 +302,7 @@ def main() -> None:
             Tuner(
                 trial_trainer,
                 {**search_space(), "epochs": MAX_EPOCHS},
-                config=tuning_settings(),
+                config=tuning_settings(context.seed),
                 dataset_factory=trial_data,
             ),
             None,
@@ -311,23 +311,26 @@ def main() -> None:
         )
 
     if stages.train:
-        config = (
-            dict(tuning.best_config)
-            if tuning is not None
-            else runner.artifacts.read_best_config()
-        )
+        config, source = resolve_train_config(stages.train_config, runner, tuning=tuning)
         config["epochs"] = FINAL_EPOCHS
-        trainer = make_trainer(config, context, normalizer)
-        with opened_data(("train", "valid", "test"), normalizer) as datasets:
-            runner.run(
-                trainer,
-                *datasets,
-                config=config,
-                tuning=tuning,
-                evaluator=partial(
-                    evaluate, reconstruction_cases=RECONSTRUCTION_CASES
-                ),
-            )
+
+        def train_one(run_runner, run_context, run_config):
+            trainer = make_trainer(run_config, run_context, normalizer)
+            with opened_data(("train", "valid", "test"), normalizer) as datasets:
+                return run_runner.run(
+                    trainer,
+                    *datasets,
+                    config=run_config,
+                    tuning=tuning if run_runner is runner else None,
+                    evaluator=partial(
+                        evaluate, reconstruction_cases=RECONSTRUCTION_CASES
+                    ),
+                )
+
+        train_final(
+            runner, stages, config=config, tuning=tuning,
+            train_one=train_one, train_config_source=source,
+        )
     print(f"Run artifacts: {context.paths.run_dir}")
 
 

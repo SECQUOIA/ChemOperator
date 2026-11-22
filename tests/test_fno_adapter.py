@@ -164,3 +164,25 @@ def test_physical_field_inputs_are_configuration_only() -> None:
     assert FNOAdapter.required_constant_names(inputs, OUTPUT_CHANNELS) == (
         "SCCM",
     )
+
+
+def test_spatial_shape_rejects_cases_on_another_mesh() -> None:
+    """A declared mesh is enforced per case, including inside checkpoints."""
+    import pytest
+
+    training = _SampleDataset([_sample(3, 2, 0.0), _sample(3, 2, 2.0)])
+    normalizer = fit_fno_zscore_normalizer(training, INPUT_CHANNELS, OUTPUT_CHANNELS)
+    mixed = _SampleDataset([_sample(3, 2, 1.0), _sample(5, 4, 1.0)])
+    adapter = FNOAdapter(
+        mixed, normalizer, input_channels=INPUT_CHANNELS,
+        output_channels=OUTPUT_CHANNELS, coordinate_names=("z", "r"), spatial_shape=(3, 2),
+    )
+    assert adapter[0]["y"].shape == (3, 3, 2)
+    assert adapter.checkpoint_config()["spatial_shape"] == [3, 2]
+    with pytest.raises(ValueError, match=r"case 1 has spatial shape \(5, 4\)"):
+        adapter[1]
+    with pytest.raises(ValueError, match="one positive size per coordinate"):
+        FNOAdapter(
+            mixed, normalizer, input_channels=INPUT_CHANNELS,
+            output_channels=OUTPUT_CHANNELS, coordinate_names=("z", "r"), spatial_shape=(3,),
+        )

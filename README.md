@@ -466,14 +466,14 @@ information.
 
 The scripts are research experiments rather than a unified command-line
 interface. Direct and POD-DeepONets have separate entrypoints and write
-canonical run directories; pipe-flow's physics-informed study uses Hydra.
+canonical run directories.
 
 | Script | Workflow |
 | --- | --- |
 | `scripts/{cstr,packed_bed_1d,pfr,pipe_flow}/deeponet.py` | Tune and train one direct DeepONet |
 | `scripts/{cstr,packed_bed_1d,pfr,pipe_flow}/pod_deeponet.py` | Tune and train one POD-DeepONet |
 | `scripts/{cstr,packed_bed_1d,pfr,pipe_flow}/plot.py` | Compare explicit canonical direct and POD run directories |
-| [`scripts/pipe_flow/physics_deeponet.py`](scripts/pipe_flow/physics_deeponet.py) | Hydra-configured pipe-flow data/physics-loss study |
+| [`scripts/pipe_flow/physics_deeponet.py`](scripts/pipe_flow/physics_deeponet.py) | PhysicsNeMo DeepONet data/physics-loss study |
 | [`scripts/pipe_flow_transient/transient_fno.py`](scripts/pipe_flow_transient/transient_fno.py) | Neuraloperator FNO tuning, training, evaluation, checkpointing, and plots |
 | [`scripts/pipe_flow_transient/transient_nemo_fno.py`](scripts/pipe_flow_transient/transient_nemo_fno.py) | PhysicsNeMo transient pipe-flow FNO workflow |
 | [`scripts/pfr_heat/fno.py`](scripts/pfr_heat/fno.py) | Coupled PhysicsNeMo reactor/wall FNO workflow |
@@ -484,23 +484,9 @@ canonical run directories; pipe-flow's physics-informed study uses Hydra.
 | [`scripts/q2d/fno.py`](scripts/q2d/fno.py) | Quasi-2D FNO training, superresolution, and break-even analysis |
 | [`scripts/q2d/tfno.py`](scripts/q2d/tfno.py) | Quasi-2D tensorized FNO tuning, training, and evaluation |
 | [`scripts/q2d/uno.py`](scripts/q2d/uno.py) | Quasi-2D U-shaped neural operator tuning, training, and evaluation |
+| [`scripts/q2d/deeponet.py`](scripts/q2d/deeponet.py) | Fixed-mesh Q2D Cartesian DeepONet tuning, training, and evaluation |
+| [`scripts/q2d/pod_deeponet.py`](scripts/q2d/pod_deeponet.py) | Fixed-mesh Q2D POD-DeepONet with a training-only joint field basis |
 | [`scripts/diagnostics/processing.py`](scripts/diagnostics/processing.py) | Visual smoke test for preprocessing and inverse reconstruction |
-
-Examples:
-
-```bash
-uv run scripts/cstr/deeponet.py
-uv run scripts/cstr/pod_deeponet.py
-uv run scripts/cstr/plot.py \
-  --run artifacts/runs/cstr_non_isothermal/deeponet/<run-id> \
-  --run artifacts/runs/cstr_non_isothermal/pod_deeponet/<run-id>
-uv run scripts/pipe_flow_transient/transient_fno.py
-uv run scripts/pipe_flow/physics_deeponet.py final.epochs=5
-uv run scripts/pfr_heat/deeponet_fno.py
-uv run scripts/q2d/validate_solver.py
-uv run scripts/q2d/tfno.py
-uv run scripts/q2d/uno.py
-```
 
 The physics-informed model entry points accept
 `--variant {data,physics,both}` and default to `physics`. This applies to
@@ -538,8 +524,9 @@ Review each script's data paths, run-mode flags, trajectory limits, and compute
 settings before launching it. The tuning scripts can be long-running and use a
 GPU when PyTorch reports one as available. Examples are grouped by physical
 case, with configuration beside their runners. Training runners write below
-`artifacts/runs/<problem>/<model>/<run-id>` by default. Project-level Ray state
-is written below `.ray/`.
+`artifacts/runs/<problem>/<model>/<run-id>` by default, and plotters write below
+`artifacts/plots/<problem>/<model>/<run-id>` so the two trees mirror each other.
+Project-level Ray state is written below `.ray/`.
 
 The experiment tuning layer defaults `RAY_ENABLE_UV_RUN_RUNTIME_ENV=0` before
 Ray is imported, so local workers reuse the installed environment under
