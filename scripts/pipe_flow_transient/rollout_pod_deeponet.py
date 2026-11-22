@@ -15,9 +15,9 @@ from chem_operator._models.deeponet import _PODOnlyDeepONet
 from chem_operator.models import PODTransform, fit_incremental_pod_dataset
 from chem_operator.normalization import normalizer_from_state_dict
 from scripts.pipe_flow_transient.common import (
-    ROLLOUT_CONSTANT_NAMES,
+    BRANCH_CONSTANT_NAMES,
     RolloutDeepXDEGrid,
-    RolloutDeepXDETrainerBase,
+    RolloutTrainerBase,
     make_rollout_adapter,
     prepare_rollout_run,
     rollout_architecture,
@@ -35,14 +35,14 @@ class PODRolloutDeepXDE(RolloutDeepXDEGrid):
     def __init__(self, config: Mapping[str, Any], n_radial: int, pod: PODTransform):
         if pod.output_shape != (n_radial,):
             raise ValueError("POD basis must represent one radial profile.")
-        branch_width = n_radial + len(ROLLOUT_CONSTANT_NAMES) + 2
+        branch_width = n_radial + len(BRANCH_CONSTANT_NAMES) + 2
         super().__init__(
             _PODOnlyDeepONet(branch_width, pod, rollout_architecture(config)),
             n_radial,
         )
 
 
-class PODRolloutDeepXDETrainer(RolloutDeepXDETrainerBase):
+class PODRolloutDeepXDETrainer(RolloutTrainerBase):
     def __init__(self, config, normalizer, n_radial: int, pod: PODTransform):
         self.pod = pod
         super().__init__(

@@ -28,11 +28,11 @@ from scripts.pipe_flow_transient.common import (
     fit_rollout_normalizer,
     make_rollout_adapter,
 )
-from scripts.pipe_flow_transient.deeponet import (
+from scripts.pipe_flow_transient.rollout_deeponet import (
     RolloutDeepXDE,
     RolloutDeepXDETrainer,
 )
-from scripts.pipe_flow_transient.pod_deeponet import (
+from scripts.pipe_flow_transient.rollout_pod_deeponet import (
     PODRolloutDeepXDETrainer,
     fit_rollout_pod,
 )
@@ -76,7 +76,7 @@ def test_shared_rollout_inputs_and_cartesian_grid(data_dir):
     try:
         sample = data[0]
         assert raw.task == "rollout"
-        assert sample["branch"].shape == (15,)
+        assert sample["branch"].shape == (14,)
         assert sample["x"].shape == sample["y"].shape == (8,)
         torch.testing.assert_close(sample["target"], sample["y"])
         batch = next(iter(DataLoader(data, batch_size=2)))

@@ -18,7 +18,7 @@ from chem_operator.plotting import plot_operator_fields
 from chem_operator.reactors.pipe_flow_transient.dataset_generator import TransientHagenPoiseuillePipeFlowSim
 from chem_operator.sampling import Constant, Uniform
 
-SCRIPT_PATH = Path(__file__).resolve().parents[1] / "scripts" / "pipe_flow_transient" / "nemo_deeponet.py"
+SCRIPT_PATH = Path(__file__).resolve().parents[1] / "scripts" / "pipe_flow_transient" / "rollout_nemo_deeponet.py"
 SCRIPT_SPEC = importlib.util.spec_from_file_location("pipe_flow_transient_nemo_deeponet", SCRIPT_PATH)
 assert SCRIPT_SPEC is not None and SCRIPT_SPEC.loader is not None
 script = importlib.util.module_from_spec(SCRIPT_SPEC)
@@ -58,7 +58,7 @@ def test_rollout_windows_and_physics(data_dir):
     try:
         assert raw.task == "rollout"
         sample = data[0]
-        assert sample["branch"].shape == (15,)
+        assert sample["branch"].shape == (14,)
         assert sample["x"].shape == (8,)
         assert sample["y"].shape == (8,)
         assert sample["physicsnemo_pde"] == "TransientHagenPoiseuille"
@@ -91,8 +91,24 @@ def test_data_mode_skips_training_physics(data_dir, monkeypatch):
     monkeypatch.setattr(script, "physics_losses", lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("physics called")))
     model = script.model_from_config(config(), 8, torch.device("cpu"))
     model.train()
-    prediction = trainer.forward_adapter(model, (torch.zeros(1, 15), torch.linspace(0, 1, 8).unsqueeze(0)), {})
+    prediction = trainer.forward_adapter(model, (torch.zeros(1, 14), torch.linspace(0, 1, 8).unsqueeze(0)), {})
     assert prediction.shape == (1, 8)
+
+
+def test_tuning_validation_skips_physics(data_dir, monkeypatch):
+    normalizer = script.fit_normalizer(data_dir)
+    context = SimpleNamespace(device=torch.device("cpu"))
+    trainer = script.make_trainer(config(), context, normalizer, 8,
+                                  pde_name="TransientHagenPoiseuille",
+                                  radial_spacing=1 / 7, variant="physics")
+    assert [t.name for t in trainer.loss_terms if t.physics] == ["physics_loss", "constraint_loss"]
+    monkeypatch.setattr(script, "physics_losses", lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("physics called")))
+    model = script.model_from_config(config(), 8, torch.device("cpu"))
+    model.eval()
+    batch = {}
+    trainer.forward_adapter(model, (torch.zeros(1, 14), torch.linspace(0, 1, 8).unsqueeze(0)), batch,
+                            compute_physics=False)
+    assert batch["physics_loss"] == 0.0 and batch["constraint_loss"] == 0.0
 
 
 def test_training_checkpoint_and_recursive_evaluation(data_dir, tmp_path):

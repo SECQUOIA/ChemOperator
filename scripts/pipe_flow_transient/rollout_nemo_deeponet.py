@@ -23,10 +23,10 @@ from chem_operator.experiments import (
     run_operator,
 )
 from scripts.pipe_flow_transient.common import (
+    BRANCH_CONSTANT_NAMES,
     FIELD_NAMES,
     PATHS,
     PDE_REGISTRY,
-    PHYSICS_CONSTANT_NAMES,
     RolloutAdapter,
     dataset_pde_name,
     evaluate_rollout_run as evaluate_run,
@@ -39,7 +39,7 @@ from scripts.pipe_flow_transient.common import (
     rollout_raw_dataset as raw_dataset,
 )
 
-CONSTANT_NAMES = PHYSICS_CONSTANT_NAMES
+CONSTANT_NAMES = BRANCH_CONSTANT_NAMES
 PHYSICS_WEIGHT_KEYS = ("physics_weight", "constraint_weight")
 MODEL_IDS = {"data": "nemo_deeponet_data", "physics": "nemo_deeponet_physics"}
 
@@ -160,9 +160,9 @@ def make_trainer(config, context, normalizer, n_radial: int, *, pde_name: str,
                  for key, value in batch.items()}
         return (moved["branch"], moved["x"]), moved["y"], moved
 
-    def forward(model, inputs, batch):
+    def forward(model, inputs, batch, *, compute_physics=True):
         prediction = model(*inputs)
-        if active or not model.training:
+        if compute_physics and (active or not model.training):
             batch["physics_loss"], batch["constraint_loss"] = physics_losses(
                 prediction, batch, normalizer, informer,
                 pde_name=pde_name, radial_spacing=radial_spacing,
@@ -177,8 +177,8 @@ def make_trainer(config, context, normalizer, n_radial: int, *, pde_name: str,
         batch_adapter=adapt, forward_adapter=forward,
         loss_terms=[
             LossTerm("data_loss", lambda p, t, b: F.mse_loss(p, t)),
-            LossTerm("physics_loss", lambda p, t, b: b["physics_loss"], float(config["physics_weight"])),
-            LossTerm("constraint_loss", lambda p, t, b: b["constraint_loss"], float(config["constraint_weight"])),
+            LossTerm("physics_loss", lambda p, t, b: b["physics_loss"], float(config["physics_weight"]), physics=True),
+            LossTerm("constraint_loss", lambda p, t, b: b["constraint_loss"], float(config["constraint_weight"]), physics=True),
         ],
         metric_adapter=lambda p, t, b: (normalizer.denormalize(p, "velocity"), normalizer.denormalize(t, "velocity")),
         checkpoint_metadata={

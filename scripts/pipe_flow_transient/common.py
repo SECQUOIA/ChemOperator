@@ -27,7 +27,6 @@ PATHS = ExamplePaths.from_script(__file__, dataset="pipe_flow_transient")
 FIELD_NAMES = ("velocity",)
 MODEL_CONSTANT_NAMES = (
     "radius",
-    "length",
     "dynamic_viscosity",
     "pressure_drop",
 )
@@ -50,6 +49,14 @@ PDE_REGISTRY: dict[str, type[PDE]] = {
 MAX_TRAIN_TRAJECTORIES = None
 CONSTANT_NAMES = MODEL_CONSTANT_NAMES
 ROLLOUT_CONSTANT_NAMES = PHYSICS_CONSTANT_NAMES
+# Length is constant across the dataset, so it is kept for the physics losses
+# but not fed to the rollout branch network.
+BRANCH_CONSTANT_NAMES = tuple(
+    name for name in ROLLOUT_CONSTANT_NAMES if name != "length"
+)
+_BRANCH_CONSTANT_INDICES = tuple(
+    ROLLOUT_CONSTANT_NAMES.index(name) for name in BRANCH_CONSTANT_NAMES
+)
 class PhysicsFNOAdapter(FNOAdapter):
     """Add PDE provenance and dimensional constants to an FNO sample."""
 
@@ -236,6 +243,8 @@ def rollout_raw_dataset(data_dir: Path, split: str, *, full_trajectory: bool = F
         n_steps_input=1,
         n_steps_output=1,
         dtype=torch.float32,
+        # Each case yields many small one-step pairs; read every case once.
+        preload=True,
     )
 
 
@@ -267,7 +276,7 @@ class RolloutAdapter(Dataset):
         profile = self.normalizer.normalize(velocity, "velocity")
         parameters = torch.stack([
             self.normalizer.normalize(constants[..., index], name)
-            for index, name in enumerate(ROLLOUT_CONSTANT_NAMES)
+            for index, name in zip(_BRANCH_CONSTANT_INDICES, BRANCH_CONSTANT_NAMES)
         ], dim=-1)
         tau, dtau = fourier_times(t_now, t_next, constants)
         return torch.cat((profile, parameters, tau.unsqueeze(-1), dtau.unsqueeze(-1)), dim=-1)
@@ -307,7 +316,7 @@ def fit_rollout_normalizer(data_dir: Path) -> ZScoreNormalizer:
     dataset = rollout_raw_dataset(data_dir, "train", full_trajectory=True)
     try:
         dataset_pde_name(dataset)
-        return fit_zscore_normalizer(dataset, FIELD_NAMES, ROLLOUT_CONSTANT_NAMES)
+        return fit_zscore_normalizer(dataset, FIELD_NAMES, BRANCH_CONSTANT_NAMES)
     finally:
         dataset.close()
 
@@ -415,8 +424,9 @@ def rollout_architecture(config: Mapping[str, Any]) -> DeepONetTrainingConfig:
     )
 
 
-class RolloutDeepXDETrainerBase(OperatorTrainer):
-    """Shared rollout losses, metrics, and checkpoint metadata."""
+class RolloutTrainerBase(OperatorTrainer):
+    """Shared rollout losses, metrics, and checkpoint metadata for any
+    ``model(branch, x)`` one-step network."""
 
     def __init__(self, config: Mapping[str, Any], normalizer: ZScoreNormalizer,
                  n_radial: int, *, model_id: str,
@@ -440,7 +450,7 @@ class RolloutDeepXDETrainerBase(OperatorTrainer):
                 "normalizer": normalizer.state_dict(),
                 "n_radial": n_radial,
                 "model_id": model_id,
-                "constant_names": list(ROLLOUT_CONSTANT_NAMES),
+                "constant_names": list(BRANCH_CONSTANT_NAMES),
                 "branch_time_features": ["fourier_time", "fourier_step"],
                 "pod": pod_metadata,
             },

@@ -14,9 +14,9 @@ from ray import tune
 from chem_operator._models.deeponet import _network
 from chem_operator.normalization import normalizer_from_state_dict
 from scripts.pipe_flow_transient.common import (
-    ROLLOUT_CONSTANT_NAMES,
+    BRANCH_CONSTANT_NAMES,
     RolloutDeepXDEGrid,
-    RolloutDeepXDETrainerBase,
+    RolloutTrainerBase,
     prepare_rollout_run,
     rollout_architecture,
     rollout_search_space,
@@ -30,11 +30,11 @@ class RolloutDeepXDE(RolloutDeepXDEGrid):
     """Direct Cartesian DeepONet on normalized radial profiles."""
 
     def __init__(self, config: Mapping[str, Any], n_radial: int):
-        branch_width = n_radial + len(ROLLOUT_CONSTANT_NAMES) + 2
+        branch_width = n_radial + len(BRANCH_CONSTANT_NAMES) + 2
         super().__init__(_network(branch_width, 1, 1, rollout_architecture(config)), n_radial)
 
 
-class RolloutDeepXDETrainer(RolloutDeepXDETrainerBase):
+class RolloutDeepXDETrainer(RolloutTrainerBase):
     def __init__(self, config, normalizer, n_radial: int):
         super().__init__(
             config, normalizer, n_radial, model_id=MODEL_ID,
