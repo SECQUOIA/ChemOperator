@@ -41,6 +41,18 @@ HYBRID_SCRIPT_SPEC = importlib.util.spec_from_file_location(
 assert HYBRID_SCRIPT_SPEC is not None and HYBRID_SCRIPT_SPEC.loader is not None
 HYBRID_SCRIPT = importlib.util.module_from_spec(HYBRID_SCRIPT_SPEC)
 HYBRID_SCRIPT_SPEC.loader.exec_module(HYBRID_SCRIPT)
+POD_SCRIPT_PATH = (
+    Path(__file__).resolve().parents[1]
+    / "scripts"
+    / "pfr_heat"
+    / "pod_deeponet_fno.py"
+)
+POD_SCRIPT_SPEC = importlib.util.spec_from_file_location(
+    "pfr_heat_pod_deeponet_fno", POD_SCRIPT_PATH
+)
+assert POD_SCRIPT_SPEC is not None and POD_SCRIPT_SPEC.loader is not None
+POD_SCRIPT = importlib.util.module_from_spec(POD_SCRIPT_SPEC)
+POD_SCRIPT_SPEC.loader.exec_module(POD_SCRIPT)
 CoupledPFRHeatDataset = FNO_SCRIPT.CoupledPFRHeatDataset
 InformerCache = FNO_SCRIPT.InformerCache
 PFR_OUTPUTS = FNO_SCRIPT.PFR_OUTPUTS
@@ -50,7 +62,7 @@ physics_losses = FNO_SCRIPT.physics_losses
 raw_dataset = FNO_SCRIPT.raw_dataset
 
 
-def _small_case(simulator: PFRHeatSim):
+def _small_case(simulator: PFRHeatSim, **overrides):
     """Return a cheap coupled solution suitable for FNO adapter tests."""
     params = {
         "inlet_flow_a": 80.0,
@@ -67,6 +79,7 @@ def _small_case(simulator: PFRHeatSim):
         "tolerance": 1.0e-4,
         "max_nodes": 5000,
     }
+    params.update(overrides)
     record = simulator.run_case(simulator.make_case(params))
     record.metadata["params"] = params
     return record
@@ -98,7 +111,7 @@ def _small_hybrid_config() -> dict[str, float | int | str]:
         "trunk_width": 8,
         "depth": 2,
         "latent_width": 4,
-        "activation": "silu",
+        "activation": "gelu",
         "wall_modes_z": 3,
         "wall_modes_r": 2,
         "wall_latent_channels": 4,
@@ -116,9 +129,24 @@ def _small_hybrid_config() -> dict[str, float | int | str]:
     }
 
 
+def _small_pod_hybrid_config() -> dict[str, float | int | str]:
+    config = _small_hybrid_config()
+    del config["trunk_width"], config["latent_width"]
+    return config
+
+
+def _pod_cases(simulator: PFRHeatSim):
+    """Return several distinct cheap cases so POD has a nontrivial basis."""
+    return [
+        _small_case(simulator),
+        _small_case(simulator, inlet_temperature=370.0, outer_temperature=330.0),
+        _small_case(simulator, inlet_flow_a=60.0, interface_biot=2.5),
+    ]
+
+
 def test_variant_search_spaces_zero_all_data_weights() -> None:
-    """Both PFR-heat architectures expose fixed-zero data-only spaces."""
-    for module in (FNO_SCRIPT, HYBRID_SCRIPT):
+    """All PFR-heat architectures expose fixed-zero data-only spaces."""
+    for module in (FNO_SCRIPT, HYBRID_SCRIPT, POD_SCRIPT):
         data_space = module.search_space("data")
         assert all(
             data_space[key] == 0.0 for key in FNO_SCRIPT.PHYSICS_WEIGHT_KEYS
@@ -131,7 +159,7 @@ def test_variant_search_spaces_zero_all_data_weights() -> None:
 
 def test_pfr_heat_variant_clis_default_to_physics(monkeypatch) -> None:
     """Both PFR-heat entry points expose the same validated variant CLI."""
-    for module in (FNO_SCRIPT, HYBRID_SCRIPT):
+    for module in (FNO_SCRIPT, HYBRID_SCRIPT, POD_SCRIPT):
         monkeypatch.setattr(module.sys, "argv", [str(SCRIPT_PATH)])
         assert module.parse_cli_args().variant == "physics"
         for variant in ("both", "data", "physics"):
@@ -194,6 +222,45 @@ def test_data_trainers_force_zero_weights_and_skip_residuals(monkeypatch) -> Non
         assert all(value == 0.0 for value in batch["physics_losses"].values())
 
 
+@pytest.mark.parametrize("variant", ["data", "physics"])
+def test_trainers_skip_validation_residuals_when_told(monkeypatch, variant) -> None:
+    """Tuning-trial validation (compute_physics=False) builds no residuals."""
+
+    class Normalizer:
+        def state_dict(self):
+            return {}
+
+    class EvalModel:
+        training = False
+
+        def __call__(self, *inputs):
+            del inputs
+            return {"pfr": torch.ones(1), "wall": torch.ones(1)}
+
+    context = SimpleNamespace(device=torch.device("cpu"))
+    for module, config in (
+        (FNO_SCRIPT, _small_config()),
+        (HYBRID_SCRIPT, _small_hybrid_config()),
+    ):
+        config.update({key: 0.1 for key in FNO_SCRIPT.PHYSICS_WEIGHT_KEYS})
+        monkeypatch.setattr(
+            module,
+            "physics_losses",
+            lambda *args, **kwargs: (_ for _ in ()).throw(
+                AssertionError("validation computed physics losses")
+            ),
+        )
+        trainer = module.make_trainer(
+            config, context, Normalizer(), Normalizer(), (9, 7), variant=variant
+        )
+        assert [term.name for term in trainer.loss_terms if term.physics] == [
+            "species_loss", "gas_loss", "solid_loss", "bc_loss",
+        ]
+        batch = {}
+        trainer.forward_adapter(EvalModel(), (), batch, compute_physics=False)
+        assert all(value == 0.0 for value in batch["physics_losses"].values())
+
+
 def test_both_variant_uses_explicit_pfr_heat_model_ids(monkeypatch, tmp_path) -> None:
     """Each PFR-heat runner launches independent, explicitly named variants."""
 
@@ -207,10 +274,16 @@ def test_both_variant_uses_explicit_pfr_heat_model_ids(monkeypatch, tmp_path) ->
     expected = {
         FNO_SCRIPT: ("fno_data", "fno_physics"),
         HYBRID_SCRIPT: ("deeponet_fno_data", "deeponet_fno_physics"),
+        POD_SCRIPT: ("pod_deeponet_fno_data", "pod_deeponet_fno_physics"),
     }
+    monkeypatch.setattr(
+        POD_SCRIPT,
+        "fit_reactor_pod",
+        lambda *args: SimpleNamespace(n_components=3),
+    )
     for module, model_ids in expected.items():
         args = SimpleNamespace(
-            variant="both", data_dir=tmp_path, plot_cases=2
+            variant="both", data_dir=tmp_path, plot_cases=2, max_cases=None
         )
         monkeypatch.setattr(module, "parse_cli_args", lambda: args)
         monkeypatch.setattr(module, "raw_dataset", lambda *args: Raw())
@@ -551,6 +624,153 @@ def test_coupled_deeponet_fno_checkpoint_round_trip(tmp_path) -> None:
             "gas_loss",
             "solid_loss",
             "bc_loss",
+        }.issubset(outcome.metrics)
+        with torch.no_grad():
+            inputs = (
+                sample["pfr_branch"].unsqueeze(0),
+                sample["z"].unsqueeze(0),
+                sample["wall_conditions"].unsqueeze(0),
+            )
+            expected = trainer.model(*inputs)
+            actual = restored_trainer.model(*inputs)
+        assert torch.equal(actual["pfr"], expected["pfr"])
+        assert torch.equal(actual["wall"], expected["wall"])
+    finally:
+        raw.close()
+
+
+def test_pod_search_space_fixes_latent_width_to_pod_rank() -> None:
+    """The POD hybrid has no trunk and records the fitted POD rank."""
+    space = POD_SCRIPT.search_space("physics", SimpleNamespace(n_components=5))
+    assert "trunk_width" not in space
+    assert space["latent_width"] == 5
+
+
+def test_coupled_pod_deeponet_fno_shapes_physics_and_wall_gradient(tmp_path) -> None:
+    """The wall FNO consumes POD-decoded reactor predictions end to end."""
+    simulator = PFRHeatSim()
+    generator = SimulationDatasetGenerator(simulator, tmp_path)
+    generator.save_split("train", _pod_cases(simulator))
+    raw = raw_dataset(tmp_path, "train")
+    try:
+        pfr_normalizer, wall_normalizer, shape = fit_normalizers(raw)
+    finally:
+        raw.close()
+    pod = POD_SCRIPT.fit_reactor_pod(
+        tmp_path, pfr_normalizer, wall_normalizer, shape
+    )
+    assert pod.output_shape == (4, 9)
+    assert 1 <= pod.n_components <= 3
+    raw = raw_dataset(tmp_path, "train")
+    try:
+        dataset = CoupledPFRHeatDataset(
+            raw, pfr_normalizer, wall_normalizer, shape
+        )
+        batch = {
+            name: torch.stack([dataset[i][name] for i in range(2)])
+            for name in dataset[0]
+        }
+        model = POD_SCRIPT.model_from_config(
+            _small_pod_hybrid_config(),
+            pod,
+            pfr_normalizer,
+            wall_normalizer,
+            torch.device("cpu"),
+        )
+        prediction = model(
+            batch["pfr_branch"], batch["z"], batch["wall_conditions"]
+        )
+        assert prediction["pfr"].shape == (2, 4, 9)
+        assert prediction["wall"].shape == (2, 1, 9, 7)
+        assert {"pod_mean", "pod_basis"}.issubset(model.state_dict())
+
+        losses = physics_losses(
+            prediction,
+            batch,
+            pfr_normalizer,
+            wall_normalizer,
+            InformerCache(torch.device("cpu")),
+        )
+        assert set(losses) == {"species", "gas", "solid", "bc"}
+        assert all(torch.isfinite(value) for value in losses.values())
+
+        prediction["wall"].square().mean().backward()
+        gradient = sum(
+            float(parameter.grad.abs().sum())
+            for parameter in model.branch.parameters()
+            if parameter.grad is not None
+        )
+        assert gradient > 0.0
+        with pytest.raises(ValueError, match="axial points"):
+            model(
+                batch["pfr_branch"],
+                batch["z"][:, :-1],
+                batch["wall_conditions"][:, :, :-1],
+            )
+    finally:
+        raw.close()
+
+
+def test_coupled_pod_deeponet_fno_checkpoint_round_trip(tmp_path) -> None:
+    """The POD hybrid checkpoint restores the basis and both components."""
+    simulator = PFRHeatSim()
+    data_path = tmp_path / "data"
+    generator = SimulationDatasetGenerator(simulator, data_path)
+    generator.save_split("train", _pod_cases(simulator))
+    raw = raw_dataset(data_path, "train")
+    try:
+        pfr_normalizer, wall_normalizer, shape = fit_normalizers(raw)
+    finally:
+        raw.close()
+    pod = POD_SCRIPT.fit_reactor_pod(
+        data_path, pfr_normalizer, wall_normalizer, shape
+    )
+    raw = raw_dataset(data_path, "train")
+    try:
+        dataset = CoupledPFRHeatDataset(
+            raw, pfr_normalizer, wall_normalizer, shape
+        )
+        sample = dataset[0]
+        config = _small_pod_hybrid_config()
+        config.update(epochs=1, lambda_f=1e-4, lambda_g=1e-4,
+                      lambda_s=1e-4, lambda_bc=1e-4)
+        from chem_operator.experiments import RunContext
+
+        context = RunContext.create(
+            tmp_path,
+            problem="pfr_heat",
+            model="pod_deeponet_fno",
+            run_id="test",
+            seed=42,
+        )
+        trainer = POD_SCRIPT.make_trainer(
+            config, context, pod, pfr_normalizer, wall_normalizer, shape
+        )
+        training = trainer.fit(dataset, dataset, context)
+        restored_trainer = POD_SCRIPT.make_trainer(
+            config, context, pod, pfr_normalizer, wall_normalizer, shape
+        )
+        restored_trainer.load_checkpoint(training.checkpoint, context)
+        metadata = restored_trainer.checkpoint_metadata
+        assert metadata["components"] == {
+            "reactor": "PhysicsNeMo FullyConnected POD-DeepONet",
+            "wall": "PhysicsNeMo FNO",
+        }
+        restored_pod = POD_SCRIPT.PODTransform.from_state_dict(metadata["pod"])
+        assert restored_pod.output_shape == pod.output_shape
+        assert restored_pod.n_components == pod.n_components
+        outcome = POD_SCRIPT.evaluate_run(
+            trainer,
+            dataset,
+            context,
+            pfr_normalizer,
+            wall_normalizer,
+            cases=1,
+        )
+        assert outcome.reconstructions["pfr_prediction"].shape == (1, 4, 9)
+        assert outcome.reconstructions["wall_prediction"].shape == (1, 1, 9, 7)
+        assert {
+            "data_loss", "species_loss", "gas_loss", "solid_loss", "bc_loss",
         }.issubset(outcome.metrics)
         with torch.no_grad():
             inputs = (

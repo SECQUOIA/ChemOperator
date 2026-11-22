@@ -195,7 +195,7 @@ def search_space(variant="physics"):
         'decoder_layer_size': tune.choice([16, 32]), 
         'learning_rate': tune.loguniform(1.0e-4, 3.0e-3), 
         'weight_decay': tune.loguniform(1.0e-8, 1.0e-4), 
-        'batch_size': tune.choice([4, 8])
+        'batch_size': tune.choice([8, 16, 32])
     }
     if variant == "data":
         space.update({key: 0.0 for key in PHYSICS_WEIGHT_KEYS})
@@ -224,9 +224,9 @@ def make_trainer(config, context, pfr, wall, shape, *, variant="physics"):
     def adapt(batch, device, dtype):
         batch = {key: value.to(device=device, dtype=dtype) for key, value in batch.items()}
         return (batch["pfr_x"], batch["wall_conditions"]), {"pfr": batch["pfr_y"], "wall": batch["wall_y"]}, batch
-    def forward(model, inputs, batch):
+    def forward(model, inputs, batch, *, compute_physics=True):
         prediction = model(*inputs)
-        if physics_active or not model.training:
+        if compute_physics and (physics_active or not model.training):
             batch["physics_losses"] = physics_losses(
                 prediction, batch, pfr, wall, cache
             )
@@ -241,7 +241,7 @@ def make_trainer(config, context, pfr, wall, shape, *, variant="physics"):
         return tuple(torch.cat([v.flatten(1) for v in values], dim=1) for values in (pp,tt))
     terms = [LossTerm("data_loss", lambda p,t,b: supervised_loss(p,b))]
     for name, key in (("species", "lambda_f"), ("gas", "lambda_g"), ("solid", "lambda_s"), ("bc", "lambda_bc")):
-        terms.append(LossTerm(name + "_loss", lambda p,t,b,n=name: b["physics_losses"][n], float(config[key])))
+        terms.append(LossTerm(name + "_loss", lambda p,t,b,n=name: b["physics_losses"][n], float(config[key]), physics=True))
     return OperatorTrainer(lambda cfg: model_from_config(cfg,pfr,wall,context.device), config,
         batch_adapter=adapt, forward_adapter=forward, loss_terms=terms, metric_adapter=metric,
         checkpoint_metadata={"pfr_normalizer": pfr.state_dict(), "wall_normalizer": wall.state_dict(),
