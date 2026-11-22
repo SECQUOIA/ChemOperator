@@ -255,12 +255,13 @@ def test_cstr_cli_plots_saved_runs_without_raw_datasets(tmp_path, monkeypatch):
     import matplotlib.pyplot as plt
 
     run = write_run(tmp_path, "deeponet")
-    fuel = plot.ct.Solution(plot.MECHANISM).species_index("NC7H16")
-    reference = np.ones((1, 3, 3))
+    gas = plot.ct.Solution(plot.MECHANISM)
+    labels = ["T", "P", *(f"X[{gas.species_index(name)}]" for name in plot.PLOT_SPECIES)]
+    reference = np.ones((1, 3, len(labels)))
     ArtifactStore(run).write_reconstructions(
         case_ids=np.array([0]), coordinates=np.array([[0., 0.5, 1.]]),
         reference=reference, prediction=reference * 0.9,
-        labels=np.array(["T", "P", f"X[{fuel}]"]),
+        labels=np.array(labels),
     )
     monkeypatch.setattr(plot, "plot_co_histories", lambda *args, **kwargs: pytest.fail("Raw training data must be optional"))
     monkeypatch.setenv("PATH", str(tmp_path))
@@ -272,14 +273,17 @@ def test_cstr_cli_plots_saved_runs_without_raw_datasets(tmp_path, monkeypatch):
     assert (run_plots / "case_00.png").is_file()
 
 
-def test_cstr_cli_plots_only_temperature_pressure_and_fuel(tmp_path, monkeypatch):
-    """The mechanism saves ~1,270 channels; plots must stay at T, P, and fuel."""
+def test_cstr_cli_plots_only_selected_channels_on_log_time(tmp_path, monkeypatch):
+    """The mechanism saves ~1,270 channels; plots stay at T, P, NC7H16, O2, CO."""
     from matplotlib.figure import Figure
     from scripts.cstr import plot
     import matplotlib.pyplot as plt
 
-    fuel = plot.ct.Solution(plot.MECHANISM).species_index(plot.FUEL)
-    labels = np.array(["T", "P", "X[0]", f"X[{fuel}]", "X[1]"])
+    gas = plot.ct.Solution(plot.MECHANISM)
+    selected = [f"X[{gas.species_index(name)}]" for name in ("NC7H16", "O2", "CO")]
+    unselected = [f"X[{index}]" for index in range(gas.n_species)
+                  if f"X[{index}]" not in selected][:2]
+    labels = np.array(["T", "P", unselected[0], *selected, unselected[1]])
     reference = np.ones((1, 3, len(labels)))
     runs = [write_run(tmp_path, model) for model in ("deeponet", "pod_deeponet")]
     for run in runs:
@@ -288,11 +292,14 @@ def test_cstr_cli_plots_only_temperature_pressure_and_fuel(tmp_path, monkeypatch
             reference=reference, prediction=reference * 0.9, labels=labels,
         )
     rows: dict[str, list[str]] = {}
+    scales: dict[str, set[str]] = {}
     original_save = Figure.savefig
 
     def capture(figure, path, **kwargs):
-        rows[str(Path(path).relative_to(tmp_path / "plots"))] = [
-            axis.get_ylabel() for axis in figure.axes if axis.get_ylabel()]
+        key = str(Path(path).relative_to(tmp_path / "plots"))
+        labelled = [axis for axis in figure.axes if axis.get_ylabel()]
+        rows[key] = [axis.get_ylabel() for axis in labelled]
+        scales[key] = {axis.get_xscale() for axis in labelled}
         return original_save(figure, path, **kwargs)
 
     monkeypatch.setattr(Figure, "savefig", capture)
@@ -300,9 +307,13 @@ def test_cstr_cli_plots_only_temperature_pressure_and_fuel(tmp_path, monkeypatch
                                      "--output-dir", str(tmp_path / "plots")])
     with plt.rc_context():
         plot.main()
-    expected = ["T", "P", f"X[{fuel}]"]
-    assert rows[f"deeponet/{runs[0].name}/case_00.png"] == expected
-    assert rows["comparisons/group_1/reconstruction_overlay.png"] == expected
+    expected = ["T", "P", *selected]
+    case_plot = f"deeponet/{runs[0].name}/case_00.png"
+    overlay = "comparisons/group_1/reconstruction_overlay.png"
+    assert rows[case_plot] == expected
+    assert rows[overlay] == expected
+    # Time starts at 0, so the log axis falls back to symlog.
+    assert scales[case_plot] == scales[overlay] == {"symlog"}
 
 
 def test_cstr_co_diagnostic_can_run_explicitly_without_run(tmp_path, monkeypatch):

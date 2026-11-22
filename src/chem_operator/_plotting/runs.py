@@ -16,7 +16,8 @@ from chem_operator._experiments.comparison import (
     validate_model_comparison,
 )
 from chem_operator._plotting.plots import (
-    plot_experiment_histories, plot_operator_runs, select_channels,
+    plot_experiment_histories, plot_operator_runs, plot_tuning_progress, select_channels,
+    set_log_xscale,
 )
 
 
@@ -59,6 +60,8 @@ def add_plot_run_arguments(parser: argparse.ArgumentParser, *, root: Path,
                         help="Directory for plots (default: artifacts/plots/<problem_id>).")
     parser.add_argument("--cases", type=_positive_int, default=cases,
                         help="Number of test cases to plot.")
+    parser.add_argument("--use-tex", action="store_true",
+                        help="Render text with an external LaTeX installation.")
 
 
 def _timestamp(manifest: dict) -> datetime:
@@ -185,12 +188,12 @@ def comparison_groups(runs: tuple[RunArtifacts, ...]) -> tuple[tuple[RunArtifact
 
 
 def _overlay(group: tuple[RunArtifacts, ...], destination: Path, cases: int,
-             labels: Sequence[str] | None = None) -> Path | None:
+             labels: Sequence[str] | None = None, *, xlog: bool = False) -> Path | None:
     """Overlay channel-last or channel-first one-dimensional reconstructions.
 
-    Multi-seed runs contribute their representative (first) member.
+    Multi-seed runs contribute their best member (lowest final validation loss).
     """
-    data = [read_reconstructions(run.representative.path) for run in group]
+    data = [read_reconstructions(run.best_member.path) for run in group]
     baseline = data[0]
     if "pfr_reference" in baseline:
         reference_key, prediction_key, labels_key = (
@@ -245,6 +248,8 @@ def _overlay(group: tuple[RunArtifacts, ...], destination: Path, cases: int,
                 values = prediction[column, :, channel] if channel_last else prediction[column, channel]
                 axis.plot(coordinate, values, label=str(run.manifest["model_id"]))
             axis.set_ylabel(str(label))
+            if xlog:
+                set_log_xscale(axis, coordinate)
             axis.grid(alpha=0.2)
             if row == 0:
                 axis.set_title(f"Case {baseline['case_ids'][column]}")
@@ -267,22 +272,29 @@ def _run_plot_name(run: RunArtifacts) -> Path:
 
 
 def plot_selected_runs(runs: tuple[RunArtifacts, ...], output_dir: Path,
-                       *, cases: int, labels: Sequence[str] | None = None) -> tuple[Path, ...]:
+                       *, cases: int, labels: Sequence[str] | None = None,
+                       xlog: bool = False) -> tuple[Path, ...]:
     """Plot each run and overlay comparable runs.
 
     ``labels`` limits reconstruction figures and overlays to those channels,
     which keeps problems with many saved fields (e.g. CSTR species) bounded.
+    ``xlog`` draws reconstructions and overlays on a log coordinate axis so
+    early transients (e.g. CSTR ignition) are visible.
     """
     saved: list[Path] = []
     for run in runs:
         destination = output_dir / str(run.manifest["model_id"]) / _run_plot_name(run)
-        saved.extend(plot_operator_runs((run,), destination, cases=cases, labels=labels))
+        saved.extend(plot_operator_runs((run,), destination, cases=cases, labels=labels,
+                                        xlog=xlog))
+        tuning = plot_tuning_progress(run.path, destination / "tuning_progress.png")
+        if tuning is not None:
+            saved.append(tuning)
     for index, group in enumerate(comparison_groups(runs), start=1):
         destination = output_dir / "comparisons" / f"group_{index}"
         saved.append(plot_experiment_histories(
             group, output=destination / "validation_history.png",
             metric="relative_l2", split="val"))
-        overlay = _overlay(group, destination, cases, labels)
+        overlay = _overlay(group, destination, cases, labels, xlog=xlog)
         if overlay is not None:
             saved.append(overlay)
     return tuple(saved)

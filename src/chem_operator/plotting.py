@@ -10,6 +10,8 @@ from chem_operator._plotting.plots import (
     plot_experiment_matrix,
     plot_operator_fields,
     plot_operator_runs,
+    plot_tuning_progress,
+    set_log_xscale,
     use_publication_style,
 )
 from chem_operator._plotting.runs import (
@@ -33,7 +35,9 @@ __all__ = [
     "plot_operator_fields",
     "plot_operator_runs",
     "plot_selected_runs",
+    "plot_tuning_progress",
     "print_plot_paths",
     "select_plot_runs",
+    "set_log_xscale",
     "use_publication_style",
 ]
