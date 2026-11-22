@@ -46,6 +46,18 @@ def test_deeponet_tuner_builds_a_generic_tuner(tmp_path: Path) -> None:
     assert tuner.config.max_concurrent_trials == 2
     assert tuner.config.resources_per_trial == {"cpu": 3, "gpu": 0}
     assert tuner.config.optuna_seed == 7
+    # ASHA policy: grace resolves at scheduler time; startup scales with samples.
+    assert tuner.config.grace_period is None
+    assert tuner.config.reduction_factor == 3
+    assert tuner.config.optuna_startup_trials == 0
+
+
+def test_tuning_config_startup_trials_scale_with_samples() -> None:
+    from chem_operator._experiments.tuning import TuningConfig
+
+    assert TuningConfig(num_samples=15).optuna_startup_trials == 3
+    assert TuningConfig(num_samples=15, optuna_startup_trials=7).optuna_startup_trials == 7
+    assert TuningConfig().reduction_factor == 3
 
 
 @pytest.mark.parametrize(

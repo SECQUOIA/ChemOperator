@@ -86,12 +86,13 @@ class TuningConfig:
     max_concurrent_trials: int | None = None
     time_budget_s: float | None = None
     grace_period: int | None = None
-    reduction_factor: int = 2
+    reduction_factor: int = 3
     # False skips LossTerm(physics=True) residuals in trial validation unless
     # the tuning or selection metric depends on them.
     validation_physics: bool = False
     optuna_seed: int = 0
-    optuna_startup_trials: int = 2
+    # None resolves to num_samples // 5 so random exploration scales with budget.
+    optuna_startup_trials: int | None = None
     optuna_multivariate: bool = True
     best_scope: str = "last"
     resume: bool = True
@@ -116,6 +117,8 @@ class TuningConfig:
             raise ValueError("grace_period must be positive.")
         if self.reduction_factor < 2:
             raise ValueError("reduction_factor must be at least 2.")
+        if self.optuna_startup_trials is None:
+            object.__setattr__(self, "optuna_startup_trials", self.num_samples // 5)
         if self.optuna_seed < 0 or self.optuna_startup_trials < 0:
             raise ValueError("Optuna seed/startup trial counts cannot be negative.")
         if self.verbose not in {0, 1, 2, 3}:
@@ -270,7 +273,10 @@ class Tuner:
                     time_attr="training_iteration",
                     max_t=self.config.max_epochs,
                     grace_period=self.config.grace_period
-                    or max(1, self.config.max_epochs // 3),
+                    or min(
+                        self.config.max_epochs,
+                        max(3, self.config.max_epochs // 5),
+                    ),
                     reduction_factor=self.config.reduction_factor,
                 )
                 search_algorithm = OptunaSearch(

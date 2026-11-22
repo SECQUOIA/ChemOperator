@@ -27,9 +27,9 @@ class DeepONetTuningSettings:
     time_budget_s: float | None = None
     cpus_per_trial: float = 1
     gpus_per_trial: float = 0
-    startup_trials: int = 2
+    startup_trials: int | None = None
     grace_period: int | None = None
-    reduction_factor: int = 2
+    reduction_factor: int = 3
     ray_runtime: RayRuntimeConfig = RayRuntimeConfig()
 
     def __post_init__(self) -> None:
@@ -70,7 +70,7 @@ def deeponet_tuner(
             },
             max_concurrent_trials=settings.max_concurrent_trials,
             time_budget_s=settings.time_budget_s,
-            grace_period=settings.grace_period or max(1, settings.max_epochs // 3),
+            grace_period=settings.grace_period,
             reduction_factor=settings.reduction_factor,
             optuna_seed=context.seed,
             optuna_startup_trials=settings.startup_trials,
