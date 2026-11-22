@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import json
 from collections.abc import Sequence
 from pathlib import Path
@@ -79,6 +80,11 @@ class ChemOperatorDataset(
     dtype:
         Optional PyTorch or NumPy dtype, or dtype name, to which every numeric
         tensor is cast. If omitted, stored dtypes are preserved.
+    preload:
+        If true, read each case's requested fields, coordinates, constants,
+        and metadata once on first access and serve later samples from memory.
+        Samples are identical to the lazy path; use it when many small windows
+        are drawn from each case and the split fits in RAM.
     """
 
     VALID_TASKS = {
@@ -111,6 +117,7 @@ class ChemOperatorDataset(
         prediction_horizon: float | None = None,
         full_trajectory_mode: bool = False,
         dtype: torch.dtype | str | np.dtype | type | None = None,
+        preload: bool = False,
     ):
         super().__init__()
 
@@ -139,6 +146,8 @@ class ChemOperatorDataset(
             )
 
         self._file_handle: h5py.File | None = None
+        self.preload = bool(preload)
+        self._case_cache: dict[str, dict[str, Any]] = {}
 
         self.input_fields = tuple(input_fields) if input_fields is not None else None
         self.output_fields = tuple(output_fields) if output_fields is not None else None
@@ -291,13 +300,100 @@ class ChemOperatorDataset(
             metadata.update(decoded)
         return metadata
 
+    def _case_arrays(self, case_name: str) -> dict[str, Any]:
+        """Return one case's requested data, reading HDF5 only on first use."""
+        cached = self._case_cache.get(case_name)
+        if cached is None:
+            case = self._file()["cases"][case_name]
+            field_names = dict.fromkeys(
+                (*(self.input_fields or ()), *(self.output_fields or ()))
+            )
+            cached = {
+                "fields": {
+                    name: np.asarray(self._get_dataset(case["fields"], name))
+                    for name in field_names
+                },
+                "coordinates": {
+                    name: np.asarray(dataset)
+                    for name, dataset in case["coordinates"].items()
+                },
+                "constants": self._load_constants(case),
+                "metadata": self._case_metadata(case),
+            }
+            self._case_cache[case_name] = cached
+        return cached
+
+    def _cached_fields(
+        self,
+        arrays: dict[str, Any],
+        names: Sequence[str],
+        indices: np.ndarray,
+        n_steps: int,
+    ) -> dict[str, torch.Tensor]:
+        # Copies keep returned tensors from aliasing the cache.
+        fields = {}
+        for name in names:
+            array = arrays["fields"][name]
+            value = (
+                array[indices]
+                if self._field_shape_matches_steps(array, n_steps)
+                else array.copy()
+            )
+            fields[name] = self._to_tensor(value, name=f"fields/{name}")
+        return fields
+
+    def _cached_coordinates(
+        self,
+        arrays: dict[str, Any],
+        indices: np.ndarray,
+        source_coordinate_name: str,
+    ) -> dict[str, torch.Tensor]:
+        coordinates: dict[str, torch.Tensor] = {}
+        for name, array in arrays["coordinates"].items():
+            if name == source_coordinate_name:
+                coordinates[self.coordinate_name] = self._to_tensor(
+                    array[indices], name=f"coordinates/{name}"
+                )
+            else:
+                coordinates[name] = self._to_tensor(
+                    array.copy(), name=f"coordinates/{name}"
+                )
+        return coordinates
+
+    def _preloaded_item(
+        self,
+        case_name: str,
+        input_indices: np.ndarray,
+        output_indices: np.ndarray,
+        n_steps: int,
+        metadata: dict[str, Any],
+    ) -> dict[str, Any]:
+        arrays = self._case_arrays(case_name)
+        source_coordinate_name = self.source_coordinate_names[case_name]
+        return {
+            "input_fields": self._cached_fields(
+                arrays, self.input_fields or (), input_indices, n_steps
+            ),
+            "output_fields": self._cached_fields(
+                arrays, self.output_fields or (), output_indices, n_steps
+            ),
+            "constant_inputs": {
+                name: value.clone() for name, value in arrays["constants"].items()
+            },
+            "input_coordinates": self._cached_coordinates(
+                arrays, input_indices, source_coordinate_name
+            ),
+            "output_coordinates": self._cached_coordinates(
+                arrays, output_indices, source_coordinate_name
+            ),
+            "metadata": metadata,
+        }
+
     def __len__(self) -> int:
         return len(self.sample_index)
 
     def __getitem__(self, index: int) -> dict[str, Any]:
         case_name, input_start, output_start = self.sample_index[index]
-        file = self._file()
-        case = file["cases"][case_name]
         n_steps = self.case_n_steps[case_name]
 
         input_indices = (
@@ -306,7 +402,11 @@ class ChemOperatorDataset(
         )
         output_indices = self._output_indices(n_steps, output_start)
 
-        metadata = self._case_metadata(case)
+        if self.preload:
+            metadata = copy.deepcopy(self._case_arrays(case_name)["metadata"])
+        else:
+            case = self._file()["cases"][case_name]
+            metadata = self._case_metadata(case)
         source_coordinate_name = self.source_coordinate_names[case_name]
         metadata.update(
             {
@@ -324,6 +424,10 @@ class ChemOperatorDataset(
             }
         )
 
+        if self.preload:
+            return self._preloaded_item(
+                case_name, input_indices, output_indices, n_steps, metadata
+            )
         return {
             "input_fields": self._load_fields(
                 case,
@@ -354,6 +458,8 @@ class ChemOperatorDataset(
         }
 
     def close(self) -> None:
+        if getattr(self, "_case_cache", None):
+            self._case_cache.clear()
         if getattr(self, "_file_handle", None) is not None:
             self._file_handle.close()
             self._file_handle = None
