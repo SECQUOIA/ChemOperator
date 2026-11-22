@@ -318,6 +318,129 @@ def test_operator_trainer_supports_multi_input_mapping_outputs(tmp_path: Path) -
     assert prediction["sum"].shape == (4, 1, 2)
 
 
+class _ScalarFields(Dataset):
+    def __len__(self) -> int:
+        return 4
+
+    def __getitem__(self, index: int):
+        value = torch.full((1, 3), float(index + 1))
+        return {"x": value, "y": 2.0 * value}
+
+
+def _physics_trainer(*, physics_weight: float = 0.5, adapter_keyword: bool = True):
+    """Tiny trainer that counts physics-term and residual calls per mode."""
+    calls = {"term": [], "adapter": []}
+
+    def adapt(batch, device, dtype):
+        moved = {name: value.to(device=device, dtype=dtype) for name, value in batch.items()}
+        return moved["x"], moved["y"], moved
+
+    def residual(model, prediction, batch, compute_physics):
+        calls["adapter"].append((model.training, compute_physics))
+        batch["residual"] = (
+            prediction.square().mean() if compute_physics else prediction.new_zeros(())
+        )
+
+    if adapter_keyword:
+        def forward(model, inputs, batch, *, compute_physics=True):
+            prediction = model(inputs)
+            residual(model, prediction, batch, compute_physics)
+            return prediction
+    else:
+        def forward(model, inputs, batch):
+            prediction = model(inputs)
+            residual(model, prediction, batch, True)
+            return prediction
+
+    def physics_term(prediction, target, batch):
+        del prediction, target
+        calls["term"].append(torch.is_grad_enabled())
+        return batch["residual"]
+
+    trainer = OperatorTrainer(
+        lambda config: torch.nn.Linear(3, 3),
+        {"epochs": 1, "batch_size": 2, "learning_rate": 1.0e-3},
+        loss_terms=(
+            LossTerm("data_loss", lambda p, t, b: torch.nn.functional.mse_loss(p, t)),
+            LossTerm("pde_loss", physics_term, physics_weight, physics=True),
+        ),
+        batch_adapter=adapt,
+        forward_adapter=forward,
+        validation_requires_grad=True,
+    )
+    return trainer, calls
+
+
+def test_validation_physics_false_skips_physics_terms_only_in_validation(
+    tmp_path: Path,
+) -> None:
+    trainer, calls = _physics_trainer()
+    trainer.validation_physics = False
+    run_context = context(tmp_path, "physics_skip")
+    outcome = trainer.fit(_ScalarFields(), _ScalarFields(), run_context)
+
+    # Two training batches compute physics; validation batches never do.
+    assert len(calls["term"]) == 2
+    assert calls["adapter"] == [(True, True)] * 2 + [(False, False)] * 2
+    validation = {
+        event.metric: event.value for event in outcome.history if event.split == "val"
+    }
+    assert "pde_loss" not in validation
+    assert validation["objective"] == pytest.approx(validation["data_loss"])
+    train = {
+        event.metric for event in outcome.history if event.split == "train"
+    }
+    assert "pde_loss" in train
+
+    # Test-set evaluation always computes physics, under autograd if requested.
+    calls["term"].clear()
+    losses = trainer.evaluate_losses(_ScalarFields(), run_context)
+    assert "pde_loss" in losses
+    assert calls["term"] == [True, True]
+
+
+def test_validation_physics_default_keeps_validation_residuals(tmp_path: Path) -> None:
+    trainer, calls = _physics_trainer()
+    assert trainer.validation_physics is True
+    outcome = trainer.fit(_ScalarFields(), _ScalarFields(), context(tmp_path, "physics_keep"))
+    assert len(calls["term"]) == 4
+    assert calls["adapter"][-2:] == [(False, True)] * 2
+    assert any(
+        event.split == "val" and event.metric == "pde_loss" for event in outcome.history
+    )
+
+
+def test_adapters_without_compute_physics_keyword_still_run(tmp_path: Path) -> None:
+    trainer, calls = _physics_trainer(adapter_keyword=False)
+    trainer.validation_physics = False
+    trainer.fit(_ScalarFields(), _ScalarFields(), context(tmp_path, "legacy_adapter"))
+    # The adapter cannot be told to skip, but physics terms still are.
+    assert len(calls["adapter"]) == 4
+    assert len(calls["term"]) == 2
+
+
+@pytest.mark.parametrize(
+    ("metric", "weight", "expected"),
+    [
+        ("best_valid_relative_l2", 0.5, False),
+        ("best_valid_data_loss", 0.5, False),
+        ("best_valid_pde_loss", 0.5, True),
+        ("valid_pde_loss", 0.0, True),
+        ("best_valid_objective", 0.5, True),
+        ("valid_objective", 0.0, False),
+    ],
+)
+def test_metric_needs_validation_physics(metric: str, weight: float, expected: bool) -> None:
+    trainer, _ = _physics_trainer(physics_weight=weight)
+    assert trainer.metric_needs_validation_physics(metric) is expected
+
+
+def test_selection_metric_on_physics_needs_validation_physics() -> None:
+    trainer, _ = _physics_trainer()
+    trainer.selection_metric = "pde_loss"
+    assert trainer.metric_needs_validation_physics("best_valid_relative_l2")
+
+
 def test_comparison_records_form_problem_by_model_matrix(tmp_path: Path) -> None:
     direct = complete_run(tmp_path / "direct", "deeponet")
     fno = complete_run(tmp_path / "fno", "fno")

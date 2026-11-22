@@ -195,3 +195,29 @@ def test_physics_deeponet_canonical_run(tmp_path):
     assert result.training.metadata["checkpoint_reload_verified"]
     assert load_run(context.paths.run_dir).manifest["status"] == "completed"
     assert all(path.is_file() for path in plot_operator_runs([context.paths.run_dir],tmp_path / "plots"))
+
+
+def test_physics_deeponet_tuning_validation_skips_autodiff(monkeypatch):
+    """compute_physics=False skips the autodiff residual in validation."""
+    from types import SimpleNamespace
+    from scripts.pipe_flow import physics_deeponet as model_script
+    statistics = SimpleNamespace(**{name: torch.zeros(1) for name in
+                                    ("branch_mean", "branch_std", "velocity_mean", "velocity_std")})
+    context = SimpleNamespace(device=torch.device("cpu"))
+    trainer = model_script.make_trainer({"physics_weight": 1e-4}, context, statistics)
+    assert [t.name for t in trainer.loss_terms if t.physics] == ["physics_loss"]
+    monkeypatch.setattr(model_script, "physics_mse", lambda *args, **kwargs: (_ for _ in ()).throw(
+        AssertionError("physics computed")))
+
+    class EvalModel:
+        training = False
+
+        def __call__(self, branch, coordinates, radius):
+            del branch, radius
+            return coordinates
+
+    batch = {"viscosity": torch.ones(1), "pressure_gradient": torch.ones(1)}
+    prediction = trainer.forward_adapter(EvalModel(), (None, torch.ones(1, 3), None), batch,
+                                         compute_physics=False)
+    assert prediction.shape == (1, 3)
+    assert batch["physics_loss"] == 0.0

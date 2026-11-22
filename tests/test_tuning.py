@@ -6,10 +6,13 @@ import csv
 import os
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
+import pytest
 import torch
 
 from chem_operator._experiments.artifacts import ArtifactStore
+from chem_operator._experiments.tuning import _configure_validation_physics
 from chem_operator.experiments import (
     RayRuntimeConfig,
     RunContext,
@@ -85,3 +88,89 @@ def test_tuner_owns_ray_and_returns_portable_best_trial(tmp_path: Path) -> None:
     columns = set(progress[0])
     assert not any(name.startswith("config/") for name in columns)
     assert not columns & {"hostname", "node_ip", "pid", "date", "done"}
+
+
+class _RecordingTrainer:
+    """Stub trainer exposing the validation-physics hooks the Tuner sets."""
+
+    def __init__(self, needs_physics: bool = False):
+        self.reporter = None
+        self.validation_physics = True
+        self.needs_physics = needs_physics
+
+    def metric_needs_validation_physics(self, metric):
+        del metric
+        return self.needs_physics
+
+
+def test_tuner_disables_validation_physics_by_default() -> None:
+    trainer = _RecordingTrainer()
+    _configure_validation_physics(trainer, TuningConfig(metric="best_valid_relative_l2"))
+    assert trainer.validation_physics is False
+
+
+def test_tuner_keeps_validation_physics_when_metric_needs_it() -> None:
+    trainer = _RecordingTrainer(needs_physics=True)
+    with pytest.warns(UserWarning, match="depends on physics terms"):
+        _configure_validation_physics(trainer, TuningConfig(metric="best_valid_objective"))
+    assert trainer.validation_physics is True
+
+
+def test_tuner_respects_explicit_validation_physics() -> None:
+    trainer = _RecordingTrainer()
+    _configure_validation_physics(
+        trainer, TuningConfig(metric="best_valid_relative_l2", validation_physics=True)
+    )
+    assert trainer.validation_physics is True
+
+
+def test_tuner_ignores_trainers_without_validation_physics() -> None:
+    trainer = SimpleNamespace(reporter=None)
+    _configure_validation_physics(trainer, TuningConfig())
+    assert not hasattr(trainer, "validation_physics")
+
+
+def test_tuner_trial_trainers_skip_validation_physics(tmp_path: Path) -> None:
+    class Trainer:
+        def __init__(self):
+            self.reporter = None
+            self.validation_physics = True
+
+        def metric_needs_validation_physics(self, metric):
+            del metric
+            return False
+
+        def fit(self, _train, _validation, _context):
+            self.reporter({
+                "epoch": 1,
+                "best_valid_relative_l2": 0.1,
+                "validation_physics": float(self.validation_physics),
+            })
+
+    context = RunContext(
+        RunPaths(tmp_path / "run"), seed=7, dtype=torch.float32, device=torch.device("cpu")
+    )
+    orchestrator = Tuner(
+        lambda config: Trainer(),
+        {"value": tune.choice([1.0])},
+        dataset_factory=lambda _context: (None, None),
+        config=TuningConfig(
+            metric="best_valid_relative_l2",
+            mode="min",
+            num_samples=1,
+            max_epochs=1,
+            resources_per_trial={"cpu": 1},
+            max_concurrent_trials=1,
+            optuna_seed=7,
+            optuna_startup_trials=0,
+            resume=False,
+            verbose=0,
+            ray_runtime=RayRuntimeConfig(
+                num_cpus=1, temp_dir=Path("/tmp") / f"co-ray-{os.getpid()}"
+            ),
+        ),
+    )
+    outcome = orchestrator.fit(
+        None, None, context, storage_path=tmp_path / "results", experiment_name="physics"
+    )
+    assert outcome.best_metrics["validation_physics"] == 0.0

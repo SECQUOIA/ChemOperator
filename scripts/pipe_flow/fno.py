@@ -184,8 +184,8 @@ def make_trainer(
         config,
         loss_terms=(
             LossTerm("data_loss", lambda prediction, target, _: nn.functional.mse_loss(prediction, target)),
-            LossTerm("pde_loss", pde, weight),
-            LossTerm("boundary_loss", boundary, weight),
+            LossTerm("pde_loss", pde, weight, physics=True),
+            LossTerm("boundary_loss", boundary, weight, physics=True),
         ),
         metric_adapter=physical_metrics,
         selection_metric="data_loss",

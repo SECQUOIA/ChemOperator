@@ -87,6 +87,28 @@ def test_exact_profile_has_small_physics_loss_and_perturbation_does_not() -> Non
     assert changed_boundary > boundary
 
 
+def test_tuning_validation_skips_pde_terms(tmp_path) -> None:
+    training = cases(4)
+    statistics = fit_physics_normalization(training)
+    data = fno.PipeFNODataset(training, statistics)
+    context = RunContext.create(
+        tmp_path / "runs", problem="pipe_flow", model="fno_physics", run_id="skip", seed=42
+    )
+    config = {
+        "modes": 4, "hidden_channels": 4, "n_layers": 2, "learning_rate": 1e-3,
+        "weight_decay": 1e-6, "batch_size": 2, "epochs": 1, "physics_weight": 0.01,
+    }
+    trainer = fno.make_trainer(config, context, statistics)
+    assert [t.name for t in trainer.loss_terms if t.physics] == ["pde_loss", "boundary_loss"]
+    trainer.validation_physics = False
+    outcome = trainer.fit(data, data, context)
+    validation = {e.metric for e in outcome.history if e.split == "val"}
+    train = {e.metric for e in outcome.history if e.split == "train"}
+    assert not validation & {"pde_loss", "boundary_loss"}
+    assert {"pde_loss", "boundary_loss"} <= train
+    assert {"pde_loss", "boundary_loss"} <= set(trainer.evaluate_losses(data, context))
+
+
 def test_canonical_run_and_plot_arrays(tmp_path) -> None:
     training = cases(4)
     statistics = fit_physics_normalization(training)

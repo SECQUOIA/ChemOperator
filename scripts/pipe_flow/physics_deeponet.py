@@ -112,7 +112,7 @@ def search_space() -> dict[str, Any]:
         "width": tune.choice([64, 128]),
         "depth": tune.choice([2, 3]),
         "latent_width": tune.choice([16, 32]),
-        "activation": tune.choice(["silu", "gelu", "tanh"]),
+        "activation": tune.choice(["gelu", "tanh"]),
         "learning_rate": tune.loguniform(1.0e-4, 3.0e-3),
         "weight_decay": tune.loguniform(1.0e-8, 1.0e-4),
         "batch_size": tune.choice([64, 128]),
@@ -194,8 +194,8 @@ def make_trainer(config, context, statistics):
     def adapt(batch, device, dtype):
         batch = {k: v.to(device=device,dtype=dtype) for k,v in batch.items()}
         return (batch["branch"],batch["coordinates"],batch["radius"]),batch["y"],batch
-    def forward(model, inputs, batch):
-        if float(config.get("physics_weight",0)) > 0 or not model.training:
+    def forward(model, inputs, batch, *, compute_physics=True):
+        if compute_physics and (float(config.get("physics_weight",0)) > 0 or not model.training):
             prediction,residual = physics_mse(model,physics,*inputs,batch["viscosity"],batch["pressure_gradient"],statistics)
         else:
             prediction = model(*inputs)
@@ -207,7 +207,7 @@ def make_trainer(config, context, statistics):
     return OperatorTrainer(lambda cfg: model_from_config(cfg,context.device),config,
         batch_adapter=adapt,forward_adapter=forward,validation_requires_grad=True,
         loss_terms=[LossTerm("data_loss",lambda p,t,b: torch.nn.functional.mse_loss(p,t)),
-                    LossTerm("physics_loss",lambda p,t,b: b["physics_loss"],float(config.get("physics_weight",0)))],
+                    LossTerm("physics_loss",lambda p,t,b: b["physics_loss"],float(config.get("physics_weight",0)),physics=True)],
         metric_adapter=lambda p,t,b: (physical(p),physical(t)),
         checkpoint_metadata={"normalizer": {name: getattr(statistics,name).cpu() for name in
                             ("branch_mean","branch_std","velocity_mean","velocity_std")},

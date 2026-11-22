@@ -339,11 +339,16 @@ def _numpy(value: Any) -> np.ndarray:
 
 @dataclass(frozen=True, slots=True)
 class LossTerm:
-    """One named, weighted component of a composite FNO objective."""
+    """One named, weighted component of a composite FNO objective.
+
+    ``physics=True`` marks a PDE/constraint residual that an
+    :class:`OperatorTrainer` may skip during validation (tuning trials).
+    """
 
     name: str
     function: LossFunction
     weight: float = 1.0
+    physics: bool = False
 
     def __post_init__(self) -> None:
         if not self.name:
@@ -485,6 +490,10 @@ class OperatorTrainer:
     ``forward_adapter`` can compute model-dependent residuals once per batch
     and attach them to the adapted batch for named loss terms. Autodiff PDEs
     opt into ``validation_requires_grad``; prediction stays gradient-free.
+
+    ``validation_physics=False`` skips ``LossTerm(physics=True)`` terms in
+    validation passes (the Tuner sets it inside trials). Forward adapters that
+    accept a ``compute_physics`` keyword are told whether to build residuals.
     """
 
     CHECKPOINT_VERSION = 1
@@ -508,9 +517,15 @@ class OperatorTrainer:
         checkpoint_metadata: Mapping[str, Any] | None = None,
         forward_adapter: Callable[[torch.nn.Module, Any, Mapping[str, Any]], Any] | None = None,
         validation_requires_grad: bool = False,
+        validation_physics: bool = True,
     ) -> None:
         self.forward_adapter = forward_adapter
+        self._adapter_takes_physics = (
+            forward_adapter is not None
+            and accepts_keyword(forward_adapter, "compute_physics")
+        )
         self.validation_requires_grad = validation_requires_grad
+        self.validation_physics = validation_physics
         self.model_factory = model_factory
         self.config = dict(config)
         self.loss_terms = tuple(loss_terms or (LossTerm("data_loss", mse_loss_term),))
@@ -585,6 +600,7 @@ class OperatorTrainer:
                 device=device,
                 dtype=context.dtype,
                 optimizer=None,
+                physics=self.validation_physics,
             )
             # Cumulative training-loop wall clock; per-batch float() calls sync CUDA.
             elapsed_seconds = time.perf_counter() - started
@@ -656,6 +672,21 @@ class OperatorTrainer:
             metrics={f"validation_{self.selection_metric}": best_metric},
         )
 
+    def metric_needs_validation_physics(self, metric: str) -> bool:
+        """Whether ``metric`` or the selection metric depends on physics terms.
+
+        A metric depends on physics when it names a ``physics=True`` term or is
+        ``objective`` while any physics term has a positive weight.
+        """
+        physics = [term for term in self.loss_terms if term.physics]
+        names = {term.name for term in physics}
+        if any(term.weight > 0 for term in physics):
+            names.add("objective")
+        return any(
+            _strip_validation_prefix(candidate) in names
+            for candidate in (metric, self.selection_metric)
+        )
+
     def evaluate_losses(self, data: Any, context: RunContext) -> dict[str, float]:
         """Evaluate named objectives and shared metrics, including PDE residuals."""
         return self._epoch(
@@ -671,29 +702,41 @@ class OperatorTrainer:
         device: torch.device,
         dtype: torch.dtype,
         optimizer: torch.optim.Optimizer | None,
+        physics: bool = True,
     ) -> dict[str, float]:
         if self.model is None:
             raise RuntimeError("FNO model has not been constructed.")
         training = optimizer is not None
         self.model.train(training)
-        totals = {term.name: 0.0 for term in self.loss_terms}
+        compute_physics = training or physics
+        terms = tuple(
+            term for term in self.loss_terms if compute_physics or not term.physics
+        )
+        totals = {term.name: 0.0 for term in terms}
         objective_total = 0.0
         samples = 0
         shared = StreamingRegressionMetrics()
-        gradient_context = (torch.enable_grad() if training or self.validation_requires_grad else torch.no_grad())
+        gradient_context = (
+            torch.enable_grad()
+            if training or (self.validation_requires_grad and compute_physics)
+            else torch.no_grad()
+        )
         with gradient_context:
             for raw_batch in loader:
                 inputs, target, batch = self.batch_adapter(raw_batch, device, dtype)
                 if optimizer is not None:
                     optimizer.zero_grad(set_to_none=True)
-                prediction = (
-                    _call_model(self.model, inputs)
-                    if self.forward_adapter is None
-                    else self.forward_adapter(self.model, inputs, batch)
-                )
+                if self.forward_adapter is None:
+                    prediction = _call_model(self.model, inputs)
+                elif self._adapter_takes_physics:
+                    prediction = self.forward_adapter(
+                        self.model, inputs, batch, compute_physics=compute_physics
+                    )
+                else:
+                    prediction = self.forward_adapter(self.model, inputs, batch)
                 count = self.batch_size(target, batch)
                 objective = _first_tensor(prediction).new_zeros(())
-                for term in self.loss_terms:
+                for term in terms:
                     value = term.function(prediction, target, batch)
                     if value.ndim != 0:
                         value = value.mean()
@@ -805,11 +848,24 @@ class OperatorTrainer:
         model.load_state_dict(payload["state_dict"], strict=True)
         return model
 
-def accepts_context(factory: Callable[..., Any]) -> bool:
-    """Return whether a trainer factory explicitly accepts a run context."""
-    parameters = inspect.signature(factory).parameters.values()
+def accepts_keyword(function: Callable[..., Any], name: str) -> bool:
+    """Return whether ``function`` accepts ``name`` as a keyword argument."""
+    parameters = inspect.signature(function).parameters.values()
     return any(
         parameter.kind == inspect.Parameter.VAR_KEYWORD
-        or parameter.name == "context"
+        or parameter.name == name
         for parameter in parameters
     )
+
+
+def accepts_context(factory: Callable[..., Any]) -> bool:
+    """Return whether a trainer factory explicitly accepts a run context."""
+    return accepts_keyword(factory, "context")
+
+
+def _strip_validation_prefix(metric: str) -> str:
+    """Map a reported metric (``best_valid_x``/``valid_x``) to its term name."""
+    for prefix in ("best_valid_", "valid_"):
+        if metric.startswith(prefix):
+            return metric[len(prefix):]
+    return metric
