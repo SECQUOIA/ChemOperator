@@ -195,7 +195,7 @@ def _plot_reconstructions(
     figure, axes = plt.subplots(
         len(selected_labels),
         n_cases,
-        figsize=(5.0 * n_cases, 2.4 * len(selected_labels)),
+        figsize=(4.5 * n_cases, 2.3 * len(selected_labels)),
         squeeze=False,
         sharex="col",
     )
@@ -327,7 +327,7 @@ def _plot_deeponet_run_reconstructions(
     figure, axes = plt.subplots(
         len(selected_labels),
         n_cases,
-        figsize=(5.0 * n_cases, 2.4 * len(selected_labels)),
+        figsize=(4.5 * n_cases, 2.3 * len(selected_labels)),
         squeeze=False,
         sharex="col",
     )
@@ -487,7 +487,7 @@ def plot_experiment_histories(
         1,
         len(panels),
         squeeze=False,
-        figsize=(7.0 * len(panels), 4.5),
+        figsize=(6.0 * len(panels), 4.0),
     )
     any_values = False
     for axis, panel in zip(axes[0], panels):
@@ -703,14 +703,14 @@ def plot_operator_fields(path, reference, prediction, labels, coordinates, coord
     coordinates = [np.asarray(values) * axes_display.get(name, (name, 1.0))[1]
                    for values, name in zip(coordinates, names)]
     if dimensions == 1:
-        fig, axes = plt.subplots(len(labels), 1, squeeze=False, figsize=(8, 3 * len(labels)))
+        fig, axes = plt.subplots(len(labels), 1, squeeze=False, figsize=(7, 3 * len(labels)))
         for i, label in enumerate(labels):
             axes[i, 0].plot(coordinates[0], reference[i], label="Reference")
             axes[i, 0].plot(coordinates[0], prediction[i], "--", label="Prediction")
             axes[i, 0].set(xlabel=str(coordinate_names[0]), ylabel=str(label))
             axes[i, 0].legend()
     else:
-        fig, axes = plt.subplots(len(labels), 3, squeeze=False, figsize=(14, 3.5 * len(labels)))
+        fig, axes = plt.subplots(len(labels), 3, squeeze=False, figsize=(12, 3.5 * len(labels)))
         for i, label in enumerate(labels):
             low = min(reference[i].min(), prediction[i].min())
             high = max(reference[i].max(), prediction[i].max())
@@ -804,7 +804,7 @@ def plot_operator_runs(run_paths, output_dir, *, cases=2, labels=None, xlog=Fals
             saved.extend(_plot_member_reconstructions(member, member_dir, cases, labels,
                                                       xlog=xlog))
     if len(runs) > 1:
-        fig, axis = plt.subplots(figsize=(8, 5))
+        fig, axis = plt.subplots(figsize=(7, 4.5))
         summaries = final_metric_summaries(runs)
         values = {label: summary.mean for label, summary in summaries.items()}
         axis.bar(range(len(values)), list(values.values()),
@@ -915,7 +915,7 @@ def plot_tuning_progress(
     if not trials:
         raise ValueError(f"{source} tuning progress has no positive finite {metric} values.")
 
-    figure, axis = plt.subplots(figsize=(10.0, 5.0))
+    figure, axis = plt.subplots(figsize=(9.0, 4.5))
     for points in trials.values():
         points.sort(key=lambda point: (point[0], point[1]))
         axis.plot([point[1] for point in points], [point[2] for point in points],

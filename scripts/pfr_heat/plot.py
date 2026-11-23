@@ -93,7 +93,7 @@ def plot_wall_field_profiles(run_path, output_dir, *, cases=2):
         norm = Normalize(0.0, 1.0)
         cmap = "RdYlBu_r"  # reversed so that red is hot
         figure, axes = plt.subplots(
-            2, 2, figsize=(9, 4), sharex=True, sharey="row",
+            2, 2, figsize=(8.5, 3.7), sharex=True, sharey="row",
             gridspec_kw={"height_ratios": (1.0, 1.4)},
         )
 
