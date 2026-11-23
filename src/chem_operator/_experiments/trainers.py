@@ -101,6 +101,13 @@ def _verify_state_dict(
             raise RuntimeError(f"Reloaded checkpoint tensor {name!r} differs.")
 
 
+def _resolve_num_workers(explicit: int | None, context: RunContext) -> int:
+    """Use a trainer's explicit worker count, else the run's ``--num-workers``."""
+    if explicit is not None:
+        return int(explicit)
+    return int(getattr(context, "num_workers", 0))
+
+
 class DeepONetTrainer:
     """DeepONet epoch loop, early stopping, checkpointing, and prediction."""
 
@@ -114,7 +121,7 @@ class DeepONetTrainer:
         pod: PODTransform | None = None,
         target_transform: Callable[[torch.Tensor], torch.Tensor] | None = None,
         early_stopping_patience: int | None = None,
-        num_workers: int = 0,
+        num_workers: int | None = None,
         pin_memory: bool = False,
         reporter: Reporter | None = None,
         checkpoint_metadata: Mapping[str, Any] | None = None,
@@ -190,7 +197,7 @@ class DeepONetTrainer:
             pod=self.pod,
             reporter=record,
             early_stopping_patience=self.early_stopping_patience,
-            num_workers=self.num_workers,
+            num_workers=_resolve_num_workers(self.num_workers, context),
             pin_memory=self.pin_memory,
             device=device,
             dtype=context.dtype,
@@ -241,7 +248,7 @@ class DeepONetTrainer:
             shuffle=False,
             coordinate_scaler=self.coordinate_scaler,
             target_transform=self.target_transform,
-            num_workers=self.num_workers,
+            num_workers=_resolve_num_workers(self.num_workers, context),
             pin_memory=self.pin_memory,
             seed=context.seed,
         )
@@ -511,7 +518,7 @@ class OperatorTrainer:
         batch_size: BatchSize = default_batch_size,
         selection_metric: str = "relative_l2",
         early_stopping_patience: int | None = None,
-        num_workers: int = 0,
+        num_workers: int | None = None,
         pin_memory: bool = False,
         reporter: Reporter | None = None,
         checkpoint_metadata: Mapping[str, Any] | None = None,
@@ -533,7 +540,7 @@ class OperatorTrainer:
             raise ValueError("OperatorTrainer requires at least one loss term.")
         if early_stopping_patience is not None and early_stopping_patience < 1:
             raise ValueError("early_stopping_patience must be positive.")
-        if num_workers < 0:
+        if num_workers is not None and num_workers < 0:
             raise ValueError("num_workers cannot be negative.")
         self.batch_adapter = batch_adapter
         self.prediction_transform = prediction_transform
@@ -575,12 +582,14 @@ class OperatorTrainer:
             batch_size=batch_size,
             shuffle=True,
             seed=context.seed,
+            context=context,
         )
         validation_loader = self._loader(
             validation,
             batch_size=batch_size,
             shuffle=False,
             seed=context.seed,
+            context=context,
         )
         history = History()
         best_metric = float("inf")
@@ -691,7 +700,7 @@ class OperatorTrainer:
         """Evaluate named objectives and shared metrics, including PDE residuals."""
         return self._epoch(
             self._loader(data, batch_size=int(self.config["batch_size"]),
-                         shuffle=False, seed=context.seed),
+                         shuffle=False, seed=context.seed, context=context),
             device=resolve_device(context.device), dtype=context.dtype, optimizer=None,
         )
 
@@ -778,15 +787,21 @@ class OperatorTrainer:
         batch_size: int,
         shuffle: bool,
         seed: int,
+        context: RunContext | None = None,
     ) -> DataLoader:
         if isinstance(data, DataLoader):
             return data
+        workers = (
+            _resolve_num_workers(self.num_workers, context)
+            if context is not None
+            else int(self.num_workers or 0)
+        )
         return DataLoader(
             data,
             batch_size=min(batch_size, len(data)),
             shuffle=shuffle,
-            num_workers=self.num_workers,
-            persistent_workers=self.num_workers > 0,
+            num_workers=workers,
+            persistent_workers=workers > 0,
             pin_memory=self.pin_memory,
             generator=torch.Generator(device="cpu").manual_seed(seed),
         )
@@ -801,6 +816,7 @@ class OperatorTrainer:
             batch_size=int(self.config["batch_size"]),
             shuffle=False,
             seed=context.seed,
+            context=context,
         )
         predictions: list[Any] = []
         with torch.no_grad():

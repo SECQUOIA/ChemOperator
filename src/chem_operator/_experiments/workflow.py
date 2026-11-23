@@ -9,6 +9,7 @@ from pathlib import Path
 
 import torch
 
+from .data_loading import DATA_CACHE_MODES, data_loading_provenance
 from .device import resolve_device
 from .types import RunContext
 
@@ -110,6 +111,32 @@ def add_run_arguments(
         help="One run-directory component (default: a UTC timestamp).",
     )
     parser.add_argument("--device", default="auto")
+    parser.add_argument(
+        "--num-workers",
+        type=_non_negative_int,
+        default=0,
+        help=(
+            "DataLoader worker processes (default: 0). Workers only help when "
+            "data is not cached in memory."
+        ),
+    )
+    parser.add_argument(
+        "--data-cache",
+        choices=DATA_CACHE_MODES,
+        default="auto",
+        help=(
+            "Keep dataset arrays in memory after the first read: 'auto' "
+            "(default) caches when the estimated size fits in 25%% of "
+            "available RAM."
+        ),
+    )
+
+
+def _non_negative_int(value: str) -> int:
+    number = int(value)
+    if number < 0:
+        raise argparse.ArgumentTypeError("must be non-negative")
+    return number
 
 
 def run_context_from_namespace(
@@ -131,6 +158,9 @@ def run_context_from_namespace(
         "%Y%m%dT%H%M%SZ"
     )
     tune_seed = getattr(namespace, "tune_seed", None)
+    provenance = dict(provenance or {})
+    if hasattr(namespace, "num_workers"):
+        provenance.setdefault("data_loading", data_loading_provenance(namespace))
     return RunContext.create(
         namespace.runs_root,
         problem=problem,
@@ -139,5 +169,6 @@ def run_context_from_namespace(
         seed=seed if tune_seed is None else int(tune_seed),
         dtype=dtype,
         device=resolve_device(namespace.device),
+        num_workers=int(getattr(namespace, "num_workers", 0)),
         provenance=provenance,
     )

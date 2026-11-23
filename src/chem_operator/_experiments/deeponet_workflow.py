@@ -44,7 +44,7 @@ def deeponet_tuner(
     dataset_factory: DatasetPairFactory,
     context: RunContext,
     settings: DeepONetTuningSettings,
-    num_workers: int = 0,
+    num_workers: int | None = None,
     pin_memory: bool = False,
 ) -> Tuner:
     def trainer_factory(config: Mapping[str, Any]) -> DeepONetTrainer:

@@ -35,6 +35,12 @@ from .comparison import (
     validate_complete_run,
     validate_model_comparison,
 )
+from .data_loading import (
+    DATA_CACHE_MODES,
+    data_loading_provenance,
+    estimate_cache_nbytes,
+    resolve_data_cache,
+)
 from .device import hardware_metadata, resolve_device, resolve_dtype, seed_worker
 from .deeponet_workflow import (
     DeepONetTuningSettings,
@@ -134,6 +140,10 @@ __all__ = [
     "resolve_dtype",
     "resolve_train_config",
     "run_context_from_namespace",
+    "DATA_CACHE_MODES",
+    "data_loading_provenance",
+    "estimate_cache_nbytes",
+    "resolve_data_cache",
     "seed_worker",
     "shared_history",
     "train_config_source_chain",
