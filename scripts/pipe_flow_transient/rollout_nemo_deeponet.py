@@ -200,7 +200,9 @@ def parse_cli_args():
 def main():
     args = parse_cli_args()
     normalizer = fit_normalizer(args.data_dir)
-    raw = raw_dataset(args.data_dir, "train")
+    # One sample per case: the PDE name and first profile match the rollout
+    # windows without reading every one-step pair.
+    raw = raw_dataset(args.data_dir, "train", full_trajectory=True)
     try:
         pde_name = dataset_pde_name(raw)
         first = raw[0]
@@ -216,7 +218,9 @@ def main():
         spec = replace(experiment_spec(args, MODEL_IDS[variant]), benchmark_protocol_id="rollout-one-step-v1")
         run_operator(
             args, PATHS, spec,
-            lambda split: make_adapter(args.data_dir, split, normalizer, n_radial),
+            lambda split: make_adapter(
+                args.data_dir, split, normalizer, n_radial, preload=getattr(args, "cache_data", False)
+            ),
             lambda config, context, selected=variant: make_trainer(
                 config, context, normalizer, n_radial, pde_name=pde_name,
                 radial_spacing=radial_spacing, variant=selected,

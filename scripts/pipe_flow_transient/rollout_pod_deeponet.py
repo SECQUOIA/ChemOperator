@@ -68,8 +68,10 @@ class PODRolloutDeepXDETrainer(RolloutTrainerBase):
 
 
 def fit_rollout_pod(data_dir: Path, normalizer, n_radial: int,
-                    max_cases: int | None = None) -> PODTransform:
-    raw, adapter = make_rollout_adapter(data_dir, "train", normalizer, n_radial)
+                    max_cases: int | None = None, *, preload: bool = False) -> PODTransform:
+    raw, adapter = make_rollout_adapter(
+        data_dir, "train", normalizer, n_radial, preload=preload
+    )
     try:
         selected = (
             adapter if max_cases is None
@@ -90,7 +92,9 @@ def search_space(pod: PODTransform) -> dict[str, Any]:
 
 def main() -> None:
     args, normalizer, n_radial = prepare_rollout_run()
-    pod = fit_rollout_pod(args.data_dir, normalizer, n_radial, args.max_cases)
+    pod = fit_rollout_pod(
+        args.data_dir, normalizer, n_radial, args.max_cases, preload=getattr(args, "cache_data", False)
+    )
     run_rollout_experiment(
         args, normalizer, n_radial, MODEL_ID,
         lambda config, context: PODRolloutDeepXDETrainer(config, normalizer, n_radial, pod),

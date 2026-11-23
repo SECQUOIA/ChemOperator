@@ -38,7 +38,6 @@ from chem_operator.normalization import ZScoreNormalizer
 
 from scripts.cstr.common import (
     CPUS_PER_TRIAL,
-    DATALOADER_WORKERS,
     GPUS_PER_TRIAL,
     LOG_TIME_POINTS,
     MAX_CONCURRENT_TRIALS,
@@ -132,12 +131,12 @@ class CSTRFNOAdapter(Dataset):
 
 @contextmanager
 def opened_data(
-    splits: tuple[str, ...], normalizer: ZScoreNormalizer
+    splits: tuple[str, ...], normalizer: ZScoreNormalizer, cache_data: bool = False
 ) -> Iterator[tuple[CSTRFNOAdapter, ...]]:
     raw = []
     try:
         for split in splits:
-            raw.append(raw_dataset(split))
+            raw.append(raw_dataset(split, cache=cache_data))
         yield tuple(CSTRFNOAdapter(limited(item), normalizer) for item in raw)
     finally:
         for item in raw:
@@ -186,7 +185,6 @@ def make_trainer(
         config,
         loss_terms=(LossTerm("data_loss", relative_l2),),
         selection_metric="data_loss",
-        num_workers=DATALOADER_WORKERS,
         pin_memory=PIN_MEMORY,
         checkpoint_metadata={
             "normalizer": normalizer.state_dict(),
@@ -293,7 +291,7 @@ def main() -> None:
         PATHS.ray.mkdir(parents=True, exist_ok=True)
 
         def trial_data(_context: Any):
-            return opened_data(("train", "valid"), normalizer)
+            return opened_data(("train", "valid"), normalizer, getattr(args, "cache_data", False))
 
         def trial_trainer(config: Mapping[str, Any], *, context: Any):
             return make_trainer(config, context, normalizer)
@@ -316,7 +314,9 @@ def main() -> None:
 
         def train_one(run_runner, run_context, run_config):
             trainer = make_trainer(run_config, run_context, normalizer)
-            with opened_data(("train", "valid", "test"), normalizer) as datasets:
+            with opened_data(
+                ("train", "valid", "test"), normalizer, getattr(args, "cache_data", False)
+            ) as datasets:
                 return run_runner.run(
                     trainer,
                     *datasets,

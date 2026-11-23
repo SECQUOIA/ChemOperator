@@ -36,6 +36,7 @@ from chem_operator.experiments import (
     operator_ray_runtime,
     operator_spec,
     parse_operator_args,
+    resolve_data_cache,
     run_operator,
     unwrap_dataset,
 )
@@ -134,7 +135,7 @@ class MeshFile:
         return self.n_z * self.n_r
 
 
-def raw_dataset(path: Path) -> ChemOperatorDataset:
+def raw_dataset(path: Path, *, preload: bool = False) -> ChemOperatorDataset:
     """Open one complete steady Q2D field per HDF5 case."""
     field_names = FNOAdapter.required_field_names(
         INPUT_CHANNELS,
@@ -154,6 +155,7 @@ def raw_dataset(path: Path) -> ChemOperatorDataset:
         ),
         n_steps_input=1,
         dtype=torch.float32,
+        preload=preload,
     )
 
 
@@ -217,9 +219,11 @@ def make_adapter(
     normalizer: ZScoreNormalizer,
     geometry: tuple[float, float],
     shape: tuple[int, int] | None = None,
+    *,
+    preload: bool = False,
 ) -> tuple[ChemOperatorDataset, FNOAdapter]:
     """Open a raw dataset and its normalized Q2D adapter on the training domain."""
-    raw = raw_dataset(path)
+    raw = raw_dataset(path, preload=preload)
     try:
         current_geometry = _case_geometry(raw[0]["metadata"])
         if not _same_geometry(current_geometry, geometry):
@@ -416,7 +420,9 @@ def parse_args(*, model_name: str = "FNO", benchmark: bool = True):
     if benchmark:
         parser.add_argument("--benchmark", action=argparse.BooleanOptionalAction, default=True,
                             help="Evaluate available mesh-sweep files and save cost and superresolution artifacts.")
-    return parse_operator_args(PATHS, epochs=FINAL_EPOCHS, tune_epochs=TUNE_EPOCHS, samples=TUNE_SAMPLES, parser=parser)
+    args = parse_operator_args(PATHS, epochs=FINAL_EPOCHS, tune_epochs=TUNE_EPOCHS, samples=TUNE_SAMPLES, parser=parser)
+    resolve_data_cache(args, lambda split: raw_dataset(args.data_dir / f"{FILE_STEM}_{split}.h5"))
+    return args
 
 ModelFactory = Callable[[Mapping[str, Any], torch.device], torch.nn.Module]
 
@@ -477,7 +483,8 @@ def run_model(
         PATHS,
         experiment_spec(args, model_id),
         lambda split: make_adapter(
-            args.data_dir / f"{FILE_STEM}_{split}.h5", normalizer, geometry, shape
+            args.data_dir / f"{FILE_STEM}_{split}.h5", normalizer, geometry, shape,
+            preload=getattr(args, "cache_data", False),
         ),
         lambda config, context: make_trainer(
             model_factory, config, context, normalizer, geometry, shape
@@ -558,10 +565,11 @@ def _deeponet_split(
     geometry: tuple[float, float],
     coordinates: tuple[torch.Tensor, torch.Tensor],
     max_cases: int | None,
+    preload: bool = False,
 ) -> tuple[ChemOperatorDataset, Q2DDeepONetAdapter]:
     """Open one split, validating only the selected cases."""
     shape = tuple(len(value) for value in coordinates)
-    raw = raw_dataset(path)
+    raw = raw_dataset(path, preload=preload)
     try:
         return raw, Q2DDeepONetAdapter(
             field_adapter(raw, normalizer, shape), geometry, coordinates, max_cases,
@@ -661,7 +669,7 @@ def run_deeponet(
     def dataset_factory(split: str):
         return _deeponet_split(
             args.data_dir / f"{FILE_STEM}_{split}.h5",
-            normalizer, geometry, coordinates, args.max_cases,
+            normalizer, geometry, coordinates, args.max_cases, getattr(args, "cache_data", False),
         )
 
     def trainer_factory(config: Mapping[str, Any], context: RunContext) -> DeepONetTrainer:

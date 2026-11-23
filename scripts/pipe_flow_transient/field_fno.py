@@ -67,7 +67,9 @@ def main():
     args = parse_args()
     normalizer = fit_normalizer(args.data_dir)
     run_operator(args, PATHS, experiment_spec(args, MODEL_ID),
-        lambda split: make_adapter(args.data_dir, split, normalizer, args.max_cases),
+        lambda split: make_adapter(
+                args.data_dir, split, normalizer, args.max_cases, preload=getattr(args, "cache_data", False)
+            ),
         lambda config, context: make_trainer(config, context, normalizer), search_space(),
         lambda trainer, data, context: evaluate_fields(trainer, data, context,
             labels=FIELD_NAMES, coordinate_names=("t", "r"), cases=args.plot_cases), selection_metric="data_loss")

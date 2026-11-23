@@ -21,7 +21,7 @@ from chem_operator.example_paths import ExamplePaths
 from chem_operator.models import FNOAdapter, FNOChannel, fit_fno_zscore_normalizer, fit_zscore_normalizer
 from chem_operator.normalization import ZScoreNormalizer, normalizer_from_state_dict
 from chem_operator.reactors.pipe_flow_transient.dataset_generator import TransientHagenPoiseuille
-from chem_operator.experiments import OperatorTrainer, EvaluationOutcome, LossTerm, StreamingRegressionMetrics, parse_operator_args, operator_spec, run_operator
+from chem_operator.experiments import OperatorTrainer, EvaluationOutcome, LossTerm, StreamingRegressionMetrics, parse_operator_args, operator_spec, resolve_data_cache, run_operator
 PATHS = ExamplePaths.from_script(__file__, dataset="pipe_flow_transient")
 
 FIELD_NAMES = ("velocity",)
@@ -108,7 +108,7 @@ class PhysicsFNOAdapter(FNOAdapter):
         }
 
 
-def raw_dataset(data_dir: Path, split: str) -> ChemOperatorDataset:
+def raw_dataset(data_dir: Path, split: str, *, preload: bool = False) -> ChemOperatorDataset:
     """Open one complete generated transient trajectory per HDF5 case."""
     return ChemOperatorDataset(
         data_dir / f"{FILE_STEM}_{split}.h5",
@@ -120,6 +120,7 @@ def raw_dataset(data_dir: Path, split: str) -> ChemOperatorDataset:
         n_steps_input=1,
         n_steps_output=1,
         dtype=torch.float32,
+        preload=preload,
     )
 
 
@@ -159,9 +160,11 @@ def make_adapter(
     split: str,
     normalizer: ZScoreNormalizer,
     maximum: int | None,
+    *,
+    preload: bool = False,
 ) -> tuple[ChemOperatorDataset, PhysicsFNOAdapter]:
     """Return an open raw split and its physics-aware FNO adapter."""
-    dataset = raw_dataset(data_dir, split)
+    dataset = raw_dataset(data_dir, split, preload=preload)
     adapter = PhysicsFNOAdapter(
         dataset,
         normalizer,
@@ -227,17 +230,26 @@ def experiment_spec(args, model_id):
                          FIELD_NAMES, {"velocity": "m/s"}, ("t", "r"))
 
 def parse_args(*, parser=None):
-    return parse_operator_args(
+    args = parse_operator_args(
         PATHS,
         epochs=EPOCHS,
         tune_epochs=TUNE_EPOCHS,
         samples=NUM_SAMPLES,
         parser=parser,
     )
+    # Field and rollout datasets hold the same per-case arrays.
+    resolve_data_cache(args, lambda split: raw_dataset(args.data_dir, split))
+    return args
 
 
-def rollout_raw_dataset(data_dir: Path, split: str, *, full_trajectory: bool = False) -> ChemOperatorDataset:
-    """Read adjacent profile pairs or full trajectories for rollout scoring."""
+def rollout_raw_dataset(
+    data_dir: Path, split: str, *, full_trajectory: bool = False, preload: bool = False
+) -> ChemOperatorDataset:
+    """Read adjacent profile pairs or full trajectories for rollout scoring.
+
+    Each case yields many one-step pairs, so ``preload`` avoids re-reading a
+    case once per pair; full trajectories are one sample per case.
+    """
     return ChemOperatorDataset(
         data_dir / f"{FILE_STEM}_{split}.h5",
         task="operator_cartesian" if full_trajectory else "rollout",
@@ -248,8 +260,7 @@ def rollout_raw_dataset(data_dir: Path, split: str, *, full_trajectory: bool = F
         n_steps_input=1,
         n_steps_output=1,
         dtype=torch.float32,
-        # Each case yields many small one-step pairs; read every case once.
-        preload=True,
+        preload=preload,
     )
 
 
@@ -327,8 +338,9 @@ def fit_rollout_normalizer(data_dir: Path) -> ZScoreNormalizer:
 
 
 def make_rollout_adapter(data_dir: Path, split: str, normalizer: ZScoreNormalizer,
-                         n_radial: int) -> tuple[ChemOperatorDataset, RolloutAdapter]:
-    dataset = rollout_raw_dataset(data_dir, split)
+                         n_radial: int, *, preload: bool = False
+                         ) -> tuple[ChemOperatorDataset, RolloutAdapter]:
+    dataset = rollout_raw_dataset(data_dir, split, preload=preload)
     return dataset, RolloutAdapter(dataset, normalizer, n_radial)
 
 
@@ -509,7 +521,9 @@ def run_rollout_experiment(args, normalizer: ZScoreNormalizer, n_radial: int,
     )
     run_operator(
         args, PATHS, spec,
-        lambda split: make_rollout_adapter(args.data_dir, split, normalizer, n_radial),
+        lambda split: make_rollout_adapter(
+            args.data_dir, split, normalizer, n_radial, preload=getattr(args, "cache_data", False)
+        ),
         trainer_factory,
         search_space,
         lambda trainer, data, context: evaluate_rollout_run(

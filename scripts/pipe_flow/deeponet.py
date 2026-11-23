@@ -4,7 +4,6 @@ from functools import partial
 from typing import Any
 
 from common import (
-    DATALOADER_WORKERS,
     MAX_EPOCHS,
     PATHS,
     PIN_MEMORY,
@@ -71,10 +70,11 @@ def main() -> None:
             deeponet_tuner(
                 search_space=search_space(),
                 pod=None,
-                dataset_factory=partial(tuning_data, normalizer=normalizer),
+                dataset_factory=partial(
+                    tuning_data, normalizer=normalizer, cache_data=getattr(args, "cache_data", False)
+                ),
                 context=context,
                 settings=tuning_settings(),
-                num_workers=DATALOADER_WORKERS,
                 pin_memory=PIN_MEMORY,
             ),
             None,
@@ -89,11 +89,12 @@ def main() -> None:
         def train_one(run_runner, run_context, run_config):
             trainer = DeepONetTrainer(
                 deeponet_training_config(run_config, epoch_multiplier=2.0),
-                num_workers=DATALOADER_WORKERS,
                 pin_memory=PIN_MEMORY,
                 checkpoint_metadata={"normalizer": normalizer.state_dict()},
             )
-            with final_data(normalizer=normalizer) as (training, validation, test):
+            with final_data(
+                normalizer=normalizer, cache_data=getattr(args, "cache_data", False)
+            ) as (training, validation, test):
                 return run_runner.run(
                     trainer,
                     training,

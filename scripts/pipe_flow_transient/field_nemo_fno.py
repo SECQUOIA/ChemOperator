@@ -270,7 +270,9 @@ def main():
         model_id = MODEL_IDS[variant]
         run_operator(
             args, PATHS, experiment_spec(args, model_id),
-            lambda split: make_adapter(args.data_dir, split, normalizer, args.max_cases),
+            lambda split: make_adapter(
+                args.data_dir, split, normalizer, args.max_cases, preload=getattr(args, "cache_data", False)
+            ),
             lambda config, context, selected=variant: make_trainer(
                 config, context, normalizer, pde_name=pde_name,
                 radial_spacing=spacing, variant=selected

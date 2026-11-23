@@ -168,8 +168,8 @@ def test_rejects_incompatible_selected_cases_and_closes_files(data_dir, monkeypa
     opened = []
     original = common.raw_dataset
 
-    def tracked(path):
-        raw = original(path)
+    def tracked(path, **kwargs):
+        raw = original(path, **kwargs)
         opened.append(raw)
         return raw
 

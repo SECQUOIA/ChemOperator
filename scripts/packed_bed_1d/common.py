@@ -6,7 +6,7 @@ import argparse
 from contextlib import contextmanager
 import os
 from pathlib import Path
-from typing import Iterator
+from typing import Callable, Iterator
 
 os.environ.setdefault("DDE_BACKEND", "pytorch")
 os.environ.setdefault("MPLBACKEND", "Agg")
@@ -33,6 +33,7 @@ from chem_operator.experiments import (
     add_run_arguments,
     add_workflow_arguments,
     fingerprint_path,
+    resolve_data_cache,
 )
 from chem_operator.models import (
     DeepONetAdapter,
@@ -84,22 +85,32 @@ MAX_CONCURRENT_TRIALS = 1
 TIME_BUDGET_S = 30 * 60
 CPUS_PER_TRIAL = 2
 GPUS_PER_TRIAL = 1 if torch.cuda.is_available() else 0
-DATALOADER_WORKERS = 0
 PIN_MEMORY = bool(GPUS_PER_TRIAL)
 RAY_OBJECT_STORE_BYTES = 100 * 1024**2
 
 
-def parse_args() -> argparse.Namespace:
+def parse_args(
+    *, cache_factory: Callable[[str], Dataset] | None = None
+) -> argparse.Namespace:
+    """Parse the shared flags and resolve ``--data-cache``.
+
+    ``cache_factory(split)`` returns the uncached dataset whose memory the
+    cache would hold; the default is the raw HDF5 split.
+    """
     parser = argparse.ArgumentParser(description=__doc__)
     add_workflow_arguments(parser)
     add_run_arguments(
         parser,
         default_runs_root=PATHS.root / "artifacts" / "runs",
     )
-    return parser.parse_args()
+    args = parser.parse_args()
+    resolve_data_cache(args, cache_factory or open_raw)
+    return args
 
 
-def raw_dataset(data_dir: Path, split: str, stride: int) -> ChemOperatorDataset:
+def raw_dataset(
+    data_dir: Path, split: str, stride: int, *, preload: bool = False
+) -> ChemOperatorDataset:
     return ChemOperatorDataset(
         data_dir / f"{FILE_STEM}_{split}.h5",
         task="operator_cartesian",
@@ -111,6 +122,7 @@ def raw_dataset(data_dir: Path, split: str, stride: int) -> ChemOperatorDataset:
         n_steps_output=1,
         index_stride=stride,
         dtype=torch.float32,
+        preload=preload,
     )
 
 
@@ -142,8 +154,8 @@ def adapter(dataset: Dataset, normalizer: ZScoreNormalizer) -> DeepONetAdapter:
     )
 
 
-def open_raw(split: str) -> ChemOperatorDataset:
-    return raw_dataset(PATHS.data, split, COORDINATE_STRIDE)
+def open_raw(split: str, *, preload: bool = False) -> ChemOperatorDataset:
+    return raw_dataset(PATHS.data, split, COORDINATE_STRIDE, preload=preload)
 
 
 def prepare_normalizer() -> ZScoreNormalizer:
@@ -168,9 +180,11 @@ def tuning_data(
     context: RunContext,
     *,
     normalizer: ZScoreNormalizer,
+    cache_data: bool = False,
 ) -> Iterator[tuple[DeepONetAdapter, DeepONetAdapter]]:
     del context
-    train_raw, valid_raw = open_raw("train"), open_raw("valid")
+    train_raw = open_raw("train", preload=cache_data)
+    valid_raw = open_raw("valid", preload=cache_data)
     try:
         yield (
             adapter(limited(train_raw, MAX_TRAJECTORIES), normalizer),
@@ -185,8 +199,11 @@ def tuning_data(
 def final_data(
     *,
     normalizer: ZScoreNormalizer,
+    cache_data: bool = False,
 ) -> Iterator[tuple[DeepONetAdapter, DeepONetAdapter, DeepONetAdapter]]:
-    raw = tuple(open_raw(split) for split in ("train", "valid", "test"))
+    raw = tuple(
+        open_raw(split, preload=cache_data) for split in ("train", "valid", "test")
+    )
     try:
         yield tuple(
             adapter(limited(item, MAX_TRAJECTORIES), normalizer) for item in raw

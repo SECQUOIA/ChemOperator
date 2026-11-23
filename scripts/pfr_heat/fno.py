@@ -295,7 +295,7 @@ def main():
         model_id = MODEL_IDS[variant]
         run_operator(
             args, PATHS, experiment_spec(args, model_id),
-            lambda split: make_adapter(args.data_dir,split,pfr,wall,shape),
+            lambda split: make_adapter(args.data_dir,split,pfr,wall,shape, preload=getattr(args, "cache_data", False)),
             lambda config,context,selected=variant: make_trainer(
                 config,context,pfr,wall,shape,variant=selected
             ),

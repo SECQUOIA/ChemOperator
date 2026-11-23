@@ -36,6 +36,7 @@ from chem_operator.experiments import (
     add_run_arguments,
     add_workflow_arguments,
     fingerprint_path,
+    resolve_data_cache,
 )
 from chem_operator.models import (
     DeepONetAdapter,
@@ -56,7 +57,6 @@ COORDINATE_STRIDE = 1
 LOG_TIME_POINTS = 501
 LOG_TIME_FINAL = 100.0
 LOG_TIME_SCALE = 1.0e-2
-CACHE_RESAMPLED_TRAJECTORIES = True
 SEED = 42
 RECONSTRUCTION_CASES = 2
 MAX_TRAJECTORIES: int | None = None
@@ -67,7 +67,6 @@ MAX_CONCURRENT_TRIALS = 1
 TIME_BUDGET_S = 30 * 60
 CPUS_PER_TRIAL = 2
 GPUS_PER_TRIAL = 1 if torch.cuda.is_available() else 0
-DATALOADER_WORKERS = 0
 PIN_MEMORY = bool(GPUS_PER_TRIAL)
 RAY_OBJECT_STORE_BYTES = 100 * 1024**2
 
@@ -79,7 +78,9 @@ def parse_args(*, description: str | None = None) -> argparse.Namespace:
         parser,
         default_runs_root=PATHS.root / "artifacts" / "runs",
     )
-    return parser.parse_args()
+    args = parser.parse_args()
+    resolve_data_cache(args, raw_dataset)
+    return args
 
 
 def log_time_grid() -> np.ndarray:
@@ -92,7 +93,12 @@ def log_time_grid() -> np.ndarray:
     return grid
 
 
-def raw_dataset(split: str) -> TrajectoryResamplingDataset:
+def raw_dataset(split: str, *, cache: bool = False) -> TrajectoryResamplingDataset:
+    """Resample one split; ``cache`` keeps resampled trajectories in memory.
+
+    The raw arrays are never preloaded: after the first epoch the resampling
+    cache serves every sample, so a raw copy would only use memory.
+    """
     raw = ChemOperatorDataset(
         PATHS.data / f"{DATASET_NAME}_{split}.h5",
         task="operator_cartesian",
@@ -109,7 +115,7 @@ def raw_dataset(split: str) -> TrajectoryResamplingDataset:
         raw,
         coordinate_name="t",
         target_coordinate=log_time_grid(),
-        cache=CACHE_RESAMPLED_TRAJECTORIES,
+        cache=cache,
     )
 
 
@@ -175,9 +181,11 @@ def tuning_data(
     context: RunContext,
     *,
     normalizer: ZScoreNormalizer,
+    cache_data: bool = False,
 ) -> Iterator[tuple[DeepONetAdapter, DeepONetAdapter]]:
     del context
-    train_raw, valid_raw = raw_dataset("train"), raw_dataset("valid")
+    train_raw = raw_dataset("train", cache=cache_data)
+    valid_raw = raw_dataset("valid", cache=cache_data)
     try:
         yield (
             adapter(limited(train_raw), normalizer),
@@ -192,8 +200,11 @@ def tuning_data(
 def final_data(
     *,
     normalizer: ZScoreNormalizer,
+    cache_data: bool = False,
 ) -> Iterator[tuple[DeepONetAdapter, DeepONetAdapter, DeepONetAdapter]]:
-    raw = tuple(raw_dataset(split) for split in ("train", "valid", "test"))
+    raw = tuple(
+        raw_dataset(split, cache=cache_data) for split in ("train", "valid", "test")
+    )
     try:
         yield tuple(adapter(limited(item), normalizer) for item in raw)  # type: ignore[misc]
     finally:
