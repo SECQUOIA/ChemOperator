@@ -20,7 +20,6 @@ from chem_operator.experiments import run_operator
 import numpy as np
 from scripts.pfr_heat.common import (
     PATHS,
-    FILE_STEM,
     CHECKPOINT,
     SEED,
     METRIC,

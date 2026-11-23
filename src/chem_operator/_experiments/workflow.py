@@ -1,8 +1,9 @@
-"""Shared CLI stage values; argument parsing remains in model scripts."""
+"""Shared workflow validation and CLI helpers for model experiments."""
 
 from __future__ import annotations
 
 import argparse
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -26,6 +27,8 @@ class WorkflowStages:
     tune_seed: int | None = None
 
     def __post_init__(self) -> None:
+        if not (self.tune or self.train):
+            raise ValueError("At least one of tuning or training must be enabled.")
         if not self.train_config:
             raise ValueError("train_config must be non-empty.")
         if self.plot_cases < 1:
@@ -56,6 +59,23 @@ class WorkflowStages:
             seeds=None if seeds is None else tuple(int(seed) for seed in seeds),
             tune_seed=None if tune_seed is None else int(tune_seed),
         )
+
+
+def parse_workflow_args(
+    parser: argparse.ArgumentParser,
+    argv: Sequence[str] | None = None,
+) -> argparse.Namespace:
+    """Parse arguments and report workflow validation failures as CLI errors.
+
+    The parser must include :func:`add_workflow_arguments`. Validate before
+    resolving caches, opening datasets, or creating run artifacts.
+    """
+    args = parser.parse_args(argv)
+    try:
+        WorkflowStages.from_namespace(args)
+    except ValueError as error:
+        parser.error(str(error))
+    return args
 
 
 def add_workflow_arguments(parser: argparse.ArgumentParser) -> None:

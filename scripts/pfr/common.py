@@ -28,10 +28,10 @@ from chem_operator.experiments import (
     ExperimentSpec,
     RayRuntimeConfig,
     RunContext,
-    WorkflowStages,
     add_run_arguments,
     add_workflow_arguments,
     fingerprint_path,
+    parse_workflow_args,
     resolve_data_cache,
 )
 from chem_operator.models import (
@@ -42,7 +42,6 @@ from chem_operator.normalization import ZScoreNormalizer
 
 
 PATHS = ExamplePaths.from_script(__file__, dataset="pfr")
-FILE_STEM = "pfr_chain"
 PROBLEM_ID = "pfr_chain"
 PROTOCOL_ID = "operator-cartesian-v1"
 FIELDS = ("T", "P", "X", "velocity")
@@ -78,14 +77,14 @@ def parse_args(*, description: str | None = None) -> argparse.Namespace:
         parser,
         default_runs_root=PATHS.root / "artifacts" / "runs",
     )
-    args = parser.parse_args()
+    args = parse_workflow_args(parser)
     resolve_data_cache(args, raw_dataset)
     return args
 
 
 def raw_dataset(split: str, *, preload: bool = False) -> ChemOperatorDataset:
     return ChemOperatorDataset(
-        PATHS.data / f"{FILE_STEM}_{split}.h5",
+        PATHS.data / f"{PROBLEM_ID}_{split}.h5",
         task="operator_cartesian",
         coordinate_name="z",
         input_fields=FIELDS,
@@ -180,7 +179,7 @@ def experiment_spec(model_id: str) -> ExperimentSpec:
         model_id=model_id,
         benchmark_protocol_id=PROTOCOL_ID,
         dataset_fingerprints={
-            name: fingerprint_path(PATHS.data / f"{FILE_STEM}_{split}.h5")
+            name: fingerprint_path(PATHS.data / f"{PROBLEM_ID}_{split}.h5")
             for name, split in (
                 ("train", "train"),
                 ("validation", "valid"),
@@ -195,11 +194,6 @@ def experiment_spec(model_id: str) -> ExperimentSpec:
         tuning_budget={"samples": NUM_SAMPLES, "epochs": MAX_EPOCHS},
         project_root=PATHS.root,
     )
-
-
-def validate_stages(stages: WorkflowStages) -> None:
-    if not (stages.tune or stages.train):
-        raise ValueError("Select --tune or --train.")
 
 
 def tuning_settings() -> DeepONetTuningSettings:

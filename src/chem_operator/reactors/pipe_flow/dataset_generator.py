@@ -91,7 +91,7 @@ def _flow_diagnostics(
 class HagenPoiseuillePipeFlowSim(CaseSimulator):
     """Generate analytical Hagen-Poiseuille radial velocity profiles."""
 
-    name = "hagen_poiseuille_pipe_flow"
+    name = "pipe_flow"
 
     def __init__(
         self,

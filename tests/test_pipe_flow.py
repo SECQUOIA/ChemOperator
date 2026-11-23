@@ -97,7 +97,7 @@ def test_hdf5_round_trip(tmp_path) -> None:
     generator.save_splits(splits)
 
     dataset = ChemOperatorDataset(
-        tmp_path / "hagen_poiseuille_pipe_flow_train.h5",
+        tmp_path / "pipe_flow_train.h5",
         task="field_map",
         coordinate_name="r",
         input_fields=("velocity",),

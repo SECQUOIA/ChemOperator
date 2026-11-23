@@ -37,7 +37,7 @@ INPUT_CHANNELS = tuple(
     FNOChannel(name, "constant", name) for name in MODEL_CONSTANT_NAMES
 )
 OUTPUT_CHANNELS = (FNOChannel("velocity", "field", "velocity"),)
-FILE_STEM = "transient_hagen_poiseuille_pipe_flow"
+PROBLEM_ID = "pipe_flow_transient"
 METRIC = "best_valid_relative_l2"
 SEED = 42
 
@@ -111,7 +111,7 @@ class PhysicsFNOAdapter(FNOAdapter):
 def raw_dataset(data_dir: Path, split: str, *, preload: bool = False) -> ChemOperatorDataset:
     """Open one complete generated transient trajectory per HDF5 case."""
     return ChemOperatorDataset(
-        data_dir / f"{FILE_STEM}_{split}.h5",
+        data_dir / f"{PROBLEM_ID}_{split}.h5",
         task="operator_cartesian",
         coordinate_name="t",
         input_fields=FIELD_NAMES,
@@ -223,10 +223,8 @@ def training_pde_name(data_dir: Path) -> str:
     finally:
         dataset.close()
 
-PROBLEM_ID = "pipe_flow_transient"
-
 def experiment_spec(args, model_id):
-    return operator_spec(args, PATHS, PROBLEM_ID, model_id, FILE_STEM,
+    return operator_spec(args, PATHS, PROBLEM_ID, model_id,
                          FIELD_NAMES, {"velocity": "m/s"}, ("t", "r"))
 
 def parse_args(*, parser=None):
@@ -251,7 +249,7 @@ def rollout_raw_dataset(
     case once per pair; full trajectories are one sample per case.
     """
     return ChemOperatorDataset(
-        data_dir / f"{FILE_STEM}_{split}.h5",
+        data_dir / f"{PROBLEM_ID}_{split}.h5",
         task="operator_cartesian" if full_trajectory else "rollout",
         coordinate_name="t",
         input_fields=FIELD_NAMES,

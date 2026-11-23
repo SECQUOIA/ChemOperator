@@ -17,7 +17,7 @@ import torch
 from chem_operator.models import FNOAdapter
 from chem_operator.normalization import ZScoreNormalizer
 from scripts.q2d.common import (
-    FILE_STEM,
+    PROBLEM_ID,
     LATENCY_WARMUPS,
     LATENCY_REPEATS,
     AMORTIZED_EVALUATION_COUNTS,
@@ -196,7 +196,7 @@ def dataset_generation_costs(data_dir) -> dict[str, float | int]:
     total_seconds = 0.0
     total_cases = 0
     for split in ("train", "valid"):
-        dataset = raw_dataset(data_dir / f"{FILE_STEM}_{split}.h5")
+        dataset = raw_dataset(data_dir / f"{PROBLEM_ID}_{split}.h5")
         try:
             wall_times = [
                 float(dataset[index]["metadata"]["wall_time"])

@@ -32,10 +32,10 @@ from chem_operator.experiments import (
     ExperimentSpec,
     RayRuntimeConfig,
     RunContext,
-    WorkflowStages,
     add_run_arguments,
     add_workflow_arguments,
     fingerprint_path,
+    parse_workflow_args,
     resolve_data_cache,
 )
 from chem_operator.models import (
@@ -46,7 +46,7 @@ from chem_operator.normalization import ZScoreNormalizer
 
 
 PATHS = ExamplePaths.from_script(__file__, dataset="cstr")
-DATASET_NAME = "cstr_non_isothermal"
+
 PROBLEM_ID = "cstr_non_isothermal"
 PROTOCOL_ID = "operator-cartesian-logtime-v1"
 FIELDS = ("T", "P", "X")
@@ -78,7 +78,7 @@ def parse_args(*, description: str | None = None) -> argparse.Namespace:
         parser,
         default_runs_root=PATHS.root / "artifacts" / "runs",
     )
-    args = parser.parse_args()
+    args = parse_workflow_args(parser)
     resolve_data_cache(args, raw_dataset)
     return args
 
@@ -100,7 +100,7 @@ def raw_dataset(split: str, *, cache: bool = False) -> TrajectoryResamplingDatas
     cache serves every sample, so a raw copy would only use memory.
     """
     raw = ChemOperatorDataset(
-        PATHS.data / f"{DATASET_NAME}_{split}.h5",
+        PATHS.data / f"{PROBLEM_ID}_{split}.h5",
         task="operator_cartesian",
         coordinate_name="t",
         input_fields=FIELDS,
@@ -148,7 +148,7 @@ def adapter(dataset: Dataset, normalizer: ZScoreNormalizer) -> DeepONetAdapter:
 
 
 def resampled_dataset_fingerprint(split: str) -> str:
-    source = fingerprint_path(PATHS.data / f"{DATASET_NAME}_{split}.h5")
+    source = fingerprint_path(PATHS.data / f"{PROBLEM_ID}_{split}.h5")
     payload = {
         "source": source,
         "method": "linear",
@@ -233,11 +233,6 @@ def experiment_spec(model_id: str) -> ExperimentSpec:
         tuning_budget={"samples": NUM_SAMPLES, "epochs": MAX_EPOCHS},
         project_root=PATHS.root,
     )
-
-
-def validate_stages(stages: WorkflowStages) -> None:
-    if not (stages.tune or stages.train):
-        raise ValueError("Select --tune or --train.")
 
 
 def tuning_settings() -> DeepONetTuningSettings:

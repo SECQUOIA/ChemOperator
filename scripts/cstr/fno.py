@@ -278,8 +278,6 @@ def tuning_settings(seed: int = SEED) -> TuningConfig:
 def main() -> None:
     args = parse_args(description=__doc__)
     stages = WorkflowStages.from_namespace(args)
-    if not (stages.tune or stages.train):
-        raise ValueError("Select --tune or --train.")
     normalizer = prepare_normalizer()
     context = run_context_from_namespace(
         args, problem=PROBLEM_ID, model=MODEL_ID, seed=SEED

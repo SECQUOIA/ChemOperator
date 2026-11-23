@@ -21,7 +21,6 @@ from scripts.pipe_flow_transient.common import (
     PHYSICS_CONSTANT_NAMES,
     INPUT_CHANNELS,
     OUTPUT_CHANNELS,
-    FILE_STEM,
     METRIC,
     SEED,
     PDE_REGISTRY,

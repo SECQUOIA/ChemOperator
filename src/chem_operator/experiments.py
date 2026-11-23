@@ -40,6 +40,7 @@ from chem_operator._experiments import (
     WorkflowStages,
     add_run_arguments,
     add_workflow_arguments,
+    parse_workflow_args,
     build_manifest,
     count_parameters,
     comparison_records,

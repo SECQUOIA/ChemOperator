@@ -20,7 +20,6 @@ from common import (
     raw_dataset,
     tuning_data,
     tuning_settings,
-    validate_stages,
 )
 from ray import tune
 
@@ -78,7 +77,6 @@ def prepare_pod(
 def main() -> None:
     args = parse_args()
     stages = WorkflowStages.from_namespace(args)
-    validate_stages(stages)
     normalizer = prepare_normalizer()
     pod = prepare_pod(normalizer, getattr(args, "num_workers", 0))
     context = run_context_from_namespace(

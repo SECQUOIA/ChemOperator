@@ -29,10 +29,10 @@ from chem_operator.experiments import (
     ExperimentSpec,
     RayRuntimeConfig,
     RunContext,
-    WorkflowStages,
     add_run_arguments,
     add_workflow_arguments,
     fingerprint_path,
+    parse_workflow_args,
     resolve_data_cache,
 )
 from chem_operator.models import (
@@ -43,7 +43,6 @@ from chem_operator.normalization import ZScoreNormalizer
 
 
 PATHS = ExamplePaths.from_script(__file__, dataset="packed_bed_1D")
-FILE_STEM = "packed_bed_1d"
 PROBLEM_ID = "packed_bed_1d"
 PROTOCOL_ID = "operator-cartesian-v1"
 FIELDS = ("T", "P", "X", "Z", "rhou", "velocity")
@@ -103,7 +102,7 @@ def parse_args(
         parser,
         default_runs_root=PATHS.root / "artifacts" / "runs",
     )
-    args = parser.parse_args()
+    args = parse_workflow_args(parser)
     resolve_data_cache(args, cache_factory or open_raw)
     return args
 
@@ -112,7 +111,7 @@ def raw_dataset(
     data_dir: Path, split: str, stride: int, *, preload: bool = False
 ) -> ChemOperatorDataset:
     return ChemOperatorDataset(
-        data_dir / f"{FILE_STEM}_{split}.h5",
+        data_dir / f"{PROBLEM_ID}_{split}.h5",
         task="operator_cartesian",
         coordinate_name="z",
         input_fields=FIELDS,
@@ -219,7 +218,7 @@ def experiment_spec(model_id: str) -> ExperimentSpec:
         model_id=model_id,
         benchmark_protocol_id=PROTOCOL_ID,
         dataset_fingerprints={
-            name: fingerprint_path(PATHS.data / f"{FILE_STEM}_{split}.h5")
+            name: fingerprint_path(PATHS.data / f"{PROBLEM_ID}_{split}.h5")
             for name, split in (
                 ("train", "train"),
                 ("validation", "valid"),
@@ -234,11 +233,6 @@ def experiment_spec(model_id: str) -> ExperimentSpec:
         tuning_budget={"samples": NUM_SAMPLES, "epochs": MAX_EPOCHS},
         project_root=PATHS.root,
     )
-
-
-def validate_stages(stages: WorkflowStages) -> None:
-    if not (stages.tune or stages.train):
-        raise ValueError("Select --tune or --train.")
 
 
 def tuning_settings() -> DeepONetTuningSettings:

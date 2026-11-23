@@ -26,7 +26,6 @@ from chem_operator.experiments import (
 from scripts.pipe_flow.common import (
     BRANCH_NAMES,
     FIELDS,
-    FILE_STEM,
     MAX_EPOCHS,
     NUM_SAMPLES,
     PATHS,
@@ -227,7 +226,7 @@ def main() -> None:
             tune.loguniform(1e-4, 1e-1) if variant == "physics" else 0.0
         )
         spec = operator_spec(
-            args, PATHS, PROBLEM_ID, model_id, FILE_STEM,
+            args, PATHS, PROBLEM_ID, model_id,
             FIELDS, UNITS, ("r",),
         )
         run_operator(

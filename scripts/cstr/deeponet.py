@@ -16,7 +16,6 @@ from common import (
     prepare_normalizer,
     tuning_data,
     tuning_settings,
-    validate_stages,
 )
 from ray import tune
 
@@ -55,7 +54,6 @@ def search_space() -> dict[str, Any]:
 def main() -> None:
     args = parse_args()
     stages = WorkflowStages.from_namespace(args)
-    validate_stages(stages)
     normalizer = prepare_normalizer()
     context = run_context_from_namespace(
         args,

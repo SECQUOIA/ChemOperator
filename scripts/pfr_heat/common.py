@@ -13,7 +13,7 @@ from chem_operator.example_paths import ExamplePaths
 from chem_operator.normalization import ZScoreNormalizer
 from chem_operator.experiments import parse_operator_args, operator_spec, resolve_data_cache
 PATHS = ExamplePaths.from_script(__file__, dataset="pfr_heat")
-FILE_STEM = "pfr_cylindrical_heat"
+PROBLEM_ID = "pfr_heat"
 CHECKPOINT = "coupled_fno.pt"
 SEED = 42
 METRIC = "best_valid_relative_l2"
@@ -48,7 +48,7 @@ HISTORY_KEYS = (
 
 def raw_dataset(data_dir: Path, split: str, *, preload: bool = False) -> ChemOperatorDataset:
     return ChemOperatorDataset(
-        data_dir / f"{FILE_STEM}_{split}.h5",
+        data_dir / f"{PROBLEM_ID}_{split}.h5",
         task="field_map", coordinate_name="z",
         input_fields=("F", "T_gas", "T_solid"),
         output_fields=("F", "T_gas", "T_solid"),
@@ -237,10 +237,9 @@ def make_adapter(data_dir, split, pfr_normalizer, wall_normalizer, shape, *, pre
     raw = raw_dataset(Path(data_dir), split, preload=preload)
     return raw, CoupledPFRHeatDataset(raw, pfr_normalizer, wall_normalizer, shape)
 
-PROBLEM_ID = "pfr_heat"
 
 def experiment_spec(args, model_id):
-    return operator_spec(args, PATHS, PROBLEM_ID, model_id, FILE_STEM,
+    return operator_spec(args, PATHS, PROBLEM_ID, model_id,
         PFR_OUTPUTS + WALL_OUTPUTS, {"F_A": "mol/s", "F_B": "mol/s", "F_C": "mol/s", "T_gas": "K", "T_solid": "K"},
         {"pfr": ["z"], "wall": ["z", "r"]}, channels={"pfr": list(PFR_OUTPUTS), "wall": list(WALL_OUTPUTS)})
 

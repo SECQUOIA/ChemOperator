@@ -43,7 +43,7 @@ from chem_operator.experiments import (
 from ray import tune
 PATHS =ExamplePaths.from_script(__file__, dataset="q2d_cmr")
 
-FILE_STEM = "q2d_cmr"
+PROBLEM_ID = "q2d_cmr"
 SEED = 42
 METRIC = "best_valid_loss"
 
@@ -408,10 +408,9 @@ def find_superresolution_pair(
         base_raw.close()
     raise RuntimeError("No matched coarse/fine case exists for superresolution.")
 
-PROBLEM_ID = "q2d_cmr"
 
 def experiment_spec(args, model_id):
-    return operator_spec(args, PATHS, PROBLEM_ID, model_id, FILE_STEM,
+    return operator_spec(args, PATHS, PROBLEM_ID, model_id,
                          OUTPUT_LABELS, {channel.label: channel.unit for channel in OUTPUT_CHANNELS},
                          COORDINATE_NAMES)
 
@@ -421,7 +420,7 @@ def parse_args(*, model_name: str = "FNO", benchmark: bool = True):
         parser.add_argument("--benchmark", action=argparse.BooleanOptionalAction, default=True,
                             help="Evaluate available mesh-sweep files and save cost and superresolution artifacts.")
     args = parse_operator_args(PATHS, epochs=FINAL_EPOCHS, tune_epochs=TUNE_EPOCHS, samples=TUNE_SAMPLES, parser=parser)
-    resolve_data_cache(args, lambda split: raw_dataset(args.data_dir / f"{FILE_STEM}_{split}.h5"))
+    resolve_data_cache(args, lambda split: raw_dataset(args.data_dir / f"{PROBLEM_ID}_{split}.h5"))
     return args
 
 ModelFactory = Callable[[Mapping[str, Any], torch.device], torch.nn.Module]
@@ -470,7 +469,7 @@ def run_model(
     ``after_run`` receives the trainer and result, plus the prepared data
     directory, normalizer, geometry, and training shape as keyword arguments.
     """
-    normalizer, geometry, shape = fit_normalizer(args.data_dir / f"{FILE_STEM}_train.h5")
+    normalizer, geometry, shape = fit_normalizer(args.data_dir / f"{PROBLEM_ID}_train.h5")
 
     def evaluate_run(trainer: OperatorTrainer, data: FNOAdapter, context: Any):
         return evaluate_fields(
@@ -483,7 +482,7 @@ def run_model(
         PATHS,
         experiment_spec(args, model_id),
         lambda split: make_adapter(
-            args.data_dir / f"{FILE_STEM}_{split}.h5", normalizer, geometry, shape,
+            args.data_dir / f"{PROBLEM_ID}_{split}.h5", normalizer, geometry, shape,
             preload=getattr(args, "cache_data", False),
         ),
         lambda config, context: make_trainer(
@@ -593,7 +592,7 @@ def deeponet_data(
         datasets = []
         for split in splits:
             raw, data = _deeponet_split(
-                Path(data_dir) / f"{FILE_STEM}_{split}.h5",
+                Path(data_dir) / f"{PROBLEM_ID}_{split}.h5",
                 normalizer, geometry, coordinates, max_cases,
             )
             stack.callback(raw.close)
@@ -605,7 +604,7 @@ def prepare_deeponet_data(
     data_dir: Path,
 ) -> tuple[ZScoreNormalizer, tuple[float, float], tuple[torch.Tensor, torch.Tensor]]:
     """Fit training-only statistics and discover the physical training grid."""
-    path = Path(data_dir) / f"{FILE_STEM}_train.h5"
+    path = Path(data_dir) / f"{PROBLEM_ID}_train.h5"
     normalizer, geometry, shape = fit_normalizer(path)
     raw, dataset = make_adapter(path, normalizer, geometry, shape)
     try:
@@ -668,7 +667,7 @@ def run_deeponet(
 
     def dataset_factory(split: str):
         return _deeponet_split(
-            args.data_dir / f"{FILE_STEM}_{split}.h5",
+            args.data_dir / f"{PROBLEM_ID}_{split}.h5",
             normalizer, geometry, coordinates, args.max_cases, getattr(args, "cache_data", False),
         )
 

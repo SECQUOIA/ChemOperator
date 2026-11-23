@@ -129,7 +129,7 @@ def test_equal_coordinate_lengths_round_trip(
     generator.save_splits(splits)
 
     dataset = ChemOperatorDataset(
-        tmp_path / "transient_hagen_poiseuille_pipe_flow_train.h5",
+        tmp_path / "pipe_flow_transient_train.h5",
         task="next_step",
         coordinate_name="t",
         input_fields=("velocity", "flow_rate"),

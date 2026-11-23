@@ -66,6 +66,7 @@ from .workflow import (
     WorkflowStages,
     add_run_arguments,
     add_workflow_arguments,
+    parse_workflow_args,
     run_context_from_namespace,
 )
 
@@ -114,6 +115,7 @@ __all__ = [
     "TuningOutcome",
     "WorkflowStages",
     "add_workflow_arguments",
+    "parse_workflow_args",
     "add_run_arguments",
     "build_manifest",
     "count_parameters",
