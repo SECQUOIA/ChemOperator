@@ -16,7 +16,8 @@ from chem_operator._experiments.comparison import (
     validate_model_comparison,
 )
 from chem_operator._plotting.plots import (
-    plot_experiment_histories, plot_operator_runs, plot_tuning_progress, select_channels,
+    plot_experiment_histories, plot_operator_runs, plot_tuning_comparison, plot_tuning_progress,
+    select_channels,
     set_log_xscale,
 )
 
@@ -294,6 +295,9 @@ def plot_selected_runs(runs: tuple[RunArtifacts, ...], output_dir: Path,
         saved.append(plot_experiment_histories(
             group, output=destination / "validation_history.png",
             metric="relative_l2", split="val"))
+        tuning = plot_tuning_comparison(group, destination / "tuning_progress.png")
+        if tuning is not None:
+            saved.append(tuning)
         overlay = _overlay(group, destination, cases, labels, xlog=xlog)
         if overlay is not None:
             saved.append(overlay)

@@ -12,6 +12,7 @@ from fnmatch import fnmatchcase
 from pathlib import Path
 
 import numpy as np
+import matplotlib.colors as mcolors
 import matplotlib.dates as mdates
 import matplotlib.pyplot as plt
 
@@ -886,6 +887,105 @@ def _finite(value: str | None) -> float | None:
     return number if np.isfinite(number) else None
 
 
+def _tuning_trials(
+    rows: Iterable[Mapping[str, str]], metric: str,
+) -> dict[str, list[tuple[float, float, float]]]:
+    """Group finite, positive ``metric`` reports as ``(iteration, timestamp, value)`` per trial."""
+    trials: dict[str, list[tuple[float, float, float]]] = defaultdict(list)
+    for row in rows:
+        stamp = _finite(row.get("timestamp"))
+        value = _finite(row.get(metric))
+        if stamp is None or value is None or value <= 0.0:
+            continue
+        iteration = _finite(row.get("training_iteration")) or 0.0
+        trials[str(row["trial_id"])].append((iteration, stamp, value))
+    return dict(trials)
+
+
+def _study_start(rows: Iterable[Mapping[str, str]]) -> float:
+    """Earliest trial start: a report's timestamp minus the trial's run time so far."""
+    starts = []
+    for row in rows:
+        stamp = _finite(row.get("timestamp"))
+        if stamp is None:
+            continue
+        starts.append(stamp - (_finite(row.get("time_total_s")) or 0.0))
+    return min(starts)
+
+
+def plot_tuning_comparison(
+    runs: Iterable[RunArtifacts],
+    output: str | Path,
+    *,
+    metric: str = "valid_relative_l2",
+) -> Path | None:
+    """Overlay several models' tuning studies against elapsed study time.
+
+    Each trial is a faint line in its model's color and each study's running
+    best is a bold step line. ``metric`` defaults to the validation relative
+    L2, the one validation value every model reports on a common scale (the
+    tuning objectives themselves are model-specific). Runs whose study is
+    missing or lacks ``metric`` are skipped, and runs that share a study are
+    drawn once. Returns ``None`` when fewer than two studies remain.
+    """
+    studies = []
+    seen: set[Path] = set()
+    for run in runs:
+        source = tuning_source_dir(run.path)
+        if source is None or source.resolve() in seen:
+            continue
+        rows = read_tuning_progress(source)
+        trials = _tuning_trials(rows or [], metric)
+        if not trials:
+            continue
+        seen.add(source.resolve())
+        studies.append((run, _study_start(rows), trials))
+    if len(studies) < 2:
+        return None
+
+    longest = max(stamp - start for _, start, trials in studies
+                  for points in trials.values() for _, stamp, _ in points)
+    scale, unit = (60.0, "min") if longest < 2 * 3600 else (3600.0, "h")
+    model_ids = [str(run.manifest["model_id"]) for run, _, _ in studies]
+    fallback = iter(color for color in plt.colormaps["tab10"].colors
+                    if mcolors.to_hex(color) not in {
+                        mcolors.to_hex(style[0]) for style in MODEL_STYLES.values()})
+    colors: dict[str, object] = {}
+    figure, axis = plt.subplots(figsize=(9.0, 4.5))
+    for (run, start, trials), model_id in zip(studies, model_ids):
+        if model_id not in colors:
+            colors[model_id] = (MODEL_STYLES[model_id][0] if model_id in MODEL_STYLES
+                                else next(fallback, "black"))
+        color = colors[model_id]
+        label = MODEL_LABELS.get(model_id, model_id)
+        if model_ids.count(model_id) > 1:
+            label = f"{label} ({run.path.name})"
+        points = []
+        for trial in trials.values():
+            trial.sort()
+            elapsed = [(stamp - start) / scale for _, stamp, _ in trial]
+            values = [value for _, _, value in trial]
+            axis.plot(elapsed, values, color=color, linewidth=0.8, alpha=0.45)
+            points.extend(zip(elapsed, values))
+        points.sort()
+        axis.plot([point[0] for point in points],
+                  np.minimum.accumulate([point[1] for point in points]),
+                  color=color, linewidth=2.0, drawstyle="steps-post", label=label)
+    axis.set_yscale("log")
+    axis.set_xlim(left=0.0)
+    axis.grid(True, which="major", alpha=0.35)
+    axis.grid(True, which="minor", axis="y", alpha=0.15)
+    axis.set(xlabel=f"Elapsed tuning time [{unit}]",
+             ylabel=TUNING_METRIC_LABELS.get(metric, metric.replace("_", " ")))
+    axis.legend(fontsize=8)
+    figure.tight_layout()
+    destination = Path(output)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    figure.savefig(destination, dpi=200)
+    plt.close(figure)
+    return destination
+
+
 def plot_tuning_progress(
     run_dir: str | Path,
     output: str | Path,
@@ -904,14 +1004,11 @@ def plot_tuning_progress(
         return None
     assert source is not None
     metric = metric or _tuning_metric(source, rows)
-    trials: dict[str, list[tuple[float, datetime, float]]] = defaultdict(list)
-    for row in rows:
-        stamp = _finite(row.get("timestamp"))
-        value = _finite(row.get(metric))
-        if stamp is None or value is None or value <= 0.0:
-            continue
-        iteration = _finite(row.get("training_iteration")) or 0.0
-        trials[str(row["trial_id"])].append((iteration, datetime.fromtimestamp(stamp), value))
+    trials = {
+        trial_id: [(iteration, datetime.fromtimestamp(stamp), value)
+                   for iteration, stamp, value in points]
+        for trial_id, points in _tuning_trials(rows, metric).items()
+    }
     if not trials:
         raise ValueError(f"{source} tuning progress has no positive finite {metric} values.")
 

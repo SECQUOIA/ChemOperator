@@ -5,11 +5,12 @@ from __future__ import annotations
 import csv
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
 from chem_operator.experiments import read_tuning_progress, tuning_source_dir
-from chem_operator.plotting import plot_tuning_progress
+from chem_operator.plotting import plot_tuning_comparison, plot_tuning_progress
 
 
 def _write_csv(path: Path, rows: list[dict[str, object]]) -> Path:
@@ -133,3 +134,53 @@ def test_plot_returns_none_without_progress(tmp_path: Path) -> None:
 
     assert plot_tuning_progress(run, tmp_path / "plot.png") is None
     assert not (tmp_path / "plot.png").exists()
+
+
+def _run(path: Path, model_id: str) -> SimpleNamespace:
+    return SimpleNamespace(path=path, manifest={"model_id": model_id})
+
+
+def test_comparison_overlays_models(tmp_path: Path) -> None:
+    deeponet = _manifest(tmp_path / "deeponet")
+    _portable_progress(deeponet)
+    fno = _manifest(tmp_path / "fno")
+    _ray_progress(fno, "ab12", [0.3, 0.2])
+
+    path = plot_tuning_comparison(
+        (_run(deeponet, "deeponet"), _run(fno, "fno_physics")), tmp_path / "cmp.png")
+
+    assert path == tmp_path / "cmp.png"
+    assert path.stat().st_size > 0
+
+
+def test_comparison_needs_two_studies(tmp_path: Path) -> None:
+    tuned = _manifest(tmp_path / "tuned")
+    _portable_progress(tuned)
+    untuned = _manifest(tmp_path / "untuned")
+    retrained = _manifest(tmp_path / "retrained", source=str(tuned))
+    output = tmp_path / "cmp.png"
+
+    assert plot_tuning_comparison(
+        (_run(tuned, "deeponet"), _run(untuned, "fno")), output) is None
+    # A run trained from another's study shares that study, so it adds nothing.
+    assert plot_tuning_comparison(
+        (_run(tuned, "deeponet"), _run(retrained, "fno")), output) is None
+    assert not output.exists()
+
+
+def test_comparison_skips_studies_without_metric(tmp_path: Path) -> None:
+    runs = []
+    for name in ("deeponet", "pod_deeponet"):
+        run = _manifest(tmp_path / name)
+        _portable_progress(run)
+        runs.append(_run(run, name))
+    other = _manifest(tmp_path / "fno")
+    _write_csv(other / "tuning_progress.csv", [
+        {"trial_id": "aa", "training_iteration": 1, "timestamp": 1_795_000_000,
+         "best_valid_data_loss": 0.2},
+    ])
+
+    assert plot_tuning_comparison(
+        (*runs, _run(other, "fno")), tmp_path / "cmp.png") is not None
+    assert plot_tuning_comparison(
+        (runs[0], _run(other, "fno")), tmp_path / "none.png") is None
