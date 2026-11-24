@@ -4,10 +4,12 @@ SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &> /dev/null && pwd)
 
 # Usage: plot_all.sh [extra plot.py args], e.g. plot_all.sh --use-tex (requires LaTeX)
 
-python "$SCRIPT_DIR/cstr/plot.py" --recent "$@"
-python "$SCRIPT_DIR/packed_bed_1d/plot.py" --recent "$@"
-python "$SCRIPT_DIR/pfr/plot.py" --recent "$@"
-python "$SCRIPT_DIR/pfr_heat/plot.py" --recent "$@"
-python "$SCRIPT_DIR/pipe_flow/plot.py" --recent "$@"
-python "$SCRIPT_DIR/pipe_flow_transient/plot.py" --recent "$@"
-python "$SCRIPT_DIR/q2d/plot.py" --recent "$@"
+set -- "$@" --recent
+
+python "$SCRIPT_DIR/cstr/plot.py" "$@"
+python "$SCRIPT_DIR/packed_bed_1d/plot.py" "$@"
+python "$SCRIPT_DIR/pfr/plot.py" "$@"
+python "$SCRIPT_DIR/pfr_heat/plot.py" "$@"
+python "$SCRIPT_DIR/pipe_flow/plot.py" "$@"
+python "$SCRIPT_DIR/pipe_flow_transient/plot.py" "$@"
+python "$SCRIPT_DIR/q2d/plot.py" "$@"
