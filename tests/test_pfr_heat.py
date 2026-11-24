@@ -157,11 +157,11 @@ def test_variant_search_spaces_zero_all_data_weights() -> None:
         )
 
 
-def test_pfr_heat_variant_clis_default_to_physics(monkeypatch) -> None:
+def test_pfr_heat_variant_clis_default_to_both(monkeypatch) -> None:
     """Both PFR-heat entry points expose the same validated variant CLI."""
     for module in (FNO_SCRIPT, HYBRID_SCRIPT, POD_SCRIPT):
         monkeypatch.setattr(module.sys, "argv", [str(SCRIPT_PATH)])
-        assert module.parse_cli_args().variant == "physics"
+        assert module.parse_cli_args().variant == "both"
         for variant in ("both", "data", "physics"):
             monkeypatch.setattr(
                 module.sys,

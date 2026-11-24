@@ -156,10 +156,10 @@ def test_variant_search_spaces_and_data_config(monkeypatch) -> None:
     assert batch["constraint_loss"] == 0.0
 
 
-def test_variant_cli_defaults_to_physics_and_validates_choices(monkeypatch) -> None:
+def test_variant_cli_defaults_to_both_and_validates_choices(monkeypatch) -> None:
     """The transient CLI accepts the three variants and defaults compatibly."""
     monkeypatch.setattr(NEMO_FNO.sys, "argv", [str(SCRIPT_PATH)])
-    assert NEMO_FNO.parse_cli_args().variant == "physics"
+    assert NEMO_FNO.parse_cli_args().variant == "both"
     for variant in ("both", "data", "physics"):
         monkeypatch.setattr(
             NEMO_FNO.sys, "argv", [str(SCRIPT_PATH), "--variant", variant]

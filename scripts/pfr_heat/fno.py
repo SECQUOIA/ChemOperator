@@ -279,7 +279,7 @@ def parse_cli_args():
     """Parse the shared workflow arguments plus the loss variant."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
-        "--variant", choices=("both", "data", "physics"), default="physics"
+        "--variant", choices=("both", "data", "physics"), default="both"
     )
     return parse_args(parser=parser)
 

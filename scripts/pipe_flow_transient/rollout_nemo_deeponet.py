@@ -193,7 +193,7 @@ def make_trainer(config, context, normalizer, n_radial: int, *, pde_name: str,
 
 def parse_cli_args():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--variant", choices=("both", "data", "physics"), default="physics")
+    parser.add_argument("--variant", choices=("both", "data", "physics"), default="both")
     return parse_args(parser=parser)
 
 
