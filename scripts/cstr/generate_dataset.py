@@ -17,7 +17,7 @@ cstr_simulator = CSTRSim(
         "pressure_controller_K": Constant(1e-6),
         # solver controls
         "t_final": Constant(50.0), # s
-        "dt": Constant(2e-2), # Not used when adaptive = True
+        "dt": Constant(2e-2), # Used when adaptive = False
         "adaptive": Constant(False),
     }
 )

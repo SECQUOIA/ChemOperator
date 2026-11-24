@@ -10,7 +10,7 @@ pfr_heat_simulator = PFRHeatSim(
     parameter_space={
         "inlet_flow_a": Uniform(30.0, 80.0),
         "inlet_concentration_a": Uniform(0.05, 0.10),
-        "inlet_temperature": Uniform(350.0, 400.0),
+        "inlet_temperature": Uniform(375.0, 425.0),
         "outer_temperature": Uniform(300.0, 325.0),
         "volumetric_heat_transfer": Constant(4000.0),
         "wall_aspect_ratio_sq": Constant(0.20),
@@ -20,7 +20,7 @@ pfr_heat_simulator = PFRHeatSim(
         "n_axial_points": Constant(101),
         "n_radial_points": Constant(21),
         "tolerance": Constant(1.0e-4),
-        "max_nodes": Constant(5000),
+        "max_nodes": Constant(10000),
     }
 )
 
