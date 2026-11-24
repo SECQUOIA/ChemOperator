@@ -109,8 +109,8 @@ def model_from_config(config: Mapping[str, Any], device: torch.device) -> DeepON
     ).to(device)
 
 
-def search_space() -> dict[str, Any]:
-    return {
+def search_space(variant: str = "physics") -> dict[str, Any]:
+    space = {
         "width": tune.choice([64, 128]),
         "depth": tune.choice([2, 3]),
         "latent_width": tune.choice([16, 32]),
@@ -120,6 +120,13 @@ def search_space() -> dict[str, Any]:
         "batch_size": tune.choice([64, 128, 256]),
         "seed": SEED,
     }
+    if variant == "data":
+        space["physics_weight"] = 0.0
+    elif variant == "physics":
+        space["physics_weight"] = tune.loguniform(*PHYSICS_WEIGHT_RANGE)
+    else:
+        raise ValueError(f"Unknown variant {variant!r}.")
+    return space
 
 
 def physics_mse(
@@ -255,18 +262,12 @@ def main() -> None:
     variants = ("data", "physics") if args.variant == "both" else (args.variant,)
     for variant in variants:
         model_id = MODEL_IDS[variant]
-        space = dict(
-            search_space(),
-            physics_weight=(
-                tune.loguniform(*PHYSICS_WEIGHT_RANGE) if variant == "physics" else 0.0
-            ),
-        )
         run_operator(
             args, PATHS, physics_experiment_spec(args, model_id), dataset_factory,
             lambda config, run_context, selected=variant: make_trainer(
                 dict(config, physics_weight=0.0) if selected == "data" else config, run_context, statistics
             ),
-            space,
+            search_space(variant),
             lambda trainer, data, run_context: evaluate_run(trainer, data, run_context, statistics, args.plot_cases),
             seed=SEED,
         )

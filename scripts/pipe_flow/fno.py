@@ -113,8 +113,8 @@ def model_from_config(config: Mapping[str, Any], device: torch.device) -> FNO:
     ).to(device)
 
 
-def search_space() -> dict[str, Any]:
-    return {
+def search_space(variant: str = "physics") -> dict[str, Any]:
+    space = {
         "modes": tune.choice([8, 16, 32]),
         "hidden_channels": tune.choice([16, 32]),
         "n_layers": tune.choice([3, 4, 5]),
@@ -123,6 +123,13 @@ def search_space() -> dict[str, Any]:
         "batch_size": tune.choice([64, 128, 256]),
         "seed": SEED,
     }
+    if variant == "data":
+        space["physics_weight"] = 0.0
+    elif variant == "physics":
+        space["physics_weight"] = tune.loguniform(1e-4, 1e-1)
+    else:
+        raise ValueError(f"Unknown variant {variant!r}.")
+    return space
 
 
 def physics_losses(
@@ -221,10 +228,7 @@ def main() -> None:
     variants = ("data", "physics") if args.variant == "both" else (args.variant,)
     for variant in variants:
         model_id = MODEL_IDS[variant]
-        space = search_space()
-        space["physics_weight"] = (
-            tune.loguniform(1e-4, 1e-1) if variant == "physics" else 0.0
-        )
+        space = search_space(variant)
         spec = operator_spec(
             args, PATHS, PROBLEM_ID, model_id,
             FIELDS, UNITS, ("r",),
