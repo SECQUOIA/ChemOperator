@@ -90,6 +90,10 @@ class RunPaths:
     def tuning_trials(self) -> Path:
         return self.run_dir / "tuning_trials.csv"
 
+    @property
+    def tuning_progress(self) -> Path:
+        return self.run_dir / "tuning_progress.csv"
+
     def checkpoint(self, suffix: str = ".pt") -> Path:
         if not suffix.startswith(".") or Path(suffix).name != suffix:
             raise ValueError("checkpoint suffix must start with '.' and be a suffix.")
@@ -105,6 +109,7 @@ class RunContext:
     dtype: torch.dtype
     device: torch.device
     provenance: Mapping[str, Any] = field(default_factory=dict)
+    num_workers: int = 0
 
     def __post_init__(self) -> None:
         if not isinstance(self.paths, RunPaths):
@@ -115,6 +120,9 @@ class RunContext:
         if not isinstance(self.dtype, torch.dtype):
             raise TypeError("dtype must be a torch.dtype.")
         object.__setattr__(self, "provenance", dict(self.provenance))
+        if int(self.num_workers) < 0:
+            raise ValueError("num_workers cannot be negative.")
+        object.__setattr__(self, "num_workers", int(self.num_workers))
 
     @classmethod
     def create(
@@ -128,6 +136,7 @@ class RunContext:
         dtype: torch.dtype = torch.float32,
         device: str | torch.device = "cpu",
         provenance: Mapping[str, Any] | None = None,
+        num_workers: int = 0,
     ) -> "RunContext":
         return cls(
             paths=RunPaths.create(runs_root, problem, model, run_id),
@@ -135,6 +144,7 @@ class RunContext:
             dtype=dtype,
             device=torch.device(device),
             provenance={} if provenance is None else provenance,
+            num_workers=num_workers,
         )
 
     def trial(self, trial_id: str) -> "RunContext":
@@ -147,6 +157,7 @@ class RunContext:
             dtype=self.dtype,
             device=self.device,
             provenance={**self.provenance, "trial_id": trial_id},
+            num_workers=self.num_workers,
         )
 
     def seed_child(self, seed: int) -> "RunContext":
@@ -161,6 +172,7 @@ class RunContext:
                 "parent_run_id": self.paths.run_dir.name,
                 "seed": int(seed),
             },
+            num_workers=self.num_workers,
         )
 
 

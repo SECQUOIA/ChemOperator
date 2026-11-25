@@ -156,7 +156,7 @@ class CylindricalWall(PDE):
 class PFRHeatSim(CaseSimulator):
     """Solve the coupled axial PFR/radial-wall boundary-value problem."""
 
-    name = "pfr_cylindrical_heat"
+    name = "pfr_heat"
     species = ("A", "B", "C")
 
     def __init__(

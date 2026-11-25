@@ -28,10 +28,11 @@ from chem_operator.experiments import (
     ExperimentSpec,
     RayRuntimeConfig,
     RunContext,
-    WorkflowStages,
     add_run_arguments,
     add_workflow_arguments,
     fingerprint_path,
+    parse_workflow_args,
+    resolve_data_cache,
 )
 from chem_operator.models import (
     DeepONetAdapter,
@@ -41,7 +42,6 @@ from chem_operator.normalization import ZScoreNormalizer
 
 
 PATHS = ExamplePaths.from_script(__file__, dataset="pipe_flow")
-FILE_STEM = "hagen_poiseuille_pipe_flow"
 PROBLEM_ID = "pipe_flow"
 PROTOCOL_ID = "operator-cartesian-v1"
 FIELDS = ("velocity",)
@@ -53,11 +53,10 @@ RECONSTRUCTION_CASES = 3
 MAX_TRAJECTORIES: int | None = None
 
 MAX_EPOCHS = 20
-NUM_SAMPLES = 8
+NUM_SAMPLES = 15
 MAX_CONCURRENT_TRIALS = 1
 CPUS_PER_TRIAL = 2
 GPUS_PER_TRIAL = 1 if torch.cuda.is_available() else 0
-DATALOADER_WORKERS = 0
 PIN_MEMORY = bool(GPUS_PER_TRIAL)
 RAY_OBJECT_STORE_BYTES = 100 * 1024**2
 
@@ -69,12 +68,14 @@ def parse_args() -> argparse.Namespace:
         parser,
         default_runs_root=PATHS.root / "artifacts" / "runs",
     )
-    return parser.parse_args()
+    args = parse_workflow_args(parser)
+    resolve_data_cache(args, raw_dataset)
+    return args
 
 
-def raw_dataset(split: str) -> ChemOperatorDataset:
+def raw_dataset(split: str, *, preload: bool = False) -> ChemOperatorDataset:
     return ChemOperatorDataset(
-        PATHS.data / f"{FILE_STEM}_{split}.h5",
+        PATHS.data / f"{PROBLEM_ID}_{split}.h5",
         task="operator_cartesian",
         coordinate_name="r",
         input_fields=FIELDS,
@@ -83,6 +84,7 @@ def raw_dataset(split: str) -> ChemOperatorDataset:
         n_steps_input=1,
         n_steps_output=1,
         dtype=torch.float32,
+        preload=preload,
     )
 
 
@@ -132,9 +134,11 @@ def tuning_data(
     context: RunContext,
     *,
     normalizer: ZScoreNormalizer,
+    cache_data: bool = False,
 ) -> Iterator[tuple[DeepONetAdapter, DeepONetAdapter]]:
     del context
-    train_raw, valid_raw = raw_dataset("train"), raw_dataset("valid")
+    train_raw = raw_dataset("train", preload=cache_data)
+    valid_raw = raw_dataset("valid", preload=cache_data)
     try:
         yield (
             adapter(limited(train_raw), normalizer),
@@ -149,8 +153,11 @@ def tuning_data(
 def final_data(
     *,
     normalizer: ZScoreNormalizer,
+    cache_data: bool = False,
 ) -> Iterator[tuple[DeepONetAdapter, DeepONetAdapter, DeepONetAdapter]]:
-    raw = tuple(raw_dataset(split) for split in ("train", "valid", "test"))
+    raw = tuple(
+        raw_dataset(split, preload=cache_data) for split in ("train", "valid", "test")
+    )
     try:
         yield tuple(adapter(limited(item), normalizer) for item in raw)  # type: ignore[misc]
     finally:
@@ -164,7 +171,7 @@ def experiment_spec(model_id: str) -> ExperimentSpec:
         model_id=model_id,
         benchmark_protocol_id=PROTOCOL_ID,
         dataset_fingerprints={
-            name: fingerprint_path(PATHS.data / f"{FILE_STEM}_{split}.h5")
+            name: fingerprint_path(PATHS.data / f"{PROBLEM_ID}_{split}.h5")
             for name, split in (
                 ("train", "train"),
                 ("validation", "valid"),
@@ -179,11 +186,6 @@ def experiment_spec(model_id: str) -> ExperimentSpec:
         tuning_budget={"samples": NUM_SAMPLES, "epochs": MAX_EPOCHS},
         project_root=PATHS.root,
     )
-
-
-def validate_stages(stages: WorkflowStages) -> None:
-    if not (stages.tune or stages.train):
-        raise ValueError("Select --tune or --train.")
 
 
 def tuning_settings() -> DeepONetTuningSettings:
@@ -252,7 +254,7 @@ class PipeData:
 def load_physics_split(data_dir: Path, split: str, maximum: int | None) -> PipeData:
     torch.set_default_device("cpu")
     dataset = ChemOperatorDataset(
-        data_dir / f"hagen_poiseuille_pipe_flow_{split}.h5",
+        data_dir / f"{PROBLEM_ID}_{split}.h5",
         task="operator_cartesian",
         coordinate_name="r",
         input_fields=("velocity",),
@@ -330,4 +332,4 @@ class PhysicsPipeDataset(Dataset):
 
 
 def physics_experiment_spec(args, model_id):
-    return operator_spec(args, PATHS, PROBLEM_ID, model_id, FILE_STEM, FIELDS, UNITS, ("r",))
+    return operator_spec(args, PATHS, PROBLEM_ID, model_id, FIELDS, UNITS, ("r",))

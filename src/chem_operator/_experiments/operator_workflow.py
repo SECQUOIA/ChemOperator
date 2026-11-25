@@ -21,7 +21,10 @@ from .runner import ExperimentRunner, ExperimentSpec
 from .seeds import resolve_train_config, train_final
 from .types import EvaluationOutcome
 from .tuning import Tuner, TuningConfig, RayRuntimeConfig
-from .workflow import WorkflowStages, add_run_arguments, add_workflow_arguments, run_context_from_namespace
+from .workflow import (
+    WorkflowStages, add_run_arguments, add_workflow_arguments, parse_workflow_args,
+    run_context_from_namespace,
+)
 from .artifacts import fingerprint_path
 from .metrics import StreamingRegressionMetrics
 from chem_operator._models.deeponet import relative_l2_loss
@@ -36,20 +39,18 @@ def parse_operator_args(paths, *, epochs, tune_epochs, samples, description=None
     parser.add_argument("--tune-epochs", type=int, default=tune_epochs)
     parser.add_argument("--samples", type=int, default=samples)
     parser.add_argument("--max-cases", type=int, default=None)
-    args = parser.parse_args()
-    if min(args.epochs, args.tune_epochs, args.samples, args.plot_cases) < 1:
-        parser.error("Epochs, samples, and plot cases must be positive.")
+    args = parse_workflow_args(parser)
+    if min(args.epochs, args.tune_epochs, args.samples) < 1:
+        parser.error("Epochs and samples must be positive.")
     if args.max_cases is not None and args.max_cases < 1:
         parser.error("--max-cases must be positive.")
-    if not args.tune and not args.train:
-        parser.error("Select --tune or --train.")
     return args
 
 
-def operator_spec(args, paths, problem, model, stem, fields, units, coordinates, *, channels=None):
+def operator_spec(args, paths, problem, model, fields, units, coordinates, *, channels=None):
     return ExperimentSpec(
         problem_id=problem, model_id=model, benchmark_protocol_id="operator-cartesian-v1",
-        dataset_fingerprints={name: fingerprint_path(args.data_dir / f"{stem}_{split}.h5")
+        dataset_fingerprints={name: fingerprint_path(args.data_dir / f"{problem}_{split}.h5")
                               for name, split in (("train", "train"), ("validation", "valid"), ("test", "test"))},
         fields=fields, channels=channels or fields, units=units, coordinates=coordinates,
         selected_test_case_ids=range(min(args.plot_cases, args.max_cases or args.plot_cases)),
@@ -105,7 +106,7 @@ def run_operator(args, paths, spec, dataset_factory, trainer_factory, search_spa
         gpus = int(context.device.type == "cuda")
         return Tuner(trial_trainer, space, dataset_factory=trial_data, config=TuningConfig(
             metric=f"best_valid_{selection_metric}", mode="min", num_samples=args.samples,
-            max_epochs=args.tune_epochs, grace_period=max(1, args.tune_epochs // 3),
+            max_epochs=args.tune_epochs,
             max_concurrent_trials=1, optuna_seed=context.seed,
             resources_per_trial={"cpu": cpus, "gpu": gpus},
             ray_runtime=operator_ray_runtime(paths, cpus=cpus, gpus=gpus)))

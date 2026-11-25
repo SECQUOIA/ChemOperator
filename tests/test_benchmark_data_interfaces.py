@@ -267,3 +267,51 @@ def test_dataset_channel_resolution_errors_are_explicit(tmp_path) -> None:
             dataset.resolve_species("velocity", "CH4")
     finally:
         dataset.close()
+
+
+def _assert_same_sample(lazy, cached) -> None:
+    if isinstance(lazy, dict):
+        assert lazy.keys() == cached.keys()
+        for key in lazy:
+            _assert_same_sample(lazy[key], cached[key])
+    elif isinstance(lazy, torch.Tensor):
+        assert lazy.dtype == cached.dtype
+        torch.testing.assert_close(lazy, cached, rtol=0, atol=0)
+    else:
+        assert lazy == cached
+
+
+@pytest.mark.parametrize("task", ("next_step", "rollout", "operator_cartesian", "field_map"))
+def test_preload_matches_lazy_samples_and_reads_each_case_once(tmp_path, task) -> None:
+    path = tmp_path / "discovery.h5"
+    _write_discovery_dataset(path)
+    options = dict(
+        task=task,
+        coordinate_name="z",
+        input_fields=("velocity", "X"),
+        output_fields=("velocity",),
+        constant_inputs=("T0", "inlet/pressure"),
+        dtype=torch.float32,
+    )
+    lazy = ChemOperatorDataset(path, **options)
+    cached = ChemOperatorDataset(path, preload=True, **options)
+    try:
+        assert len(cached) == len(lazy)
+        for index in range(len(lazy)):
+            _assert_same_sample(lazy[index], cached[index])
+        assert set(cached._case_cache) == set(cached.case_names)
+
+        # Cached samples must not touch HDF5 or alias the cache.
+        def no_file():
+            raise AssertionError("preloaded dataset reopened HDF5")
+
+        cached._file = no_file
+        first = cached[0]
+        first["input_fields"]["velocity"].add_(1.0)
+        first["constant_inputs"]["T0"].add_(1.0)
+        first["metadata"]["units"]["velocity"] = "mutated"
+        _assert_same_sample(lazy[0], cached[0])
+    finally:
+        lazy.close()
+        cached.close()
+    assert cached._case_cache == {}

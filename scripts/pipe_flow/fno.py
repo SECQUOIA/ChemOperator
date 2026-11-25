@@ -26,7 +26,8 @@ from chem_operator.experiments import (
 from scripts.pipe_flow.common import (
     BRANCH_NAMES,
     FIELDS,
-    FILE_STEM,
+    MAX_EPOCHS,
+    NUM_SAMPLES,
     PATHS,
     PROBLEM_ID,
     UNITS,
@@ -112,16 +113,23 @@ def model_from_config(config: Mapping[str, Any], device: torch.device) -> FNO:
     ).to(device)
 
 
-def search_space() -> dict[str, Any]:
-    return {
-        "modes": tune.choice([8, 16, 24]),
+def search_space(variant: str = "physics") -> dict[str, Any]:
+    space = {
+        "modes": tune.choice([8, 16, 32]),
         "hidden_channels": tune.choice([16, 32]),
-        "n_layers": tune.choice([3, 4]),
-        "learning_rate": tune.loguniform(1e-4, 3e-3),
+        "n_layers": tune.choice([3, 4, 5]),
+        "learning_rate": tune.loguniform(1e-4, 5e-3),
         "weight_decay": tune.loguniform(1e-8, 1e-4),
-        "batch_size": tune.choice([8, 16]),
+        "batch_size": tune.choice([64, 128, 256]),
         "seed": SEED,
     }
+    if variant == "data":
+        space["physics_weight"] = 0.0
+    elif variant == "physics":
+        space["physics_weight"] = tune.loguniform(1e-4, 1e-1)
+    else:
+        raise ValueError(f"Unknown variant {variant!r}.")
+    return space
 
 
 def physics_losses(
@@ -184,8 +192,8 @@ def make_trainer(
         config,
         loss_terms=(
             LossTerm("data_loss", lambda prediction, target, _: nn.functional.mse_loss(prediction, target)),
-            LossTerm("pde_loss", pde, weight),
-            LossTerm("boundary_loss", boundary, weight),
+            LossTerm("pde_loss", pde, weight, physics=True),
+            LossTerm("boundary_loss", boundary, weight, physics=True),
         ),
         metric_adapter=physical_metrics,
         selection_metric="data_loss",
@@ -204,7 +212,9 @@ def make_trainer(
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--variant", choices=("data", "physics", "both"), default="both")
-    args = parse_operator_args(PATHS, epochs=40, tune_epochs=20, samples=8, parser=parser)
+    args = parse_operator_args(
+        PATHS, epochs=2 * MAX_EPOCHS, tune_epochs=MAX_EPOCHS, samples=NUM_SAMPLES, parser=parser
+    )
 
     training = load_physics_split(args.data_dir, "train", args.max_cases)
     statistics = fit_physics_normalization(training)
@@ -218,12 +228,9 @@ def main() -> None:
     variants = ("data", "physics") if args.variant == "both" else (args.variant,)
     for variant in variants:
         model_id = MODEL_IDS[variant]
-        space = search_space()
-        space["physics_weight"] = (
-            tune.loguniform(1e-4, 1e-1) if variant == "physics" else 0.0
-        )
+        space = search_space(variant)
         spec = operator_spec(
-            args, PATHS, PROBLEM_ID, model_id, FILE_STEM,
+            args, PATHS, PROBLEM_ID, model_id,
             FIELDS, UNITS, ("r",),
         )
         run_operator(

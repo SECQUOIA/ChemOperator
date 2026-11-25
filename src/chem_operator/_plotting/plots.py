@@ -3,13 +3,17 @@
 from __future__ import annotations
 
 import csv
+import math
 from collections import defaultdict
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
+from datetime import datetime
 from fnmatch import fnmatchcase
 from pathlib import Path
 
 import numpy as np
+import matplotlib.colors as mcolors
+import matplotlib.dates as mdates
 import matplotlib.pyplot as plt
 
 from chem_operator._experiments.comparison import (
@@ -19,6 +23,8 @@ from chem_operator._experiments.comparison import (
     load_run,
     metric_matrix,
     read_reconstructions,
+    read_tuning_progress,
+    tuning_source_dir,
     validate_model_comparison,
 )
 
@@ -190,7 +196,7 @@ def _plot_reconstructions(
     figure, axes = plt.subplots(
         len(selected_labels),
         n_cases,
-        figsize=(5.2 * n_cases, 2.6 * len(selected_labels)),
+        figsize=(4.5 * n_cases, 2.3 * len(selected_labels)),
         squeeze=False,
         sharex="col",
     )
@@ -268,7 +274,7 @@ def _plot_deeponet_run_reconstructions(
         raise ValueError("selected_labels cannot be empty.")
     if cases < 1:
         raise ValueError("cases must be positive.")
-    samples = [read_reconstructions(run.representative.path) for run in runs]
+    samples = [read_reconstructions(run.best_member.path) for run in runs]
     required = {"case_ids", "coordinates", "reference", "prediction", "labels"}
     for run, sample in zip(runs, samples):
         missing = required.difference(sample)
@@ -322,7 +328,7 @@ def _plot_deeponet_run_reconstructions(
     figure, axes = plt.subplots(
         len(selected_labels),
         n_cases,
-        figsize=(5.2 * n_cases, 2.6 * len(selected_labels)),
+        figsize=(4.5 * n_cases, 2.3 * len(selected_labels)),
         squeeze=False,
         sharex="col",
     )
@@ -482,7 +488,7 @@ def plot_experiment_histories(
         1,
         len(panels),
         squeeze=False,
-        figsize=(7.5 * len(panels), 4.5),
+        figsize=(6.0 * len(panels), 4.0),
     )
     any_values = False
     for axis, panel in zip(axes[0], panels):
@@ -597,12 +603,13 @@ def _select_history_events(history, metrics, splits):
 def member_plot_dirs(run: RunArtifacts, destination: str | Path) -> tuple[tuple[RunArtifacts, Path], ...]:
     """Pair each seed member with its plot directory.
 
-    The representative member is written at ``destination`` so existing
+    The best member (lowest final validation loss, see
+    ``best_validation_member``) is written at ``destination`` so existing
     figure paths stay stable; a multi-seed run additionally writes every
     member under ``destination/seeds/<seed>/``.
     """
     destination = Path(destination)
-    pairs = [(run.representative, destination)]
+    pairs = [(run.best_member, destination)]
     if len(run.seed_members) > 1:
         pairs.extend(
             (member, destination / "seeds" / str(member.seed))
@@ -657,8 +664,33 @@ def plot_experiment_matrix(
     return destination
 
 
-def plot_operator_fields(path, reference, prediction, labels, coordinates, coordinate_names):
-    """Draw channel-first one- or two-dimensional physical fields."""
+def set_log_xscale(axis, values) -> None:
+    """Use a log x-axis, falling back to symlog when ``values`` touch zero or go negative.
+
+    ``values`` may be one array or a sequence of arrays (e.g. one per case).
+    For symlog, the linear region ends at the power of ten at or below the
+    smallest nonzero magnitude, so a grid starting at ``t = 0`` keeps its first
+    point and the ``0`` tick sits a full decade from the first log tick.
+    """
+    arrays = values if isinstance(values, (list, tuple)) else [values]
+    flat = np.concatenate([np.ravel(array) for array in arrays]) if arrays else np.empty(0)
+    if flat.size and np.all(flat > 0.0):
+        axis.set_xscale("log")
+        return
+    nonzero = np.abs(flat[flat != 0.0]).astype(np.float64)
+    # A float32 threshold just under a decade makes matplotlib add a tick
+    # one decade lower, right beside the 0 tick, so compute it in float64.
+    linthresh = 10.0 ** math.floor(math.log10(nonzero.min())) if nonzero.size else 1.0e-12
+    axis.set_xscale("symlog", linthresh=linthresh)
+
+
+def plot_operator_fields(path, reference, prediction, labels, coordinates, coordinate_names,
+                         *, xlog=False):
+    """Draw channel-first one- or two-dimensional physical fields.
+
+    ``xlog`` puts the first coordinate on a log (or symlog, when it includes
+    zero) axis, which spreads out early transients in time-series fields.
+    """
     reference, prediction = np.asarray(reference), np.asarray(prediction)
     if reference.shape != prediction.shape or reference.shape[0] != len(labels):
         raise ValueError("Field shapes and labels do not agree.")
@@ -672,14 +704,14 @@ def plot_operator_fields(path, reference, prediction, labels, coordinates, coord
     coordinates = [np.asarray(values) * axes_display.get(name, (name, 1.0))[1]
                    for values, name in zip(coordinates, names)]
     if dimensions == 1:
-        fig, axes = plt.subplots(len(labels), 1, squeeze=False, figsize=(8, 3 * len(labels)))
+        fig, axes = plt.subplots(len(labels), 1, squeeze=False, figsize=(7, 3 * len(labels)))
         for i, label in enumerate(labels):
             axes[i, 0].plot(coordinates[0], reference[i], label="Reference")
             axes[i, 0].plot(coordinates[0], prediction[i], "--", label="Prediction")
             axes[i, 0].set(xlabel=str(coordinate_names[0]), ylabel=str(label))
             axes[i, 0].legend()
     else:
-        fig, axes = plt.subplots(len(labels), 3, squeeze=False, figsize=(14, 3.5 * len(labels)))
+        fig, axes = plt.subplots(len(labels), 3, squeeze=False, figsize=(12, 3.5 * len(labels)))
         for i, label in enumerate(labels):
             low = min(reference[i].min(), prediction[i].min())
             high = max(reference[i].max(), prediction[i].max())
@@ -689,6 +721,9 @@ def plot_operator_fields(path, reference, prediction, labels, coordinates, coord
                 artist = axes[i, j].pcolormesh(coordinates[0], coordinates[1], field.T, shading="auto", **options)
                 axes[i, j].set(title=f"{label}: {title}", xlabel=str(coordinate_names[0]), ylabel=str(coordinate_names[1]))
                 fig.colorbar(artist, ax=axes[i, j])
+    if xlog:
+        for axis in axes.flat:
+            set_log_xscale(axis, coordinates[0])
     fig.tight_layout()
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -722,11 +757,12 @@ def _check_plot_labels(member: RunArtifacts, labels: Sequence[str] | None) -> No
         raise ValueError(f"Labels not found in {member.path}: {missing}")
 
 
-def plot_operator_runs(run_paths, output_dir, *, cases=2, labels=None):
+def plot_operator_runs(run_paths, output_dir, *, cases=2, labels=None, xlog=False):
     """Plot canonical runs using only their manifest, history, and NPZ arrays.
 
     ``labels`` restricts reconstruction figures to the named channels; by
-    default every saved channel is drawn.
+    default every saved channel is drawn. ``xlog`` draws reconstructions on a
+    log first-coordinate axis (see :func:`set_log_xscale`).
     """
     if cases < 1:
         raise ValueError("cases must be positive.")
@@ -766,9 +802,10 @@ def plot_operator_runs(run_paths, output_dir, *, cases=2, labels=None):
         saved.append(path)
         for member, member_dir in member_plot_dirs(run, destination):
             _check_plot_labels(member, labels)
-            saved.extend(_plot_member_reconstructions(member, member_dir, cases, labels))
+            saved.extend(_plot_member_reconstructions(member, member_dir, cases, labels,
+                                                      xlog=xlog))
     if len(runs) > 1:
-        fig, axis = plt.subplots(figsize=(8, 5))
+        fig, axis = plt.subplots(figsize=(7, 4.5))
         summaries = final_metric_summaries(runs)
         values = {label: summary.mean for label, summary in summaries.items()}
         axis.bar(range(len(values)), list(values.values()),
@@ -784,7 +821,8 @@ def plot_operator_runs(run_paths, output_dir, *, cases=2, labels=None):
 
 
 def _plot_member_reconstructions(member: RunArtifacts, destination: Path, cases: int,
-                                 labels: Sequence[str] | None = None) -> list[Path]:
+                                 labels: Sequence[str] | None = None, *,
+                                 xlog: bool = False) -> list[Path]:
     """Write the first ``cases`` test reconstructions of one seed member."""
     destination = Path(destination)
     destination.mkdir(parents=True, exist_ok=True)
@@ -800,7 +838,8 @@ def _plot_member_reconstructions(member: RunArtifacts, destination: Path, cases:
                     continue
                 saved.append(plot_operator_fields(destination / f"case_{index:02d}_{prefix}.png",
                     data[f"{prefix}_reference"][index][channels], data[f"{prefix}_prediction"][index][channels],
-                    data[f"{prefix}_labels"][channels], [data[axis][index] for axis in axes], axes))
+                    data[f"{prefix}_labels"][channels], [data[axis][index] for axis in axes], axes,
+                    xlog=xlog))
         else:
             if "coordinate_names" in data:
                 axes = data["coordinate_names"].tolist()
@@ -813,5 +852,187 @@ def _plot_member_reconstructions(member: RunArtifacts, destination: Path, cases:
                 coordinates = [data["coordinates"][index].reshape(-1)]
             channels = select_channels(data["labels"], labels)
             saved.append(plot_operator_fields(destination / f"case_{index:02d}.png",
-                reference[channels], prediction[channels], data["labels"][channels], coordinates, axes))
+                reference[channels], prediction[channels], data["labels"][channels], coordinates, axes,
+                xlog=xlog))
     return saved
+
+
+TUNING_PROGRESS_METRIC = "valid_relative_l2"
+TUNING_METRIC_LABELS = {
+    "valid_relative_l2": r"Validation relative $L^2$",
+    "best_valid_relative_l2": r"Best validation relative $L^2$",
+}
+
+
+def _tuning_metric(source: Path, rows: Sequence[Mapping[str, str]]) -> str:
+    """Prefer the per-epoch validation error, else the study's tuning metric."""
+    if any(row.get(TUNING_PROGRESS_METRIC) not in (None, "") for row in rows):
+        return TUNING_PROGRESS_METRIC
+    trials = source / "tuning_trials.csv"
+    if trials.is_file():
+        with trials.open(encoding="utf-8", newline="") as stream:
+            first = next(csv.DictReader(stream), None)
+        if first and first.get("metric"):
+            return str(first["metric"])
+    raise ValueError(
+        f"{source} tuning progress has no {TUNING_PROGRESS_METRIC} and no tuning metric."
+    )
+
+
+def _finite(value: str | None) -> float | None:
+    try:
+        number = float(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return None
+    return number if np.isfinite(number) else None
+
+
+def _tuning_trials(
+    rows: Iterable[Mapping[str, str]], metric: str,
+) -> dict[str, list[tuple[float, float, float]]]:
+    """Group finite, positive ``metric`` reports as ``(iteration, timestamp, value)`` per trial."""
+    trials: dict[str, list[tuple[float, float, float]]] = defaultdict(list)
+    for row in rows:
+        stamp = _finite(row.get("timestamp"))
+        value = _finite(row.get(metric))
+        if stamp is None or value is None or value <= 0.0:
+            continue
+        iteration = _finite(row.get("training_iteration")) or 0.0
+        trials[str(row["trial_id"])].append((iteration, stamp, value))
+    return dict(trials)
+
+
+def _study_start(rows: Iterable[Mapping[str, str]]) -> float:
+    """Earliest trial start: a report's timestamp minus the trial's run time so far."""
+    starts = []
+    for row in rows:
+        stamp = _finite(row.get("timestamp"))
+        if stamp is None:
+            continue
+        starts.append(stamp - (_finite(row.get("time_total_s")) or 0.0))
+    return min(starts)
+
+
+def plot_tuning_comparison(
+    runs: Iterable[RunArtifacts],
+    output: str | Path,
+    *,
+    metric: str = "valid_relative_l2",
+) -> Path | None:
+    """Overlay several models' tuning studies against elapsed study time.
+
+    Each trial is a faint line in its model's color and each study's running
+    best is a bold step line. ``metric`` defaults to the validation relative
+    L2, the one validation value every model reports on a common scale (the
+    tuning objectives themselves are model-specific). Runs whose study is
+    missing or lacks ``metric`` are skipped, and runs that share a study are
+    drawn once. Returns ``None`` when fewer than two studies remain.
+    """
+    studies = []
+    seen: set[Path] = set()
+    for run in runs:
+        source = tuning_source_dir(run.path)
+        if source is None or source.resolve() in seen:
+            continue
+        rows = read_tuning_progress(source)
+        trials = _tuning_trials(rows or [], metric)
+        if not trials:
+            continue
+        seen.add(source.resolve())
+        studies.append((run, _study_start(rows), trials))
+    if len(studies) < 2:
+        return None
+
+    longest = max(stamp - start for _, start, trials in studies
+                  for points in trials.values() for _, stamp, _ in points)
+    scale, unit = (60.0, "min") if longest < 2 * 3600 else (3600.0, "h")
+    model_ids = [str(run.manifest["model_id"]) for run, _, _ in studies]
+    fallback = iter(color for color in plt.colormaps["tab10"].colors
+                    if mcolors.to_hex(color) not in {
+                        mcolors.to_hex(style[0]) for style in MODEL_STYLES.values()})
+    colors: dict[str, object] = {}
+    figure, axis = plt.subplots(figsize=(9.0, 4.5))
+    for (run, start, trials), model_id in zip(studies, model_ids):
+        if model_id not in colors:
+            colors[model_id] = (MODEL_STYLES[model_id][0] if model_id in MODEL_STYLES
+                                else next(fallback, "black"))
+        color = colors[model_id]
+        label = MODEL_LABELS.get(model_id, model_id)
+        if model_ids.count(model_id) > 1:
+            label = f"{label} ({run.path.name})"
+        points = []
+        for trial in trials.values():
+            trial.sort()
+            elapsed = [(stamp - start) / scale for _, stamp, _ in trial]
+            values = [value for _, _, value in trial]
+            axis.plot(elapsed, values, color=color, linewidth=0.8, alpha=0.45)
+            points.extend(zip(elapsed, values))
+        points.sort()
+        axis.plot([point[0] for point in points],
+                  np.minimum.accumulate([point[1] for point in points]),
+                  color=color, linewidth=2.0, drawstyle="steps-post", label=label)
+    axis.set_yscale("log")
+    axis.set_xlim(left=0.0)
+    axis.grid(True, which="major", alpha=0.35)
+    axis.grid(True, which="minor", axis="y", alpha=0.15)
+    axis.set(xlabel=f"Elapsed tuning time [{unit}]",
+             ylabel=TUNING_METRIC_LABELS.get(metric, metric.replace("_", " ")))
+    axis.legend(fontsize=8)
+    figure.tight_layout()
+    destination = Path(output)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    figure.savefig(destination, dpi=200)
+    plt.close(figure)
+    return destination
+
+
+def plot_tuning_progress(
+    run_dir: str | Path,
+    output: str | Path,
+    *,
+    metric: str | None = None,
+) -> Path | None:
+    """Plot every tuning trial's metric against wall-clock time on a log axis.
+
+    Reads the study behind ``run_dir`` (see ``tuning_source_dir``), from the
+    run folder's ``tuning_progress.csv`` or else Ray's ``progress.csv`` files.
+    Returns ``None`` when no tuning progress can be found.
+    """
+    source = tuning_source_dir(run_dir)
+    rows = None if source is None else read_tuning_progress(source)
+    if not rows:
+        return None
+    assert source is not None
+    metric = metric or _tuning_metric(source, rows)
+    trials = {
+        trial_id: [(iteration, datetime.fromtimestamp(stamp), value)
+                   for iteration, stamp, value in points]
+        for trial_id, points in _tuning_trials(rows, metric).items()
+    }
+    if not trials:
+        raise ValueError(f"{source} tuning progress has no positive finite {metric} values.")
+
+    figure, axis = plt.subplots(figsize=(9.0, 4.5))
+    for points in trials.values():
+        points.sort(key=lambda point: (point[0], point[1]))
+        axis.plot([point[1] for point in points], [point[2] for point in points],
+                  linewidth=1.2)
+    axis.set_yscale("log")
+    axis.grid(True, which="major", alpha=0.35)
+    axis.grid(True, which="minor", axis="y", alpha=0.15)
+    stamps = [point[1] for points in trials.values() for point in points]
+    # Hour-only ticks repeat on short studies, so add minutes below 12 hours.
+    if (max(stamps) - min(stamps)).total_seconds() >= 12 * 3600:
+        tick_format, tick_label = "%m-%d %H", "mm-dd hh"
+    else:
+        tick_format, tick_label = "%m-%d %H:%M", "mm-dd hh:mm"
+    axis.xaxis.set_major_formatter(mdates.DateFormatter(tick_format))
+    figure.autofmt_xdate(rotation=30)
+    axis.set(xlabel=f"Wall time ({tick_label})",
+             ylabel=TUNING_METRIC_LABELS.get(metric, metric.replace("_", " ")))
+    figure.tight_layout()
+    destination = Path(output)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    figure.savefig(destination, dpi=200)
+    plt.close(figure)
+    return destination

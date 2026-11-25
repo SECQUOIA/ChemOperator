@@ -25,7 +25,7 @@ SCRIPT_PATH = (
     Path(__file__).resolve().parents[1]
     / "scripts"
     / "pipe_flow_transient"
-    / "transient_fno.py"
+    / "field_fno.py"
 )
 SCRIPT_SPEC = importlib.util.spec_from_file_location(
     "pipe_flow_transient_fno",
@@ -47,7 +47,7 @@ def fixture_fno_data_dir(tmp_path_factory) -> object:
     simulator = TransientHagenPoiseuillePipeFlowSim(
         parameter_space={
             "radius": Uniform(0.8e-3, 1.2e-3),
-            "length": Uniform(0.8, 1.2),
+            "length": Constant(1.0),
             "dynamic_viscosity": Uniform(0.9e-3, 1.1e-3),
             "pressure_drop": Uniform(40.0, 80.0),
             "density": Constant(1000.0),
@@ -85,7 +85,7 @@ def test_fno_adapter_preserves_grid_and_round_trips(
     )
     try:
         sample = adapter[0]
-        assert sample["x"].shape == (4, 8, 8)
+        assert sample["x"].shape == (3, 8, 8)
         assert sample["y"].shape == (1, 8, 8)
         assert sample["t"].shape == (8,)
         assert sample["r"].shape == (8,)
@@ -107,7 +107,7 @@ def test_fno_adapter_preserves_grid_and_round_trips(
 
         model = FNO(
             n_modes=(2, 2),
-            in_channels=4,
+            in_channels=3,
             out_channels=1,
             hidden_channels=4,
             n_layers=2,
@@ -119,46 +119,10 @@ def test_fno_adapter_preserves_grid_and_round_trips(
         dataset.close()
 
 
-def test_fno_inputs_distinguish_pipe_lengths(fno_normalizer, tmp_path):
-    """Different velocity targets must retain their distinguishing input."""
-    simulator = TransientHagenPoiseuillePipeFlowSim()
-    records = []
-    for length in (1.0, 2.0):
-        params = {
-            "radius": 0.001,
-            "length": length,
-            "dynamic_viscosity": 0.001,
-            "pressure_drop": 60.0,
-            "density": 1000.0,
-            "n_time_points": 8,
-            "n_radial_points": 8,
-            "max_fourier_number": 2.0,
-        }
-        record = simulator.run_case(simulator.make_case(params))
-        record.metadata["params"] = params
-        records.append(record)
-    SimulationDatasetGenerator(simulator, tmp_path).save_split("train", records)
-
-    raw, adapter = make_adapter(tmp_path, "train", fno_normalizer, None)
-    try:
-        short, long = adapter[0], adapter[1]
-        torch.testing.assert_close(short["t"], long["t"])
-        torch.testing.assert_close(short["r"], long["r"])
-        short_velocity = adapter.denormalize_output(short["y"])
-        long_velocity = adapter.denormalize_output(long["y"])
-        assert short_velocity.abs().max() > 0
-        torch.testing.assert_close(short_velocity, 2 * long_velocity)
-        assert not torch.equal(short["x"], long["x"])
-        length_channel = CONSTANT_NAMES.index("length")
-        for sample, expected_length in ((short, 1.0), (long, 2.0)):
-            physical_length = fno_normalizer.denormalize(
-                sample["x"][length_channel], "length"
-            )
-            torch.testing.assert_close(
-                physical_length, torch.full_like(physical_length, expected_length)
-            )
-    finally:
-        raw.close()
+def test_fno_inputs_exclude_constant_pipe_length():
+    """Length is fixed across the dataset, so it is not a model input."""
+    assert "length" not in CONSTANT_NAMES
+    assert "length" in FNO_SCRIPT.PHYSICS_CONSTANT_NAMES
 
 
 def test_fno_training_and_plots_smoke(fno_data_dir, fno_normalizer, tmp_path):

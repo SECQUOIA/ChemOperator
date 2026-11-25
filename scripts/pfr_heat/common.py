@@ -11,9 +11,9 @@ from torch.utils.data import Dataset
 from chem_operator.datasets import ChemOperatorDataset
 from chem_operator.example_paths import ExamplePaths
 from chem_operator.normalization import ZScoreNormalizer
-from chem_operator.experiments import parse_operator_args, operator_spec
+from chem_operator.experiments import parse_operator_args, operator_spec, resolve_data_cache
 PATHS = ExamplePaths.from_script(__file__, dataset="pfr_heat")
-FILE_STEM = "pfr_cylindrical_heat"
+PROBLEM_ID = "pfr_heat"
 CHECKPOINT = "coupled_fno.pt"
 SEED = 42
 METRIC = "best_valid_relative_l2"
@@ -33,7 +33,7 @@ WALL_OUTPUTS = ("T_solid",)
 PHYSICS_CONSTANTS = PFR_INPUTS + ("flow_scale", "temperature_scale")
 EXPECTED_PDES = {"reactor": "PlugFlowReactor", "solid": "CylindricalWall"}
 
-TUNE_SAMPLES = 10
+TUNE_SAMPLES = 15
 TUNE_EPOCHS = 60
 FINAL_EPOCHS = 70
 EVALUATION_BATCH_SIZE = 4
@@ -46,14 +46,14 @@ HISTORY_KEYS = (
     "valid_gas_loss", "valid_solid_loss", "valid_bc_loss",
 )
 
-def raw_dataset(data_dir: Path, split: str) -> ChemOperatorDataset:
+def raw_dataset(data_dir: Path, split: str, *, preload: bool = False) -> ChemOperatorDataset:
     return ChemOperatorDataset(
-        data_dir / f"{FILE_STEM}_{split}.h5",
+        data_dir / f"{PROBLEM_ID}_{split}.h5",
         task="field_map", coordinate_name="z",
         input_fields=("F", "T_gas", "T_solid"),
         output_fields=("F", "T_gas", "T_solid"),
         constant_inputs=PHYSICS_CONSTANTS, n_steps_input=1,
-        dtype=torch.float32,
+        dtype=torch.float32, preload=preload,
     )
 
 
@@ -233,22 +233,23 @@ class CoupledPFRHeatDataset(Dataset):
         }
 
 
-def make_adapter(data_dir, split, pfr_normalizer, wall_normalizer, shape):
-    raw = raw_dataset(Path(data_dir), split)
+def make_adapter(data_dir, split, pfr_normalizer, wall_normalizer, shape, *, preload=False):
+    raw = raw_dataset(Path(data_dir), split, preload=preload)
     return raw, CoupledPFRHeatDataset(raw, pfr_normalizer, wall_normalizer, shape)
 
-PROBLEM_ID = "pfr_heat"
 
 def experiment_spec(args, model_id):
-    return operator_spec(args, PATHS, PROBLEM_ID, model_id, FILE_STEM,
+    return operator_spec(args, PATHS, PROBLEM_ID, model_id,
         PFR_OUTPUTS + WALL_OUTPUTS, {"F_A": "mol/s", "F_B": "mol/s", "F_C": "mol/s", "T_gas": "K", "T_solid": "K"},
         {"pfr": ["z"], "wall": ["z", "r"]}, channels={"pfr": list(PFR_OUTPUTS), "wall": list(WALL_OUTPUTS)})
 
 def parse_args(parser=None):
-    return parse_operator_args(
+    args = parse_operator_args(
         PATHS,
         epochs=FINAL_EPOCHS,
         tune_epochs=TUNE_EPOCHS,
         samples=TUNE_SAMPLES,
         parser=parser,
     )
+    resolve_data_cache(args, lambda split: raw_dataset(args.data_dir, split))
+    return args

@@ -15,9 +15,9 @@ from chem_operator._models.deeponet import _PODOnlyDeepONet
 from chem_operator.models import PODTransform, fit_incremental_pod_dataset
 from chem_operator.normalization import normalizer_from_state_dict
 from scripts.pipe_flow_transient.common import (
-    ROLLOUT_CONSTANT_NAMES,
+    BRANCH_CONSTANT_NAMES,
     RolloutDeepXDEGrid,
-    RolloutDeepXDETrainerBase,
+    RolloutTrainerBase,
     make_rollout_adapter,
     prepare_rollout_run,
     rollout_architecture,
@@ -35,14 +35,14 @@ class PODRolloutDeepXDE(RolloutDeepXDEGrid):
     def __init__(self, config: Mapping[str, Any], n_radial: int, pod: PODTransform):
         if pod.output_shape != (n_radial,):
             raise ValueError("POD basis must represent one radial profile.")
-        branch_width = n_radial + len(ROLLOUT_CONSTANT_NAMES) + 2
+        branch_width = n_radial + len(BRANCH_CONSTANT_NAMES) + 2
         super().__init__(
             _PODOnlyDeepONet(branch_width, pod, rollout_architecture(config)),
             n_radial,
         )
 
 
-class PODRolloutDeepXDETrainer(RolloutDeepXDETrainerBase):
+class PODRolloutDeepXDETrainer(RolloutTrainerBase):
     def __init__(self, config, normalizer, n_radial: int, pod: PODTransform):
         self.pod = pod
         super().__init__(
@@ -68,8 +68,10 @@ class PODRolloutDeepXDETrainer(RolloutDeepXDETrainerBase):
 
 
 def fit_rollout_pod(data_dir: Path, normalizer, n_radial: int,
-                    max_cases: int | None = None) -> PODTransform:
-    raw, adapter = make_rollout_adapter(data_dir, "train", normalizer, n_radial)
+                    max_cases: int | None = None, *, preload: bool = False) -> PODTransform:
+    raw, adapter = make_rollout_adapter(
+        data_dir, "train", normalizer, n_radial, preload=preload
+    )
     try:
         selected = (
             adapter if max_cases is None
@@ -90,7 +92,9 @@ def search_space(pod: PODTransform) -> dict[str, Any]:
 
 def main() -> None:
     args, normalizer, n_radial = prepare_rollout_run()
-    pod = fit_rollout_pod(args.data_dir, normalizer, n_radial, args.max_cases)
+    pod = fit_rollout_pod(
+        args.data_dir, normalizer, n_radial, args.max_cases, preload=getattr(args, "cache_data", False)
+    )
     run_rollout_experiment(
         args, normalizer, n_radial, MODEL_ID,
         lambda config, context: PODRolloutDeepXDETrainer(config, normalizer, n_radial, pod),

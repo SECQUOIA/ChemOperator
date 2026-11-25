@@ -51,6 +51,61 @@ from scripts.pfr_heat.fno import (
 )
 
 
+def wall_fno(config: Mapping[str, Any]) -> FNO:
+    """Build the cylindrical-wall FNO shared by the DeepONet hybrids."""
+    return FNO(
+        in_channels=1 + len(WALL_CONDITIONS),
+        out_channels=1,
+        dimension=2,
+        latent_channels=int(config["wall_latent_channels"]),
+        num_fno_layers=int(config["wall_n_layers"]),
+        num_fno_modes=[
+            int(config["wall_modes_z"]),
+            int(config["wall_modes_r"]),
+        ],
+        padding=int(config.get("wall_padding", 4)),
+        decoder_layers=int(config.get("wall_decoder_layers", 1)),
+        decoder_layer_size=int(config.get("wall_decoder_layer_size", 32)),
+        coord_features=True,
+    )
+
+
+def couple_wall(
+    wall: nn.Module,
+    pfr: torch.Tensor,
+    wall_conditions: torch.Tensor,
+    pfr_normalizer,
+    wall_normalizer,
+) -> torch.Tensor:
+    """Feed the predicted gas temperature into the wall FNO."""
+    gas = pfr_normalizer.denormalize(pfr[:, 3], "T_gas")
+    gas = wall_normalizer.normalize(gas, WALL_GAS)
+    gas = gas[..., None].expand(-1, -1, wall_conditions.shape[-1])
+    return wall(torch.cat((gas[:, None], wall_conditions), dim=1))
+
+
+def check_inputs(
+    pfr_branch: torch.Tensor, z: torch.Tensor, wall_conditions: torch.Tensor
+) -> None:
+    """Validate the shared hybrid input shapes."""
+    if pfr_branch.ndim != 2 or pfr_branch.shape[-1] != len(PFR_INPUTS):
+        raise ValueError(
+            f"pfr_branch must have shape [batch, {len(PFR_INPUTS)}]."
+        )
+    if z.ndim != 2 or z.shape[0] != pfr_branch.shape[0]:
+        raise ValueError("z must have shape [batch, n_z].")
+    if (
+        wall_conditions.ndim != 4
+        or wall_conditions.shape[0] != pfr_branch.shape[0]
+        or wall_conditions.shape[1] != len(WALL_CONDITIONS)
+        or wall_conditions.shape[2] != z.shape[1]
+    ):
+        raise ValueError(
+            "wall_conditions must have shape "
+            f"[batch, {len(WALL_CONDITIONS)}, n_z, n_r]."
+        )
+
+
 class CoupledDeepONetFNO(nn.Module):
     """Multi-output reactor DeepONet coupled to a cylindrical-wall FNO."""
 
@@ -77,21 +132,7 @@ class CoupledDeepONetFNO(nn.Module):
             activation_fn=activation,
         )
         self.pfr_bias = nn.Parameter(torch.zeros(len(PFR_OUTPUTS)))
-        self.wall = FNO(
-            in_channels=1 + len(WALL_CONDITIONS),
-            out_channels=1,
-            dimension=2,
-            latent_channels=int(config["wall_latent_channels"]),
-            num_fno_layers=int(config["wall_n_layers"]),
-            num_fno_modes=[
-                int(config["wall_modes_z"]),
-                int(config["wall_modes_r"]),
-            ],
-            padding=int(config.get("wall_padding", 4)),
-            decoder_layers=int(config.get("wall_decoder_layers", 1)),
-            decoder_layer_size=int(config.get("wall_decoder_layer_size", 32)),
-            coord_features=True,
-        )
+        self.wall = wall_fno(config)
 
     def forward(
         self,
@@ -100,34 +141,17 @@ class CoupledDeepONetFNO(nn.Module):
         wall_conditions: torch.Tensor,
     ) -> dict[str, torch.Tensor]:
         """Predict normalized reactor and wall fields for one batch."""
-        if pfr_branch.ndim != 2 or pfr_branch.shape[-1] != len(PFR_INPUTS):
-            raise ValueError(
-                f"pfr_branch must have shape [batch, {len(PFR_INPUTS)}]."
-            )
-        if z.ndim != 2 or z.shape[0] != pfr_branch.shape[0]:
-            raise ValueError("z must have shape [batch, n_z].")
-        if (
-            wall_conditions.ndim != 4
-            or wall_conditions.shape[0] != pfr_branch.shape[0]
-            or wall_conditions.shape[1] != len(WALL_CONDITIONS)
-            or wall_conditions.shape[2] != z.shape[1]
-        ):
-            raise ValueError(
-                "wall_conditions must have shape "
-                f"[batch, {len(WALL_CONDITIONS)}, n_z, n_r]."
-            )
-
+        check_inputs(pfr_branch, z, wall_conditions)
         branch = self.branch(pfr_branch).reshape(
             pfr_branch.shape[0], len(PFR_OUTPUTS), self.latent_width
         )
         trunk = self.trunk((2.0 * z - 1.0).unsqueeze(-1))
         pfr = torch.einsum("bcl,bzl->bcz", branch, trunk)
         pfr = pfr + self.pfr_bias[None, :, None]
-
-        gas = self.pfr_normalizer.denormalize(pfr[:, 3], "T_gas")
-        gas = self.wall_normalizer.normalize(gas, WALL_GAS)
-        gas = gas[..., None].expand(-1, -1, wall_conditions.shape[-1])
-        wall = self.wall(torch.cat((gas[:, None], wall_conditions), dim=1))
+        wall = couple_wall(
+            self.wall, pfr, wall_conditions,
+            self.pfr_normalizer, self.wall_normalizer,
+        )
         return {"pfr": pfr, "wall": wall}
 
 
@@ -158,7 +182,7 @@ def search_space(variant="physics") -> dict[str, Any]:
         "wall_decoder_layer_size": tune.choice([16, 32]),
         "learning_rate": tune.loguniform(1.0e-4, 3.0e-3),
         "weight_decay": tune.loguniform(1.0e-8, 1.0e-4),
-        "batch_size": tune.choice([4, 8]),
+        "batch_size": tune.choice([8, 16, 32]),
     }
     if variant == "data":
         space.update({key: 0.0 for key in PHYSICS_WEIGHT_KEYS})
@@ -179,9 +203,20 @@ MODEL_IDS = {
 MODEL_ID = MODEL_IDS["physics"]
 
 
-def make_trainer(config, context, pfr, wall, shape, *, variant="physics"):
-    """Build the end-to-end data- and physics-informed trainer."""
+# pylint: disable-next=too-many-arguments
+def make_trainer(
+    config, context, pfr, wall, shape, *, variant="physics",
+    build_model=None, metadata=None,
+):
+    """Build the end-to-end data- and physics-informed trainer.
+
+    ``build_model(config)`` replaces the default DeepONet reactor model and
+    ``metadata`` is merged into the checkpoint metadata.
+    """
     config = dict(config)
+    if build_model is None:
+        def build_model(cfg):
+            return model_from_config(cfg, pfr, wall, context.device)
     if variant == "data":
         config.update({key: 0.0 for key in PHYSICS_WEIGHT_KEYS})
     elif variant != "physics":
@@ -200,9 +235,9 @@ def make_trainer(config, context, pfr, wall, shape, *, variant="physics"):
         targets = {"pfr": batch["pfr_y"], "wall": batch["wall_y"]}
         return inputs, targets, batch
 
-    def forward(model, inputs, batch):
+    def forward(model, inputs, batch, *, compute_physics=True):
         prediction = model(*inputs)
-        if physics_active or not model.training:
+        if compute_physics and (physics_active or not model.training):
             batch["physics_losses"] = physics_losses(
                 prediction, batch, pfr, wall, cache
             )
@@ -238,11 +273,12 @@ def make_trainer(config, context, pfr, wall, shape, *, variant="physics"):
                     "physics_losses"
                 ][loss_name],
                 float(config[key]),
+                physics=True,
             )
         )
 
     return OperatorTrainer(
-        lambda cfg: model_from_config(cfg, pfr, wall, context.device),
+        build_model,
         config,
         batch_adapter=adapt,
         forward_adapter=forward,
@@ -261,6 +297,7 @@ def make_trainer(config, context, pfr, wall, shape, *, variant="physics"):
                 "reactor": "PhysicsNeMo FullyConnected DeepONet",
                 "wall": "PhysicsNeMo FNO",
             },
+            **dict(metadata or {}),
         },
     )
 
@@ -359,7 +396,7 @@ def parse_cli_args():
     """Parse the shared workflow arguments plus the loss variant."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
-        "--variant", choices=("both", "data", "physics"), default="physics"
+        "--variant", choices=("both", "data", "physics"), default="both"
     )
     return parse_args(parser=parser)
 
@@ -379,7 +416,7 @@ def main():
             args,
             PATHS,
             experiment_spec(args, model_id),
-            lambda split: make_adapter(args.data_dir, split, pfr, wall, shape),
+            lambda split: make_adapter(args.data_dir, split, pfr, wall, shape, preload=getattr(args, "cache_data", False)),
             lambda config, context, selected=variant: make_trainer(
                 config, context, pfr, wall, shape, variant=selected
             ),

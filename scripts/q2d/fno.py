@@ -17,7 +17,7 @@ import torch
 from chem_operator.models import FNOAdapter
 from chem_operator.normalization import ZScoreNormalizer
 from scripts.q2d.common import (
-    FILE_STEM,
+    PROBLEM_ID,
     LATENCY_WARMUPS,
     LATENCY_REPEATS,
     AMORTIZED_EVALUATION_COUNTS,
@@ -196,7 +196,7 @@ def dataset_generation_costs(data_dir) -> dict[str, float | int]:
     total_seconds = 0.0
     total_cases = 0
     for split in ("train", "valid"):
-        dataset = raw_dataset(data_dir / f"{FILE_STEM}_{split}.h5")
+        dataset = raw_dataset(data_dir / f"{PROBLEM_ID}_{split}.h5")
         try:
             wall_times = [
                 float(dataset[index]["metadata"]["wall_time"])
@@ -370,7 +370,7 @@ def build_cost_model(
         "resolutions": records,
     }
 def search_space():
-    return {'modes_z': tune.choice([4, 5, 6]), 'modes_r': tune.choice([2, 3, 4]), 'hidden_channels': tune.choice([16, 20, 24, 28, 32]), 'n_layers': tune.choice([6, 7, 8, 9]), 'learning_rate': tune.loguniform(0.0001, 0.004), 'weight_decay': tune.loguniform(1e-08, 0.0001), 'batch_size': 2, 'domain_padding': tune.choice([0.0, 0.05, 0.1, 0.15])}
+    return {'modes_z': tune.choice([4, 5, 6]), 'modes_r': tune.choice([2, 3, 4]), 'hidden_channels': tune.choice([16, 32]), 'n_layers': tune.choice([3, 4, 5]), 'learning_rate': tune.loguniform(1e-4, 5e-3), 'weight_decay': tune.loguniform(1e-08, 0.0001), 'batch_size': tune.choice([4, 8, 16]), 'domain_padding': tune.choice([0.0, 0.05, 0.1, 0.15])}
 
 MODEL_ID = "fno"
 

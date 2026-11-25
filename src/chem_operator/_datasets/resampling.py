@@ -8,7 +8,7 @@ from typing import Any
 
 import numpy as np
 import torch
-from torch.utils.data import Dataset
+from torch.utils.data import Dataset, Subset
 
 
 class TrajectoryResamplingDataset(Dataset):
@@ -185,6 +185,30 @@ class TrajectoryResamplingDataset(Dataset):
             "output_coordinates": output_coordinates,
             "metadata": metadata,
         }
+
+    def estimated_cache_nbytes(self) -> int:
+        """Estimate the memory of a fully warmed cache without resampling.
+
+        Each cached sample holds every field on the target grid plus the
+        target coordinate. The wrapped dataset, possibly inside ``Subset``
+        views, must provide ``sample_step_nbytes(index)``.
+        """
+        dataset: Any = self.dataset
+        indices: Sequence[int] = range(len(dataset))
+        while isinstance(dataset, Subset):
+            indices = [int(dataset.indices[index]) for index in indices]
+            dataset = dataset.dataset
+        step_nbytes = getattr(dataset, "sample_step_nbytes", None)
+        if not callable(step_nbytes):
+            raise TypeError(
+                "The wrapped dataset cannot report sample_step_nbytes()."
+            )
+        points = int(self.target_coordinate.numel())
+        coordinate_nbytes = points * self.target_coordinate.element_size()
+        return sum(
+            points * int(step_nbytes(index)) + coordinate_nbytes
+            for index in indices
+        )
 
     def __getitem__(self, index: int) -> dict[str, Any]:
         if self.cache and index in self._cache:

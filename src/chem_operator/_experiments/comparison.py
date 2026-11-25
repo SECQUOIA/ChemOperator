@@ -11,7 +11,7 @@ from __future__ import annotations
 import csv
 import json
 import statistics
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -90,6 +90,15 @@ class RunArtifacts:
         return self.seed_members[0]
 
     @property
+    def best_member(self) -> "RunArtifacts":
+        """The seed member with the lowest final validation loss.
+
+        See :func:`best_validation_member`; plots that show one seed's
+        predictions use this member rather than :attr:`representative`.
+        """
+        return best_validation_member(self)
+
+    @property
     def seed(self) -> int:
         return int(self.manifest["random_seed"])
 
@@ -157,6 +166,40 @@ def _split_aliases(split: str) -> frozenset[str]:
     if split in {"val", "validation"}:
         return frozenset({"val", "validation"})
     return frozenset({split})
+
+
+# Validation metrics tried in order when choosing a run's best seed member.
+SEED_SELECTION_METRICS = ("objective", "relative_l2")
+
+
+def final_validation_value(member: RunArtifacts, metric: str) -> float | None:
+    """Return ``metric`` at the member's last recorded validation epoch."""
+    aliases = _split_aliases("val")
+    events = [event for event in member.history
+              if event.metric == metric and event.split in aliases]
+    if not events:
+        return None
+    return max(events, key=lambda event: event.epoch).value
+
+
+def best_validation_member(run: RunArtifacts) -> RunArtifacts:
+    """Pick the seed member with the lowest final validation loss.
+
+    Uses the first of :data:`SEED_SELECTION_METRICS` that every member
+    recorded (validation ``objective``, else ``relative_l2``), taken at each
+    member's last epoch; test metrics are never consulted. Ties keep the
+    earlier member. Falls back to
+    :attr:`RunArtifacts.representative` when no metric is shared.
+    """
+    members = run.seed_members
+    if len(members) == 1:
+        return members[0]
+    for metric in SEED_SELECTION_METRICS:
+        values = [final_validation_value(member, metric) for member in members]
+        if any(value is None for value in values):
+            continue
+        return members[values.index(min(values))]  # type: ignore[type-var]
+    return run.representative
 
 
 def _load_flat(run_dir: Path, manifest: Mapping[str, Any]) -> RunArtifacts:
@@ -571,3 +614,74 @@ def read_best_config(path: str | Path) -> dict[str, Any]:
     if not isinstance(config, dict) or not config:
         raise ValueError("Best configuration must be a non-empty JSON object.")
     return config
+
+
+# ``resolve_train_config`` labels for hyperparameters tuned by the run itself.
+_OWN_RUN_SOURCES = frozenset({"tuning", "best"})
+RAY_PROGRESS_GLOB = "ray_results/*/*/progress.csv"
+
+
+def train_config_source_chain(
+    train_config_source: str,
+) -> Iterator[tuple[Path, dict[str, Any]]]:
+    """Yield ``(run_dir, manifest)`` along a chain of ``train_config_source`` labels.
+
+    Starts at ``train_config_source`` when it names a run directory and follows
+    each manifest's ``provenance.train_config_source`` until a label that is
+    not a run directory (this run's own tuning, ``best:<run>``, a JSON file).
+    """
+    seen: set[Path] = set()
+    source = train_config_source
+    while source and source not in _OWN_RUN_SOURCES and not source.startswith("best:"):
+        manifest_path = Path(source) / "manifest.json"
+        if not manifest_path.is_file():
+            return
+        resolved = manifest_path.resolve()
+        if resolved in seen:
+            raise ValueError(f"train_config_source cycle through {source}")
+        seen.add(resolved)
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        yield Path(source), manifest
+        source = str((manifest.get("provenance") or {}).get("train_config_source") or "")
+
+
+def _has_tuning_progress(run_dir: Path) -> bool:
+    return (run_dir / "tuning_progress.csv").is_file() or any(run_dir.glob(RAY_PROGRESS_GLOB))
+
+
+def tuning_source_dir(run_dir: str | Path) -> Path | None:
+    """Return the run whose tuning study produced ``run_dir``'s hyperparameters.
+
+    That is ``run_dir`` itself when it tuned, otherwise the run reached by
+    following ``train_config_source`` (e.g. ``--train-config recent``).
+    ``None`` when no run on the chain kept per-trial tuning progress.
+    """
+    for directory, _ in train_config_source_chain(str(run_dir)):
+        if _has_tuning_progress(directory):
+            return directory
+    return None
+
+
+def read_tuning_progress(run_dir: str | Path) -> list[dict[str, str]] | None:
+    """Read every tuning trial's per-iteration reports for one run.
+
+    Prefers the portable ``tuning_progress.csv``; runs tuned before it existed
+    fall back to Ray's ``ray_results/<experiment>/<trial>/progress.csv``.
+    Returns ``None`` when neither is present.
+    """
+    directory = Path(run_dir)
+    portable = directory / "tuning_progress.csv"
+    if portable.is_file():
+        return _read_csv(portable)
+    paths = sorted(directory.glob(RAY_PROGRESS_GLOB))
+    if not paths:
+        return None
+    rows: list[dict[str, str]] = []
+    for path in paths:
+        # Ray names trial folders ``trainable_<trial_id>_<index>_<params>``.
+        parts = path.parent.name.split("_")
+        fallback_id = parts[1] if len(parts) > 1 else path.parent.name
+        for row in _read_csv(path):
+            row["trial_id"] = row.get("trial_id") or fallback_id
+            rows.append(row)
+    return rows

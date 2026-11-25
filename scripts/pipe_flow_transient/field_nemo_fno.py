@@ -21,7 +21,6 @@ from scripts.pipe_flow_transient.common import (
     PHYSICS_CONSTANT_NAMES,
     INPUT_CHANNELS,
     OUTPUT_CHANNELS,
-    FILE_STEM,
     METRIC,
     SEED,
     PDE_REGISTRY,
@@ -185,7 +184,17 @@ def physics_losses(  # pylint: disable=too-many-arguments,too-many-locals
 PHYSICS_WEIGHT_KEYS = ("physics_weight", "constraint_weight")
 
 def search_space(variant="physics"):
-    space = {'modes': tune.choice([6, 8, 10]), 'latent_channels': tune.choice([8, 16]), 'n_layers': tune.choice([3, 4]), 'padding': tune.choice([0, 4, 8]), 'decoder_layers': tune.choice([1, 2]), 'decoder_layer_size': tune.choice([8, 16, 32]), 'learning_rate': tune.loguniform(0.0001, 0.003), 'weight_decay': tune.loguniform(1e-08, 0.0001), 'batch_size': tune.choice([2, 4, 8])}
+    space = {
+        'modes': tune.choice([6, 8, 10]), 
+        'latent_channels': tune.choice([8, 16]), 
+        'n_layers': tune.choice([3, 4]), 
+        'padding': tune.choice([0, 4, 8]), 
+        'decoder_layers': tune.choice([1, 2]), 
+        'decoder_layer_size': tune.choice([8, 16, 32]), 
+        'learning_rate': tune.loguniform(0.0001, 0.003), 
+        'weight_decay': tune.loguniform(1e-08, 0.0001), 
+        'batch_size': tune.choice([2, 4, 8])
+    }
     if variant == "data":
         space.update({key: 0.0 for key in PHYSICS_WEIGHT_KEYS})
     elif variant == "physics":
@@ -216,9 +225,9 @@ def make_trainer(config, context, normalizer, *, pde_name, radial_spacing, varia
         pde_name, radial_spacing=radial_spacing, device=context.device
     )
 
-    def forward(model, inputs, batch):
+    def forward(model, inputs, batch, *, compute_physics=True):
         prediction = model(inputs)
-        if physics_active or not model.training:
+        if compute_physics and (physics_active or not model.training):
             batch["physics_loss"], batch["constraint_loss"] = physics_losses(
                 prediction,
                 batch,
@@ -235,8 +244,8 @@ def make_trainer(config, context, normalizer, *, pde_name, radial_spacing, varia
         lambda cfg: model_from_config(cfg, context.device), config,
         forward_adapter=forward,
         loss_terms=[LossTerm("data_loss", lambda p,t,b: torch_functional.mse_loss(p,t)),
-                    LossTerm("physics_loss", lambda p,t,b: b["physics_loss"], float(config["physics_weight"])),
-                    LossTerm("constraint_loss", lambda p,t,b: b["constraint_loss"], float(config["constraint_weight"]))],
+                    LossTerm("physics_loss", lambda p,t,b: b["physics_loss"], float(config["physics_weight"]), physics=True),
+                    LossTerm("constraint_loss", lambda p,t,b: b["constraint_loss"], float(config["constraint_weight"]), physics=True)],
         metric_adapter=lambda p,t,b: (normalizer.denormalize(p, "velocity"), normalizer.denormalize(t, "velocity")),
         checkpoint_metadata={"normalizer": normalizer.state_dict(), "pde_name": pde_name,
                              "radial_spacing": radial_spacing, "input_channels": list(MODEL_CONSTANT_NAMES),
@@ -252,9 +261,9 @@ def parse_cli_args():
     """Parse the shared workflow arguments plus the loss variant."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
-        "--variant", choices=("both", "data", "physics"), default="physics"
+        "--variant", choices=("both", "data", "physics"), default="both"
     )
-    return parse_args(epochs=20, tune_epochs=15, samples=8, parser=parser)
+    return parse_args(parser=parser)
 
 
 def main():
@@ -270,7 +279,9 @@ def main():
         model_id = MODEL_IDS[variant]
         run_operator(
             args, PATHS, experiment_spec(args, model_id),
-            lambda split: make_adapter(args.data_dir, split, normalizer, args.max_cases),
+            lambda split: make_adapter(
+                args.data_dir, split, normalizer, args.max_cases, preload=getattr(args, "cache_data", False)
+            ),
             lambda config, context, selected=variant: make_trainer(
                 config, context, normalizer, pde_name=pde_name,
                 radial_spacing=spacing, variant=selected

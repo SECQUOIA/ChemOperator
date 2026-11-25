@@ -65,7 +65,7 @@ def adapted(data: Dataset, normalizer) -> fno.PackedBedFNOAdapter:
         data,
         coordinate_name="z",
         target_coordinate=torch.linspace(0.0, fno.BED_LENGTH, fno.GRID_POINTS),
-        cache=False,
+        cache=True,
     )
     return fno.PackedBedFNOAdapter(resampled, normalizer)
 
@@ -79,7 +79,7 @@ def test_adapter_resamples_channels_and_excludes_future_from_input() -> None:
     assert first["y"].shape == (14, fno.GRID_POINTS)
     assert first["z"].shape == (fno.GRID_POINTS,)
     torch.testing.assert_close(first["z"], second["z"])
-    torch.testing.assert_close(first["z"], torch.linspace(0, 0.05, 128))
+    torch.testing.assert_close(first["z"], torch.linspace(0, fno.BED_LENGTH, fno.GRID_POINTS))
     torch.testing.assert_close(first["x"], first["x"][:, :1].expand_as(first["x"]))
     assert data.labels == (
         "T", "P", *(f"X[{i}]" for i in range(4)),
@@ -147,14 +147,14 @@ def test_canonical_cpu_run_checkpoint_and_plot(tmp_path) -> None:
     )
     assert all(np.isfinite(value) for value in result.evaluation.metrics.values())
     recon = result.evaluation.reconstructions
-    assert recon["reference"].shape == (2, 128, 14)
-    assert recon["prediction"].shape == (2, 128, 14)
-    assert recon["coordinates"].shape == (2, 128)
+    assert recon["reference"].shape == (2, fno.GRID_POINTS, 14)
+    assert recon["prediction"].shape == (2, fno.GRID_POINTS, 14)
+    assert recon["coordinates"].shape == (2, fno.GRID_POINTS)
     assert recon["labels"].tolist() == list(test.labels)
     assert load_run(context.paths.run_dir).manifest["status"] == "completed"
     checkpoint = torch.load(context.paths.checkpoint(), map_location="cpu", weights_only=True)
     metadata = checkpoint["metadata"]
-    assert (metadata["input_channels"], metadata["output_channels"], metadata["grid_points"]) == (29, 14, 128)
+    assert (metadata["input_channels"], metadata["output_channels"], metadata["grid_points"]) == (29, 14, fno.GRID_POINTS)
     restored_normalizer = normalizer_from_state_dict(metadata["normalizer"])
     torch.testing.assert_close(
         restored_normalizer.flattened_means["variable"],

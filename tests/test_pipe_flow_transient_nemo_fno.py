@@ -23,7 +23,7 @@ SCRIPT_PATH = (
     Path(__file__).resolve().parents[1]
     / "scripts"
     / "pipe_flow_transient"
-    / "transient_nemo_fno.py"
+    / "field_nemo_fno.py"
 )
 SCRIPT_SPEC = importlib.util.spec_from_file_location(
     "pipe_flow_transient_nemo_fno",
@@ -41,7 +41,7 @@ def fixture_nemo_data_dir(tmp_path_factory) -> object:
     simulator = TransientHagenPoiseuillePipeFlowSim(
         parameter_space={
             "radius": Uniform(0.8e-3, 1.2e-3),
-            "length": Uniform(0.8, 1.2),
+            "length": Constant(1.0),
             "dynamic_viscosity": Uniform(0.9e-3, 1.1e-3),
             "pressure_drop": Uniform(40.0, 80.0),
             "density": Constant(1000.0),
@@ -135,11 +135,31 @@ def test_variant_search_spaces_and_data_config(monkeypatch) -> None:
     assert batch["physics_loss"] == 0.0
     assert batch["constraint_loss"] == 0.0
 
+    physics = NEMO_FNO.make_trainer(
+        small_config(),
+        context,
+        normalizer=Normalizer(),
+        pde_name="TransientHagenPoiseuille",
+        radial_spacing=0.1,
+        variant="physics",
+    )
+    assert [t.name for t in physics.loss_terms if t.physics] == [
+        "physics_loss", "constraint_loss",
+    ]
 
-def test_variant_cli_defaults_to_physics_and_validates_choices(monkeypatch) -> None:
+    class EvalModel(TrainingModel):
+        training = False
+
+    batch = {}
+    physics.forward_adapter(EvalModel(), torch.ones(1), batch, compute_physics=False)
+    assert batch["physics_loss"] == 0.0
+    assert batch["constraint_loss"] == 0.0
+
+
+def test_variant_cli_defaults_to_both_and_validates_choices(monkeypatch) -> None:
     """The transient CLI accepts the three variants and defaults compatibly."""
     monkeypatch.setattr(NEMO_FNO.sys, "argv", [str(SCRIPT_PATH)])
-    assert NEMO_FNO.parse_cli_args().variant == "physics"
+    assert NEMO_FNO.parse_cli_args().variant == "both"
     for variant in ("both", "data", "physics"):
         monkeypatch.setattr(
             NEMO_FNO.sys, "argv", [str(SCRIPT_PATH), "--variant", variant]
@@ -230,7 +250,7 @@ def test_adapter_and_exact_solution_physics_loss(
     )
     try:
         sample = adapter[0]
-        assert sample["x"].shape == (4, 8, 8)
+        assert sample["x"].shape == (3, 8, 8)
         assert sample["y"].shape == (1, 8, 8)
         assert sample["physics_constants"].shape == (5,)
         assert sample["physicsnemo_pde"] == "TransientHagenPoiseuille"

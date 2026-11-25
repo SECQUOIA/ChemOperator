@@ -163,7 +163,7 @@ def _steady_diagnostics(
 class TransientHagenPoiseuillePipeFlowSim(CaseSimulator):
     """Generate exact analytical startup-flow trajectories."""
 
-    name = "transient_hagen_poiseuille_pipe_flow"
+    name = "pipe_flow_transient"
 
     def __init__(
         self,

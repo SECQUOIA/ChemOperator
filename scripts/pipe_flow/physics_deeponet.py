@@ -30,6 +30,8 @@ from chem_operator.experiments import (
 from chem_operator.reactors.pipe_flow.dataset_generator import HagenPoiseuille, hagen_poiseuille_velocity
 from scripts.pipe_flow.common import (
     BRANCH_NAMES,
+    MAX_EPOCHS,
+    NUM_SAMPLES,
     PATHS,
     Normalization,
     PhysicsPipeDataset,
@@ -107,17 +109,24 @@ def model_from_config(config: Mapping[str, Any], device: torch.device) -> DeepON
     ).to(device)
 
 
-def search_space() -> dict[str, Any]:
-    return {
+def search_space(variant: str = "physics") -> dict[str, Any]:
+    space = {
         "width": tune.choice([64, 128]),
         "depth": tune.choice([2, 3]),
         "latent_width": tune.choice([16, 32]),
-        "activation": tune.choice(["silu", "gelu", "tanh"]),
+        "activation": tune.choice(["gelu", "tanh"]),
         "learning_rate": tune.loguniform(1.0e-4, 3.0e-3),
         "weight_decay": tune.loguniform(1.0e-8, 1.0e-4),
-        "batch_size": tune.choice([64, 128]),
+        "batch_size": tune.choice([64, 128, 256]),
         "seed": SEED,
     }
+    if variant == "data":
+        space["physics_weight"] = 0.0
+    elif variant == "physics":
+        space["physics_weight"] = tune.loguniform(*PHYSICS_WEIGHT_RANGE)
+    else:
+        raise ValueError(f"Unknown variant {variant!r}.")
+    return space
 
 
 def physics_mse(
@@ -194,8 +203,8 @@ def make_trainer(config, context, statistics):
     def adapt(batch, device, dtype):
         batch = {k: v.to(device=device,dtype=dtype) for k,v in batch.items()}
         return (batch["branch"],batch["coordinates"],batch["radius"]),batch["y"],batch
-    def forward(model, inputs, batch):
-        if float(config.get("physics_weight",0)) > 0 or not model.training:
+    def forward(model, inputs, batch, *, compute_physics=True):
+        if compute_physics and (float(config.get("physics_weight",0)) > 0 or not model.training):
             prediction,residual = physics_mse(model,physics,*inputs,batch["viscosity"],batch["pressure_gradient"],statistics)
         else:
             prediction = model(*inputs)
@@ -207,7 +216,7 @@ def make_trainer(config, context, statistics):
     return OperatorTrainer(lambda cfg: model_from_config(cfg,context.device),config,
         batch_adapter=adapt,forward_adapter=forward,validation_requires_grad=True,
         loss_terms=[LossTerm("data_loss",lambda p,t,b: torch.nn.functional.mse_loss(p,t)),
-                    LossTerm("physics_loss",lambda p,t,b: b["physics_loss"],float(config.get("physics_weight",0)))],
+                    LossTerm("physics_loss",lambda p,t,b: b["physics_loss"],float(config.get("physics_weight",0)),physics=True)],
         metric_adapter=lambda p,t,b: (physical(p),physical(t)),
         checkpoint_metadata={"normalizer": {name: getattr(statistics,name).cpu() for name in
                             ("branch_mean","branch_std","velocity_mean","velocity_std")},
@@ -237,7 +246,9 @@ def evaluate_run(trainer,data,context,statistics,cases=3):
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--variant", choices=("data", "physics", "both"), default="both")
-    args = parse_operator_args(PATHS, epochs=40, tune_epochs=20, samples=8, parser=parser)
+    args = parse_operator_args(
+        PATHS, epochs=2 * MAX_EPOCHS, tune_epochs=MAX_EPOCHS, samples=NUM_SAMPLES, parser=parser
+    )
 
     verify_exact_residual()
     statistics = fit_physics_normalization(load_physics_split(args.data_dir, "train", args.max_cases))
@@ -251,18 +262,12 @@ def main() -> None:
     variants = ("data", "physics") if args.variant == "both" else (args.variant,)
     for variant in variants:
         model_id = MODEL_IDS[variant]
-        space = dict(
-            search_space(),
-            physics_weight=(
-                tune.loguniform(*PHYSICS_WEIGHT_RANGE) if variant == "physics" else 0.0
-            ),
-        )
         run_operator(
             args, PATHS, physics_experiment_spec(args, model_id), dataset_factory,
             lambda config, run_context, selected=variant: make_trainer(
                 dict(config, physics_weight=0.0) if selected == "data" else config, run_context, statistics
             ),
-            space,
+            search_space(variant),
             lambda trainer, data, run_context: evaluate_run(trainer, data, run_context, statistics, args.plot_cases),
             seed=SEED,
         )

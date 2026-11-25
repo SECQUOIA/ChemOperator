@@ -5,7 +5,6 @@ import gc
 from typing import Any
 
 from common import (
-    DATALOADER_WORKERS,
     MAX_EPOCHS,
     PATHS,
     PIN_MEMORY,
@@ -21,7 +20,6 @@ from common import (
     raw_dataset,
     tuning_data,
     tuning_settings,
-    validate_stages,
 )
 from ray import tune
 
@@ -47,26 +45,28 @@ POD_VARIANCE_THRESHOLD = 0.999
 def search_space(pod_components: int) -> dict[str, Any]:
     return {
         "loss": "relative_l2",
-        "width": tune.choice([512, 768, 1024, 1280]),
+        "width": tune.choice([512, 1024, 2048]),
         "latent_width": pod_components,
         "branch_hidden_layers": tune.choice([2, 3, 4]),
         "trunk_hidden_layers": 0,
         "activation": tune.choice(["gelu", "tanh"]),
-        "learning_rate": tune.loguniform(5e-4, 5e-3),
+        "learning_rate": tune.loguniform(1e-4, 5e-3),
         "weight_decay": tune.loguniform(1e-6, 1e-4),
-        "batch_size": 16,
+        "batch_size": tune.choice([4, 8, 16]),
         "epochs": MAX_EPOCHS,
         "seed": SEED,
     }
 
 
-def prepare_pod(normalizer: ZScoreNormalizer) -> PODTransform:
+def prepare_pod(
+    normalizer: ZScoreNormalizer, num_workers: int = 0
+) -> PODTransform:
     raw = raw_dataset("train")
     try:
         pod = fit_incremental_pod_dataset(
             adapter(limited(raw), normalizer),
             variance_threshold=POD_VARIANCE_THRESHOLD,
-            num_workers=DATALOADER_WORKERS,
+            num_workers=num_workers,
         )
     finally:
         raw.close()
@@ -77,9 +77,8 @@ def prepare_pod(normalizer: ZScoreNormalizer) -> PODTransform:
 def main() -> None:
     args = parse_args()
     stages = WorkflowStages.from_namespace(args)
-    validate_stages(stages)
     normalizer = prepare_normalizer()
-    pod = prepare_pod(normalizer)
+    pod = prepare_pod(normalizer, getattr(args, "num_workers", 0))
     context = run_context_from_namespace(
         args,
         problem=PROBLEM_ID,
@@ -96,10 +95,11 @@ def main() -> None:
             deeponet_tuner(
                 search_space=search_space(pod.n_components),
                 pod=pod,
-                dataset_factory=partial(tuning_data, normalizer=normalizer),
+                dataset_factory=partial(
+                    tuning_data, normalizer=normalizer, cache_data=getattr(args, "cache_data", False)
+                ),
                 context=context,
                 settings=tuning_settings(),
-                num_workers=DATALOADER_WORKERS,
                 pin_memory=PIN_MEMORY,
             ),
             None,
@@ -115,11 +115,12 @@ def main() -> None:
             trainer = DeepONetTrainer(
                 deeponet_training_config(run_config, epoch_multiplier=2.0),
                 pod=pod,
-                num_workers=DATALOADER_WORKERS,
                 pin_memory=PIN_MEMORY,
                 checkpoint_metadata={"normalizer": normalizer.state_dict()},
             )
-            with final_data(normalizer=normalizer) as (training, validation, test):
+            with final_data(
+                normalizer=normalizer, cache_data=getattr(args, "cache_data", False)
+            ) as (training, validation, test):
                 return run_runner.run(
                     trainer,
                     training,

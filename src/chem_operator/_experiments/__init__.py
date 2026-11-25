@@ -18,6 +18,7 @@ from .comparison import (
     RunArtifacts,
     aggregate_history,
     aggregate_metrics,
+    best_validation_member,
     comparison_records,
     final_metric_summaries,
     final_metrics,
@@ -26,10 +27,19 @@ from .comparison import (
     metric_summary_matrix,
     read_best_config,
     read_reconstructions,
+    read_tuning_progress,
     seed_member_dirs,
     shared_history,
+    train_config_source_chain,
+    tuning_source_dir,
     validate_complete_run,
     validate_model_comparison,
+)
+from .data_loading import (
+    DATA_CACHE_MODES,
+    data_loading_provenance,
+    estimate_cache_nbytes,
+    resolve_data_cache,
 )
 from .device import hardware_metadata, resolve_device, resolve_dtype, seed_worker
 from .deeponet_workflow import (
@@ -56,6 +66,7 @@ from .workflow import (
     WorkflowStages,
     add_run_arguments,
     add_workflow_arguments,
+    parse_workflow_args,
     run_context_from_namespace,
 )
 
@@ -75,6 +86,7 @@ __all__ = [
     "MetricSummary",
     "aggregate_history",
     "aggregate_metrics",
+    "best_validation_member",
     "final_metric_summaries",
     "metric_summary_matrix",
     "seed_member_dirs",
@@ -103,6 +115,7 @@ __all__ = [
     "TuningOutcome",
     "WorkflowStages",
     "add_workflow_arguments",
+    "parse_workflow_args",
     "add_run_arguments",
     "build_manifest",
     "count_parameters",
@@ -123,14 +136,21 @@ __all__ = [
     "mse_loss_term",
     "read_best_config",
     "read_reconstructions",
+    "read_tuning_progress",
     "recent_tuned_run",
     "resolve_device",
     "resolve_dtype",
     "resolve_train_config",
     "run_context_from_namespace",
+    "DATA_CACHE_MODES",
+    "data_loading_provenance",
+    "estimate_cache_nbytes",
+    "resolve_data_cache",
     "seed_worker",
     "shared_history",
+    "train_config_source_chain",
     "train_final",
+    "tuning_source_dir",
     "validate_model_comparison",
     "validate_manifest",
 ]

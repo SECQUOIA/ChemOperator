@@ -21,13 +21,12 @@ from chem_operator.example_paths import ExamplePaths
 from chem_operator.models import FNOAdapter, FNOChannel, fit_fno_zscore_normalizer, fit_zscore_normalizer
 from chem_operator.normalization import ZScoreNormalizer, normalizer_from_state_dict
 from chem_operator.reactors.pipe_flow_transient.dataset_generator import TransientHagenPoiseuille
-from chem_operator.experiments import OperatorTrainer, EvaluationOutcome, LossTerm, StreamingRegressionMetrics, parse_operator_args, operator_spec, run_operator
+from chem_operator.experiments import OperatorTrainer, EvaluationOutcome, LossTerm, StreamingRegressionMetrics, parse_operator_args, operator_spec, resolve_data_cache, run_operator
 PATHS = ExamplePaths.from_script(__file__, dataset="pipe_flow_transient")
 
 FIELD_NAMES = ("velocity",)
 MODEL_CONSTANT_NAMES = (
     "radius",
-    "length",
     "dynamic_viscosity",
     "pressure_drop",
 )
@@ -38,9 +37,14 @@ INPUT_CHANNELS = tuple(
     FNOChannel(name, "constant", name) for name in MODEL_CONSTANT_NAMES
 )
 OUTPUT_CHANNELS = (FNOChannel("velocity", "field", "velocity"),)
-FILE_STEM = "transient_hagen_poiseuille_pipe_flow"
+PROBLEM_ID = "pipe_flow_transient"
 METRIC = "best_valid_relative_l2"
 SEED = 42
+
+# One tuning/training budget shared by every rollout and field script.
+TUNE_EPOCHS = 10
+EPOCHS = 2 * TUNE_EPOCHS
+NUM_SAMPLES = 15
 
 PDE_REGISTRY: dict[str, type[PDE]] = {
     TransientHagenPoiseuille.__name__: TransientHagenPoiseuille,
@@ -50,6 +54,14 @@ PDE_REGISTRY: dict[str, type[PDE]] = {
 MAX_TRAIN_TRAJECTORIES = None
 CONSTANT_NAMES = MODEL_CONSTANT_NAMES
 ROLLOUT_CONSTANT_NAMES = PHYSICS_CONSTANT_NAMES
+# Length is constant across the dataset, so it is kept for the physics losses
+# but not fed to the rollout branch network.
+BRANCH_CONSTANT_NAMES = tuple(
+    name for name in ROLLOUT_CONSTANT_NAMES if name != "length"
+)
+_BRANCH_CONSTANT_INDICES = tuple(
+    ROLLOUT_CONSTANT_NAMES.index(name) for name in BRANCH_CONSTANT_NAMES
+)
 class PhysicsFNOAdapter(FNOAdapter):
     """Add PDE provenance and dimensional constants to an FNO sample."""
 
@@ -96,10 +108,10 @@ class PhysicsFNOAdapter(FNOAdapter):
         }
 
 
-def raw_dataset(data_dir: Path, split: str) -> ChemOperatorDataset:
+def raw_dataset(data_dir: Path, split: str, *, preload: bool = False) -> ChemOperatorDataset:
     """Open one complete generated transient trajectory per HDF5 case."""
     return ChemOperatorDataset(
-        data_dir / f"{FILE_STEM}_{split}.h5",
+        data_dir / f"{PROBLEM_ID}_{split}.h5",
         task="operator_cartesian",
         coordinate_name="t",
         input_fields=FIELD_NAMES,
@@ -108,6 +120,7 @@ def raw_dataset(data_dir: Path, split: str) -> ChemOperatorDataset:
         n_steps_input=1,
         n_steps_output=1,
         dtype=torch.float32,
+        preload=preload,
     )
 
 
@@ -147,9 +160,11 @@ def make_adapter(
     split: str,
     normalizer: ZScoreNormalizer,
     maximum: int | None,
+    *,
+    preload: bool = False,
 ) -> tuple[ChemOperatorDataset, PhysicsFNOAdapter]:
     """Return an open raw split and its physics-aware FNO adapter."""
-    dataset = raw_dataset(data_dir, split)
+    dataset = raw_dataset(data_dir, split, preload=preload)
     adapter = PhysicsFNOAdapter(
         dataset,
         normalizer,
@@ -208,26 +223,33 @@ def training_pde_name(data_dir: Path) -> str:
     finally:
         dataset.close()
 
-PROBLEM_ID = "pipe_flow_transient"
-
 def experiment_spec(args, model_id):
-    return operator_spec(args, PATHS, PROBLEM_ID, model_id, FILE_STEM,
+    return operator_spec(args, PATHS, PROBLEM_ID, model_id,
                          FIELD_NAMES, {"velocity": "m/s"}, ("t", "r"))
 
-def parse_args(*, epochs, tune_epochs, samples, parser=None):
-    return parse_operator_args(
+def parse_args(*, parser=None):
+    args = parse_operator_args(
         PATHS,
-        epochs=epochs,
-        tune_epochs=tune_epochs,
-        samples=samples,
+        epochs=EPOCHS,
+        tune_epochs=TUNE_EPOCHS,
+        samples=NUM_SAMPLES,
         parser=parser,
     )
+    # Field and rollout datasets hold the same per-case arrays.
+    resolve_data_cache(args, lambda split: raw_dataset(args.data_dir, split))
+    return args
 
 
-def rollout_raw_dataset(data_dir: Path, split: str, *, full_trajectory: bool = False) -> ChemOperatorDataset:
-    """Read adjacent profile pairs or full trajectories for rollout scoring."""
+def rollout_raw_dataset(
+    data_dir: Path, split: str, *, full_trajectory: bool = False, preload: bool = False
+) -> ChemOperatorDataset:
+    """Read adjacent profile pairs or full trajectories for rollout scoring.
+
+    Each case yields many one-step pairs, so ``preload`` avoids re-reading a
+    case once per pair; full trajectories are one sample per case.
+    """
     return ChemOperatorDataset(
-        data_dir / f"{FILE_STEM}_{split}.h5",
+        data_dir / f"{PROBLEM_ID}_{split}.h5",
         task="operator_cartesian" if full_trajectory else "rollout",
         coordinate_name="t",
         input_fields=FIELD_NAMES,
@@ -236,6 +258,7 @@ def rollout_raw_dataset(data_dir: Path, split: str, *, full_trajectory: bool = F
         n_steps_input=1,
         n_steps_output=1,
         dtype=torch.float32,
+        preload=preload,
     )
 
 
@@ -267,7 +290,7 @@ class RolloutAdapter(Dataset):
         profile = self.normalizer.normalize(velocity, "velocity")
         parameters = torch.stack([
             self.normalizer.normalize(constants[..., index], name)
-            for index, name in enumerate(ROLLOUT_CONSTANT_NAMES)
+            for index, name in zip(_BRANCH_CONSTANT_INDICES, BRANCH_CONSTANT_NAMES)
         ], dim=-1)
         tau, dtau = fourier_times(t_now, t_next, constants)
         return torch.cat((profile, parameters, tau.unsqueeze(-1), dtau.unsqueeze(-1)), dim=-1)
@@ -307,14 +330,15 @@ def fit_rollout_normalizer(data_dir: Path) -> ZScoreNormalizer:
     dataset = rollout_raw_dataset(data_dir, "train", full_trajectory=True)
     try:
         dataset_pde_name(dataset)
-        return fit_zscore_normalizer(dataset, FIELD_NAMES, ROLLOUT_CONSTANT_NAMES)
+        return fit_zscore_normalizer(dataset, FIELD_NAMES, BRANCH_CONSTANT_NAMES)
     finally:
         dataset.close()
 
 
 def make_rollout_adapter(data_dir: Path, split: str, normalizer: ZScoreNormalizer,
-                         n_radial: int) -> tuple[ChemOperatorDataset, RolloutAdapter]:
-    dataset = rollout_raw_dataset(data_dir, split)
+                         n_radial: int, *, preload: bool = False
+                         ) -> tuple[ChemOperatorDataset, RolloutAdapter]:
+    dataset = rollout_raw_dataset(data_dir, split, preload=preload)
     return dataset, RolloutAdapter(dataset, normalizer, n_radial)
 
 
@@ -415,8 +439,9 @@ def rollout_architecture(config: Mapping[str, Any]) -> DeepONetTrainingConfig:
     )
 
 
-class RolloutDeepXDETrainerBase(OperatorTrainer):
-    """Shared rollout losses, metrics, and checkpoint metadata."""
+class RolloutTrainerBase(OperatorTrainer):
+    """Shared rollout losses, metrics, and checkpoint metadata for any
+    ``model(branch, x)`` one-step network."""
 
     def __init__(self, config: Mapping[str, Any], normalizer: ZScoreNormalizer,
                  n_radial: int, *, model_id: str,
@@ -440,7 +465,7 @@ class RolloutDeepXDETrainerBase(OperatorTrainer):
                 "normalizer": normalizer.state_dict(),
                 "n_radial": n_radial,
                 "model_id": model_id,
-                "constant_names": list(ROLLOUT_CONSTANT_NAMES),
+                "constant_names": list(BRANCH_CONSTANT_NAMES),
                 "branch_time_features": ["fourier_time", "fourier_step"],
                 "pod": pod_metadata,
             },
@@ -473,7 +498,7 @@ def rollout_search_space() -> dict[str, Any]:
 
 def prepare_rollout_run():
     """Parse common CLI options and fit training-only preprocessing."""
-    args = parse_args(epochs=20, tune_epochs=10, samples=8)
+    args = parse_args()
     normalizer = fit_rollout_normalizer(args.data_dir)
     raw = rollout_raw_dataset(args.data_dir, "train")
     try:
@@ -494,7 +519,9 @@ def run_rollout_experiment(args, normalizer: ZScoreNormalizer, n_radial: int,
     )
     run_operator(
         args, PATHS, spec,
-        lambda split: make_rollout_adapter(args.data_dir, split, normalizer, n_radial),
+        lambda split: make_rollout_adapter(
+            args.data_dir, split, normalizer, n_radial, preload=getattr(args, "cache_data", False)
+        ),
         trainer_factory,
         search_space,
         lambda trainer, data, context: evaluate_rollout_run(
