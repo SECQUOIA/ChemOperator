@@ -44,8 +44,17 @@ where = ["src"]
 [tool.uv]
 config-settings-package = { scikits-odes-daepack = { setup-args = "-Dc_std=c17" } }
 
+# The experiment scripts are a separate, unpublished package installed editable next to the library for now.
+# Listed under dev group so  `uv sync`/`uv run` can install it.
+[tool.uv.workspace]
+members = ["experiments"]
+
+[tool.uv.sources]
+experiments = { workspace = true }
+
 [dependency-groups]
 dev = [
+    "experiments",
     "huggingface-hub>=1.24.0",
     "pylint>=4.0.6",
     "pytest>=9.1.1",
