@@ -1,4 +1,4 @@
-"""Model-neutral Ray/Optuna orchestration for script-defined search spaces."""
+"""Model-neutral Ray/Optuna orchestration for caller-defined search spaces."""
 
 from __future__ import annotations
 
@@ -10,12 +10,6 @@ from contextlib import AbstractContextManager, nullcontext
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
-
-# These experiments launch local workers in the driver's installed environment.
-# Ray's automatic uv hook otherwise copies the project and installs another
-# environment under its temporary directory. Set this before importing Ray;
-# callers can explicitly opt back in for a distributed deployment.
-os.environ.setdefault("RAY_ENABLE_UV_RUN_RUNTIME_ENV", "0")
 
 from .artifacts import ArtifactStore
 from .trainers import accepts_context
@@ -74,7 +68,7 @@ class RayRuntimeConfig:
 
 @dataclass(frozen=True, slots=True)
 class TuningConfig:
-    """Reusable tuning policy; experiment scripts still define the search space."""
+    """Reusable tuning policy; callers still define the search space."""
 
     metric: str = "valid_relative_l2"
     mode: str = "min"
@@ -201,6 +195,7 @@ class Tuner:
             raise ValueError("experiment_name must be one path component.")
         owned_ray = not ray.is_initialized()
         if owned_ray:
+            _local_ray_defaults()
             ray.init(**self.config.ray_runtime.init_kwargs())
 
         factory_takes_context = (
@@ -340,6 +335,24 @@ class Tuner:
         finally:
             if owned_ray:
                 ray.shutdown()
+
+
+def _local_ray_defaults() -> None:
+    """Set environment defaults for the local Ray cluster that ``Tuner.fit`` starts.
+
+    Variables the caller has already set are kept. Workers run in the driver's
+    installed environment, so Ray's ``uv run`` hook (which copies the project and
+    builds another environment under the Ray temp dir) is off. Ray parses that
+    flag once, when it is first imported, possibly before this module was, so the
+    parsed value is refreshed here. Ray's memory monitor is off as well.
+    """
+    os.environ.setdefault("RAY_ENABLE_UV_RUN_RUNTIME_ENV", "0")
+    os.environ.setdefault("RAY_memory_monitor_refresh_ms", "0")
+    from ray._private import ray_constants
+
+    ray_constants.RAY_ENABLE_UV_RUN_RUNTIME_ENV = ray_constants.env_bool(
+        "RAY_ENABLE_UV_RUN_RUNTIME_ENV", True
+    )
 
 
 def _metric_payload(
