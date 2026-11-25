@@ -30,20 +30,41 @@ from chem_operator._models.deeponet import relative_l2_loss
 
 
 def parse_operator_args(paths, *, epochs, tune_epochs, samples, description=None, parser=None):
+    """Parse the standard operator CLI with the problem's default budgets.
+
+    ``epochs=None`` makes ``--epochs`` an optional override of final-training epochs;
+    read the resolved value with :func:`final_epochs`.
+    """
     parser = parser or argparse.ArgumentParser(description=description)
     add_workflow_arguments(parser)
     add_run_arguments(parser, default_runs_root=paths.root / "artifacts" / "runs")
     parser.add_argument("--data-dir", type=Path, default=paths.data)
-    parser.add_argument("--epochs", type=int, default=epochs)
+    parser.add_argument(
+        "--epochs", type=int, default=epochs,
+        help=("Final-training epochs (default: 2 x --tune-epochs)." if epochs is None
+              else "Final-training epochs (default: %(default)s)."))
     parser.add_argument("--tune-epochs", type=int, default=tune_epochs)
     parser.add_argument("--samples", type=int, default=samples)
     parser.add_argument("--max-cases", type=int, default=None)
     args = parse_workflow_args(parser)
-    if min(args.epochs, args.tune_epochs, args.samples) < 1:
+    if (args.epochs is not None and args.epochs < 1) or min(args.tune_epochs, args.samples) < 1:
         parser.error("Epochs and samples must be positive.")
     if args.max_cases is not None and args.max_cases < 1:
         parser.error("--max-cases must be positive.")
     return args
+
+
+def final_epochs(args) -> int:
+    """Return final-training epochs: ``--epochs`` when given, otherwise ``2 * --tune-epochs``."""
+    epochs = getattr(args, "epochs", None)
+    if epochs is None:
+        tune_epochs = int(args.tune_epochs)
+        if tune_epochs < 1:
+            raise ValueError("--tune-epochs must be positive.")
+        return 2 * tune_epochs
+    if int(epochs) < 1:
+        raise ValueError("--epochs must be positive.")
+    return int(epochs)
 
 
 def operator_spec(args, paths, problem, model, fields, units, coordinates, *, channels=None):
