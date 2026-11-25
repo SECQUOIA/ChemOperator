@@ -115,7 +115,7 @@ class FNOAdapter(Dataset):
         self.input_channels = resolved_inputs
         self.output_channels = resolved_outputs
         self.coordinate_names = resolved_coordinates
-        # Compatibility attributes used by existing scripts and checkpoints.
+        # Compatibility attributes used by existing callers and checkpoints.
         self.field_names = tuple(
             channel.label for channel in self.output_channels
         )

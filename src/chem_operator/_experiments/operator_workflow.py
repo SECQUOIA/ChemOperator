@@ -8,7 +8,6 @@ from __future__ import annotations
 import argparse
 from collections.abc import Mapping
 from contextlib import contextmanager
-import os
 from dataclasses import replace
 from pathlib import Path
 import time
@@ -73,13 +72,15 @@ def opened_datasets(factory, splits, maximum=None):
             raw.close()
 
 
-def operator_ray_runtime(paths, *, cpus, gpus, env=None):
-    """Ray runtime shared by operator tuning: project temp dir and importable scripts."""
-    pythonpath = os.pathsep.join(filter(None, (str(paths.root), str(paths.root / "src"),
-                                               os.environ.get("PYTHONPATH"))))
+def operator_ray_runtime(paths, *, cpus, gpus, runtime_env=None):
+    """Local Ray runtime for operator tuning, with its temporary directory under ``paths.ray``.
+
+    Workers run in the driver's environment and import installed packages, so no
+    ``runtime_env`` is needed locally. A caller targeting a remote cluster may pass
+    one (for example Ray's ``working_dir``, ``py_modules`` or ``pip``); it is used unchanged.
+    """
     return RayRuntimeConfig(temp_dir=paths.ray.resolve(), num_cpus=cpus, num_gpus=gpus,
-                            object_store_memory=100 * 1024**2,
-                            runtime_env={"env_vars": {"PYTHONPATH": pythonpath, **dict(env or {})}})
+                            object_store_memory=100 * 1024**2, runtime_env=runtime_env)
 
 
 def run_operator(args, paths, spec, dataset_factory, trainer_factory, search_space, evaluator,

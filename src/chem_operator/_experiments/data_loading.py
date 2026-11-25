@@ -1,4 +1,4 @@
-"""Resolve machine-dependent data-loading choices for experiment scripts."""
+"""Resolve machine-dependent data-loading choices for experiments."""
 
 from __future__ import annotations
 

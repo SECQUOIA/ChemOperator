@@ -1,0 +1,16 @@
+[project]
+name = "experiments"
+version = "0.1.0"
+description = "Experiment scripts for chem_operator."
+requires-python = ">=3.12"
+dependencies = ["experiment-v2"]
+
+[tool.uv.sources]
+experiment-v2 = { workspace = true }
+
+[build-system]
+requires = ["setuptools>=81.0.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
