@@ -281,14 +281,15 @@ def test_tuning_setup_and_train_validation_factory(data_dir, tmp_path, monkeypat
     def tune_without_ray(runner, tuner, train, validation, **kwargs):
         assert train is validation is None
         assert tuner.config.metric == "best_valid_loss"
-        assert tuner.config.max_epochs == tuner.search_space["epochs"] == 3
+        assert tuner.config.max_epochs == 3
+        assert not {"seed", "epochs"} & set(tuner.search_space)
         assert tuner.config.num_samples == 2
         assert tuner.config.resources_per_trial == {"cpu": 2, "gpu": 0}
         with tuner.dataset_factory(runner.context) as (training, valid):
             assert len(training) == len(valid) == 2
             assert unwrap_dataset(training).dataset.dataset.path.name == "q2d_cmr_train.h5"
             assert unwrap_dataset(valid).dataset.dataset.path.name == "q2d_cmr_valid.h5"
-            trial = tuner.trainer_factory(config())
+            trial = tuner.trainer_factory(config(), context=runner.context)
             assert trial.pod is pod
         assert unwrap_dataset(training).dataset.dataset._file_handle is None
         captured.append(tuner)

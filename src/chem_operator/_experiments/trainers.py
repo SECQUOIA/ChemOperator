@@ -273,6 +273,10 @@ class DeepONetTrainer:
             raise RuntimeError("Prediction loader produced no batches.")
         return torch.cat(predictions)
 
+    def resolved_config(self) -> dict[str, Any]:
+        """Return the training configuration as a JSON-compatible mapping."""
+        return self.config.to_dict()
+
     def save_checkpoint(self, path: str | Path) -> Path:
         if self.model is None or self.coordinate_scaler is None or self._architecture is None:
             raise RuntimeError("Fit or load a DeepONet before saving a checkpoint.")
@@ -826,6 +830,10 @@ class OperatorTrainer:
         if not predictions:
             raise RuntimeError("Prediction loader produced no batches.")
         return _concatenate_batches(predictions)
+
+    def resolved_config(self) -> dict[str, Any]:
+        """Return a copy of the hyperparameter mapping the model is built and trained from."""
+        return dict(self.config)
 
     def save_checkpoint(self, path: str | Path) -> Path:
         if self.model is None:

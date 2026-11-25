@@ -25,6 +25,7 @@ from chem_operator.experiments import (
     run_operator,
 )
 from experiments.pfr_heat.common import (
+    CPUS_PER_TRIAL,
     EXPECTED_PDES,
     PATHS,
     PFR_INPUTS,
@@ -420,6 +421,7 @@ def main():
             lambda trainer, data, context: evaluate_run(
                 trainer, data, context, pfr, wall, args.plot_cases
             ),
+            cpus=CPUS_PER_TRIAL,
         )
 
 

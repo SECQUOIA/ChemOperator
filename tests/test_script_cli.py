@@ -18,6 +18,7 @@ from chem_operator.experiments import (
     final_epochs,
     parse_operator_args,
     parse_workflow_args,
+    run_context_from_namespace,
 )
 
 
@@ -63,7 +64,7 @@ def test_workflow_parsers_report_validation_as_cli_errors(
     monkeypatch.setattr(sys, "argv", ["model.py", *argv])
     for parse in (
         lambda: parse_workflow_args(parser),
-        lambda: parse_operator_args(paths, epochs=1, tune_epochs=1, samples=1),
+        lambda: parse_operator_args(paths, tune_epochs=1, samples=1),
     ):
         with pytest.raises(SystemExit) as error:
             parse()
@@ -93,10 +94,10 @@ def test_model_parsers_validate_before_resolving_cache(problem, monkeypatch, cap
     assert "Traceback" not in stderr
 
 
-def _operator_args(monkeypatch, tmp_path, argv, *, epochs=None, tune_epochs=5):
+def _operator_args(monkeypatch, tmp_path, argv, *, tune_epochs=5):
     monkeypatch.setattr(sys, "argv", ["model.py", *argv])
     paths = SimpleNamespace(root=tmp_path, data=tmp_path)
-    return parse_operator_args(paths, epochs=epochs, tune_epochs=tune_epochs, samples=1)
+    return parse_operator_args(paths, tune_epochs=tune_epochs, samples=1)
 
 
 @pytest.mark.parametrize(
@@ -111,10 +112,17 @@ def test_final_epochs_is_twice_tune_epochs_unless_overridden(
     assert final_epochs(args) == expected
 
 
-def test_explicit_epochs_default_is_still_final(monkeypatch, tmp_path) -> None:
-    args = _operator_args(monkeypatch, tmp_path, [], epochs=40, tune_epochs=20)
-    assert args.epochs == 40
-    assert final_epochs(args) == 40
+@pytest.mark.parametrize(
+    ("argv", "expected"),
+    (([], {"final_epochs": 10, "final_epochs_source": "2x_tune"}),
+     (["--epochs", "3"], {"final_epochs": 3, "final_epochs_source": "override"})),
+)
+def test_run_provenance_records_final_epochs_and_source(
+    argv, expected, monkeypatch, tmp_path,
+) -> None:
+    args = _operator_args(monkeypatch, tmp_path, ["--runs-root", str(tmp_path), *argv])
+    context = run_context_from_namespace(args, problem="p", model="m", seed=1)
+    assert {key: context.provenance[key] for key in expected} == expected
 
 
 @pytest.mark.parametrize("value", ("0", "-2"))

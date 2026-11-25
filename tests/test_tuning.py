@@ -174,3 +174,9 @@ def test_tuner_trial_trainers_skip_validation_physics(tmp_path: Path) -> None:
         None, None, context, storage_path=tmp_path / "results", experiment_name="physics"
     )
     assert outcome.best_metrics["validation_physics"] == 0.0
+
+
+def test_tuning_config_startup_trials_scale_with_samples() -> None:
+    assert TuningConfig(num_samples=15).optuna_startup_trials == 3
+    assert TuningConfig(num_samples=15, optuna_startup_trials=7).optuna_startup_trials == 7
+    assert TuningConfig().reduction_factor == 3

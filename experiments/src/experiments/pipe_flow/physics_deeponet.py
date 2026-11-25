@@ -24,7 +24,7 @@ from chem_operator.experiments import (
     run_operator,
 )
 from chem_operator.reactors.pipe_flow.dataset_generator import HagenPoiseuille, hagen_poiseuille_velocity
-from experiments.pipe_flow.common import MAX_EPOCHS, NUM_SAMPLES, PATHS
+from experiments.pipe_flow.common import CPUS_PER_TRIAL, MAX_EPOCHS, NUM_SAMPLES, PATHS
 from experiments.pipe_flow.physics_data import (
     BRANCH_NAMES,
     Normalization,
@@ -112,7 +112,6 @@ def search_space(variant: str = "physics") -> dict[str, Any]:
         "learning_rate": tune.loguniform(1.0e-4, 3.0e-3),
         "weight_decay": tune.loguniform(1.0e-8, 1.0e-4),
         "batch_size": tune.choice([64, 128, 256]),
-        "seed": SEED,
     }
     if variant == "data":
         space["physics_weight"] = 0.0
@@ -241,7 +240,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--variant", choices=("data", "physics", "both"), default="both")
     args = parse_operator_args(
-        PATHS, epochs=2 * MAX_EPOCHS, tune_epochs=MAX_EPOCHS, samples=NUM_SAMPLES, parser=parser
+        PATHS, tune_epochs=MAX_EPOCHS, samples=NUM_SAMPLES, parser=parser
     )
 
     verify_exact_residual()
@@ -264,6 +263,7 @@ def main() -> None:
             search_space(variant),
             lambda trainer, data, run_context: evaluate_run(trainer, data, run_context, statistics, args.plot_cases),
             seed=SEED,
+            cpus=CPUS_PER_TRIAL,
         )
 
 

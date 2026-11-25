@@ -37,10 +37,11 @@ PROBLEM_ID = "pipe_flow_transient"
 METRIC = "best_valid_relative_l2"
 SEED = 42
 
-# One tuning/training budget shared by every rollout and field script.
+# One tuning budget shared by every rollout and field script; final training runs
+# 2 x --tune-epochs unless --epochs is given.
 TUNE_EPOCHS = 10
-EPOCHS = 2 * TUNE_EPOCHS
 NUM_SAMPLES = 15
+CPUS_PER_TRIAL = 2
 
 PDE_REGISTRY: dict[str, type[PDE]] = {
     TransientHagenPoiseuille.__name__: TransientHagenPoiseuille,
@@ -226,7 +227,6 @@ def experiment_spec(args, model_id):
 def parse_args(*, parser=None):
     args = parse_operator_args(
         PATHS,
-        epochs=EPOCHS,
         tune_epochs=TUNE_EPOCHS,
         samples=NUM_SAMPLES,
         parser=parser,
@@ -524,4 +524,5 @@ def run_rollout_experiment(args, normalizer: ZScoreNormalizer, n_radial: int,
             trainer, data, context, normalizer, args.data_dir, n_radial,
             cases=args.plot_cases, max_cases=args.max_cases,
         ),
+        cpus=CPUS_PER_TRIAL,
     )

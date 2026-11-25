@@ -21,10 +21,8 @@ from chem_operator.experiments import (
     ExperimentRunner,
     LossTerm,
     OperatorTrainer,
-    RayRuntimeConfig,
     StreamingRegressionMetrics,
     Tuner,
-    TuningConfig,
     WorkflowStages,
     final_epochs,
     resolve_train_config,
@@ -35,22 +33,18 @@ from chem_operator.normalization import ZScoreNormalizer
 
 from experiments.packed_bed_1d.common import (
     CONSTANTS,
-    CPUS_PER_TRIAL,
     FIELDS,
-    GPUS_PER_TRIAL,
-    MAX_CONCURRENT_TRIALS,
     PATHS,
     PIN_MEMORY,
     PROBLEM_ID,
-    RAY_OBJECT_STORE_BYTES,
     RESAMPLE_POINTS,
     SEED,
-    TIME_BUDGET_S,
     experiment_spec,
     limited,
     open_raw,
     parse_args,
     prepare_normalizer,
+    tuning_settings,
 )
 
 
@@ -205,7 +199,6 @@ def search_space() -> dict[str, Any]:
         "learning_rate": tune.loguniform(1e-4, 5e-3),
         "weight_decay": tune.loguniform(1e-6, 1e-4),
         "batch_size": tune.choice([16, 32, 64]),
-        "seed": SEED,
     }
 
 
@@ -283,25 +276,6 @@ def evaluate(
     )
 
 
-def tuning_settings(args: argparse.Namespace, seed: int = SEED) -> TuningConfig:
-    return TuningConfig(
-        metric="best_valid_data_loss",
-        mode="min",
-        num_samples=args.samples,
-        max_epochs=args.tune_epochs,
-        max_concurrent_trials=MAX_CONCURRENT_TRIALS,
-        time_budget_s=TIME_BUDGET_S,
-        resources_per_trial={"cpu": CPUS_PER_TRIAL, "gpu": GPUS_PER_TRIAL},
-        optuna_seed=seed,
-        ray_runtime=RayRuntimeConfig(
-            num_cpus=CPUS_PER_TRIAL,
-            num_gpus=GPUS_PER_TRIAL,
-            object_store_memory=RAY_OBJECT_STORE_BYTES,
-            temp_dir=PATHS.ray.resolve(),
-        ),
-    )
-
-
 def main() -> None:
     args = parse_args(cache_factory=resampled_split)
     stages = WorkflowStages.from_namespace(args)
@@ -325,8 +299,8 @@ def main() -> None:
         tuning = runner.tune(
             Tuner(
                 trial_trainer,
-                {**search_space(), "epochs": args.tune_epochs},
-                config=tuning_settings(args, context.seed),
+                search_space(),
+                config=tuning_settings(args, context, metric="best_valid_data_loss"),
                 dataset_factory=trial_data,
             ),
             None,

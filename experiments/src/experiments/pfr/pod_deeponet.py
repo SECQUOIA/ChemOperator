@@ -25,9 +25,9 @@ from ray import tune
 from chem_operator.experiments import (
     DeepONetTrainer,
     ExperimentRunner,
+    Tuner,
     WorkflowStages,
     deeponet_training_config,
-    deeponet_tuner,
     evaluate_deeponet,
     final_epochs,
     resolve_train_config,
@@ -42,7 +42,7 @@ MODEL_ID = "pod_deeponet"
 POD_VARIANCE_THRESHOLD = 0.999
 
 
-def search_space(pod_components: int, epochs: int) -> dict[str, Any]:
+def search_space(pod_components: int) -> dict[str, Any]:
     return {
         "loss": "relative_l2",
         "width": tune.choice([512, 1024]),
@@ -53,8 +53,6 @@ def search_space(pod_components: int, epochs: int) -> dict[str, Any]:
         "learning_rate": tune.loguniform(1e-4, 5e-3),
         "weight_decay": tune.loguniform(1e-6, 1e-4),
         "batch_size": tune.choice([8, 16, 32]),
-        "epochs": epochs,
-        "seed": SEED,
     }
 
 
@@ -89,16 +87,24 @@ def main() -> None:
     tuning = None
     result = None
 
+    def make_trainer(config, context=None):
+        """Build the trainer for tuning trials and final training alike."""
+        del context
+        return DeepONetTrainer(
+            deeponet_training_config(config),
+            pod=pod,
+            pin_memory=PIN_MEMORY,
+            checkpoint_metadata={"normalizer": normalizer.state_dict()},
+        )
+
     if stages.tune:
         PATHS.ray.mkdir(parents=True, exist_ok=True)
         tuning = runner.tune(
-            deeponet_tuner(
-                search_space=search_space(pod.n_components, args.tune_epochs),
-                pod=pod,
+            Tuner(
+                make_trainer,
+                search_space(pod.n_components),
+                config=tuning_settings(args, context),
                 dataset_factory=partial(tuning_data, args=args, normalizer=normalizer),
-                context=context,
-                settings=tuning_settings(args),
-                pin_memory=PIN_MEMORY,
             ),
             None,
             None,
@@ -111,12 +117,7 @@ def main() -> None:
         config["epochs"] = final_epochs(args)
 
         def train_one(run_runner, run_context, run_config):
-            trainer = DeepONetTrainer(
-                deeponet_training_config(run_config),
-                pod=pod,
-                pin_memory=PIN_MEMORY,
-                checkpoint_metadata={"normalizer": normalizer.state_dict()},
-            )
+            trainer = make_trainer(run_config, run_context)
             with final_data(args, normalizer=normalizer) as (training, validation, test):
                 return run_runner.run(
                     trainer,

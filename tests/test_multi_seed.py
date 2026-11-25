@@ -226,7 +226,7 @@ def test_run_operator_passes_tune_seed_to_optuna(tmp_path: Path, monkeypatch) ->
     monkeypatch.setattr(operator_workflow, "Tuner", fake_tuner)
     monkeypatch.setattr("sys.argv", ["fno.py", "--no-train", "--tune-seed", "19", "--device", "cpu",
                                      "--runs-root", str(tmp_path / "runs"), "--run-id", "r"])
-    args = operator_workflow.parse_operator_args(paths, epochs=1, tune_epochs=1, samples=1)
+    args = operator_workflow.parse_operator_args(paths, tune_epochs=1, samples=1)
     with pytest.raises(Captured) as captured:
         operator_workflow.run_operator(
             args, paths, spec(tmp_path), lambda split: (Raw(), TinyFields()),

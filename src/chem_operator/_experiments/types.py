@@ -238,3 +238,6 @@ class Trainer(Protocol):
 
     def load_checkpoint(self, path: str | Path, context: RunContext) -> None:
         """Load a checkpoint onto ``context.device``."""
+
+    def resolved_config(self) -> Mapping[str, Any]:
+        """Return the JSON-compatible hyperparameters this trainer trains with."""

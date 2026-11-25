@@ -154,7 +154,7 @@ def test_both_variants_have_independent_model_ids(monkeypatch, tmp_path):
     monkeypatch.setattr(script, "experiment_spec", lambda _args, model_id: SimpleNamespace(model_id=model_id, benchmark_protocol_id="other"))
     monkeypatch.setattr(script, "replace", lambda spec, **kwargs: spec)
     calls = []
-    monkeypatch.setattr(script, "run_operator", lambda _args, _paths, spec, _data, _trainer, space, _eval: calls.append((spec.model_id, space)))
+    monkeypatch.setattr(script, "run_operator", lambda _args, _paths, spec, _data, _trainer, space, _eval, **_options: calls.append((spec.model_id, space)))
     script.main()
     assert [item[0] for item in calls] == ["nemo_deeponet_data", "nemo_deeponet_physics"]
     assert calls[0][1]["physics_weight"] == 0.0

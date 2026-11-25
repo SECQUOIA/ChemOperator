@@ -21,6 +21,7 @@ from chem_operator.experiments import (
 from experiments.pipe_flow_transient.common import (
     BRANCH_CONSTANT_NAMES,
     FIELD_NAMES,
+    CPUS_PER_TRIAL,
     PATHS,
     PDE_REGISTRY,
     RolloutAdapter,
@@ -226,6 +227,7 @@ def main():
                 trainer, data, context, normalizer, args.data_dir, n_radial,
                 cases=args.plot_cases, max_cases=args.max_cases,
             ),
+            cpus=CPUS_PER_TRIAL,
         )
 
 

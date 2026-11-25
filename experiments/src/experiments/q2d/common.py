@@ -22,15 +22,12 @@ from chem_operator.models import (
 from chem_operator.normalization import ZScoreNormalizer
 from chem_operator.experiments import (
     DeepONetTrainer,
-    DeepONetTuningSettings,
     EvaluationOutcome,
     OperatorTrainer,
     LossTerm,
     RunContext,
     deeponet_training_config,
-    deeponet_tuner,
     evaluate_fields,
-    operator_ray_runtime,
     operator_spec,
     parse_operator_args,
     resolve_data_cache,
@@ -45,13 +42,11 @@ SEED = 42
 METRIC = "best_valid_loss"
 
 TUNE_SAMPLES = 15
+# Default for --tune-epochs; final training runs 2 x --tune-epochs unless --epochs is given.
 TUNE_EPOCHS = 30
-FINAL_EPOCHS = 100
 EVALUATION_BATCH_SIZE = 2
 
 CPUS_PER_TRIAL = 2
-GPUS_PER_TRIAL = 1 if torch.cuda.is_available() else 0
-MAX_CONCURRENT_TRIALS = 1
 
 LATENCY_WARMUPS = 5
 LATENCY_REPEATS = 20
@@ -416,7 +411,7 @@ def parse_args(*, model_name: str = "FNO", benchmark: bool = True):
     if benchmark:
         parser.add_argument("--benchmark", action=argparse.BooleanOptionalAction, default=True,
                             help="Evaluate available mesh-sweep files and save cost and superresolution artifacts.")
-    args = parse_operator_args(PATHS, epochs=FINAL_EPOCHS, tune_epochs=TUNE_EPOCHS, samples=TUNE_SAMPLES, parser=parser)
+    args = parse_operator_args(PATHS, tune_epochs=TUNE_EPOCHS, samples=TUNE_SAMPLES, parser=parser)
     resolve_data_cache(args, lambda split: raw_dataset(args.data_dir / f"{PROBLEM_ID}_{split}.h5"))
     return args
 
@@ -488,6 +483,7 @@ def run_model(
         search_space,
         evaluate_run,
         selection_metric="data_loss",
+        cpus=CPUS_PER_TRIAL,
         after_run=partial(
             after_run, data_dir=args.data_dir, normalizer=normalizer,
             geometry=geometry, shape=shape,
@@ -622,8 +618,6 @@ def deeponet_search_space() -> dict[str, Any]:
         "learning_rate": tune.loguniform(1e-4, 5e-3),
         "weight_decay": tune.loguniform(1e-8, 1e-4),
         "batch_size": tune.choice([4, 8, 16]),
-        "epochs": TUNE_EPOCHS,
-        "seed": SEED,
     }
 
 
@@ -676,23 +670,8 @@ def run_deeponet(
             pin_memory=context.device.type == "cuda", checkpoint_metadata=metadata,
         )
 
-    def tuner_factory(_trial_trainer, space, trial_data, context):
-        gpus = int(context.device.type == "cuda")
-        return deeponet_tuner(
-            search_space=space, pod=pod, dataset_factory=trial_data, context=context,
-            settings=DeepONetTuningSettings(
-                max_epochs=args.tune_epochs, num_samples=args.samples,
-                max_concurrent_trials=MAX_CONCURRENT_TRIALS,
-                cpus_per_trial=CPUS_PER_TRIAL, gpus_per_trial=gpus,
-                ray_runtime=operator_ray_runtime(
-                    PATHS, cpus=CPUS_PER_TRIAL, gpus=gpus,
-                ),
-            ),
-            pin_memory=bool(gpus),
-        )
-
     return run_operator(
         args, PATHS, experiment_spec(args, model_id), dataset_factory, trainer_factory,
         search_space, partial(evaluate_q2d_deeponet, cases=args.plot_cases),
-        seed=SEED, cpus=CPUS_PER_TRIAL, tuner_factory=tuner_factory,
+        seed=SEED, selection_metric="loss", cpus=CPUS_PER_TRIAL,
     )

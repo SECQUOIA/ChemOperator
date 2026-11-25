@@ -181,7 +181,7 @@ def test_both_variant_uses_explicit_independent_model_ids(monkeypatch, tmp_path)
     monkeypatch.setattr(
         NEMO_FNO,
         "run_operator",
-        lambda _args, _paths, spec, _data, _trainer, space, _evaluator: calls.append(
+        lambda _args, _paths, spec, _data, _trainer, space, _evaluator, **_options: calls.append(
             (spec.model_id, space)
         ),
     )

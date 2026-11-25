@@ -23,6 +23,7 @@ from experiments.pipe_flow.common import (
     FIELDS,
     MAX_EPOCHS,
     NUM_SAMPLES,
+    CPUS_PER_TRIAL,
     PATHS,
     PROBLEM_ID,
     UNITS,
@@ -119,7 +120,6 @@ def search_space(variant: str = "physics") -> dict[str, Any]:
         "learning_rate": tune.loguniform(1e-4, 5e-3),
         "weight_decay": tune.loguniform(1e-8, 1e-4),
         "batch_size": tune.choice([64, 128, 256]),
-        "seed": SEED,
     }
     if variant == "data":
         space["physics_weight"] = 0.0
@@ -211,7 +211,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--variant", choices=("data", "physics", "both"), default="both")
     args = parse_operator_args(
-        PATHS, epochs=2 * MAX_EPOCHS, tune_epochs=MAX_EPOCHS, samples=NUM_SAMPLES, parser=parser
+        PATHS, tune_epochs=MAX_EPOCHS, samples=NUM_SAMPLES, parser=parser
     )
 
     training = load_physics_split(args.data_dir, "train", args.max_cases)
@@ -245,6 +245,7 @@ def main() -> None:
             ),
             seed=SEED,
             selection_metric="data_loss",
+            cpus=CPUS_PER_TRIAL,
         )
 
 

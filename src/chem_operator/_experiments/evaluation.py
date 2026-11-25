@@ -20,14 +20,11 @@ from .types import EvaluationOutcome, RunContext
 def deeponet_training_config(
     config: Mapping[str, Any],
     *,
-    epoch_multiplier: float = 1.0,
     display_every: int = 10,
 ) -> DeepONetTrainingConfig:
-    if epoch_multiplier <= 0:
-        raise ValueError("epoch_multiplier must be positive.")
     return DeepONetTrainingConfig(
         loss=str(config.get("loss", "relative_l2")),
-        epochs=max(1, int(int(config["epochs"]) * epoch_multiplier)),
+        epochs=max(1, int(config["epochs"])),
         learning_rate=float(config["learning_rate"]),
         weight_decay=float(config.get("weight_decay", 0.0)),
         batch_size=int(config["batch_size"]),

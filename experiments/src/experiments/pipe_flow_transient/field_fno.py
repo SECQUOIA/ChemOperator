@@ -9,6 +9,7 @@ import torch
 from chem_operator.experiments import OperatorTrainer, LossTerm
 from chem_operator.experiments import run_operator, evaluate_fields
 from experiments.pipe_flow_transient.common import (
+    CPUS_PER_TRIAL,
     PATHS,
     FIELD_NAMES,
     MODEL_CONSTANT_NAMES,
@@ -68,7 +69,8 @@ def main():
             ),
         lambda config, context: make_trainer(config, context, normalizer), search_space(),
         lambda trainer, data, context: evaluate_fields(trainer, data, context,
-            labels=FIELD_NAMES, coordinate_names=("t", "r"), cases=args.plot_cases), selection_metric="data_loss")
+            labels=FIELD_NAMES, coordinate_names=("t", "r"), cases=args.plot_cases), selection_metric="data_loss",
+        cpus=CPUS_PER_TRIAL)
 
 if __name__ == "__main__":
     main()

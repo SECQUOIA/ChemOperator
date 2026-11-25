@@ -32,12 +32,11 @@ PHYSICS_CONSTANTS = PFR_INPUTS + ("flow_scale", "temperature_scale")
 EXPECTED_PDES = {"reactor": "PlugFlowReactor", "solid": "CylindricalWall"}
 
 TUNE_SAMPLES = 15
+# Default for --tune-epochs; final training runs 2 x --tune-epochs unless --epochs is given.
 TUNE_EPOCHS = 60
-FINAL_EPOCHS = 70
 EVALUATION_BATCH_SIZE = 4
-CPUS_PER_TRIAL = 2
-GPUS_PER_TRIAL = int(torch.cuda.is_available())
 MAX_CONCURRENT_TRIALS = 1
+CPUS_PER_TRIAL = 2
 HISTORY_KEYS = (
     "data_loss", "species_loss", "gas_loss", "solid_loss", "bc_loss",
     "total_loss", "valid_relative_l2", "valid_species_loss",
@@ -244,7 +243,6 @@ def experiment_spec(args, model_id):
 def parse_args(parser=None):
     args = parse_operator_args(
         PATHS,
-        epochs=FINAL_EPOCHS,
         tune_epochs=TUNE_EPOCHS,
         samples=TUNE_SAMPLES,
         parser=parser,

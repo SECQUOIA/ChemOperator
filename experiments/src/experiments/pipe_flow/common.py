@@ -20,10 +20,10 @@ from chem_operator.datasets import (
 )
 from experiments.paths import example_paths
 from chem_operator.experiments import (
-    DeepONetTuningSettings,
     ExperimentSpec,
-    RayRuntimeConfig,
     RunContext,
+    TuningConfig,
+    build_tuning_config,
     fingerprint_path,
     parse_operator_args,
     resolve_data_cache,
@@ -50,15 +50,12 @@ MAX_EPOCHS = 20
 NUM_SAMPLES = 15
 MAX_CONCURRENT_TRIALS = 1
 CPUS_PER_TRIAL = 2
-GPUS_PER_TRIAL = 1 if torch.cuda.is_available() else 0
-PIN_MEMORY = bool(GPUS_PER_TRIAL)
-RAY_OBJECT_STORE_BYTES = 100 * 1024**2
+PIN_MEMORY = torch.cuda.is_available()
 
 
 def parse_args() -> argparse.Namespace:
     args = parse_operator_args(
         PATHS,
-        epochs=None,
         tune_epochs=MAX_EPOCHS,
         samples=NUM_SAMPLES,
         description=__doc__,
@@ -193,17 +190,17 @@ def experiment_spec(model_id: str, args: argparse.Namespace) -> ExperimentSpec:
     )
 
 
-def tuning_settings(args: argparse.Namespace) -> DeepONetTuningSettings:
-    return DeepONetTuningSettings(
-        max_epochs=args.tune_epochs,
-        num_samples=args.samples,
-        max_concurrent_trials=MAX_CONCURRENT_TRIALS,
+def tuning_settings(
+    args: argparse.Namespace, context: RunContext, *, metric: str = "best_valid_loss"
+) -> TuningConfig:
+    """Tuning policy of the hand-built scripts here; GPUs per trial follow ``--device``."""
+    return build_tuning_config(
+        metric=metric,
+        samples=args.samples,
+        epochs=args.tune_epochs,
+        seed=context.seed,
+        device=context.device,
         cpus_per_trial=CPUS_PER_TRIAL,
-        gpus_per_trial=GPUS_PER_TRIAL,
-        ray_runtime=RayRuntimeConfig(
-            num_cpus=CPUS_PER_TRIAL,
-            num_gpus=GPUS_PER_TRIAL,
-            object_store_memory=RAY_OBJECT_STORE_BYTES,
-            temp_dir=PATHS.ray.resolve(),
-        ),
+        max_concurrent_trials=MAX_CONCURRENT_TRIALS,
+        temp_dir=PATHS.ray,
     )

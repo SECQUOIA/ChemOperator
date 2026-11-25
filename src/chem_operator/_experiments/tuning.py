@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import os
 import time
 import warnings
@@ -10,6 +11,8 @@ from contextlib import AbstractContextManager, nullcontext
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+
+import torch
 
 from .artifacts import ArtifactStore
 from .trainers import accepts_context
@@ -135,7 +138,12 @@ class TuningOutcome:
 
 
 class Tuner:
-    """Run or resume Ray Tune with one standardized ASHA/Optuna policy."""
+    """Run or resume Ray Tune with one standardized ASHA/Optuna policy.
+
+    ``trainer_factory(config[, context=...])`` receives each sampled configuration
+    with ``seed`` set to the trial context's seed and ``epochs`` set to
+    ``config.max_epochs``, so the search space must not define either.
+    """
 
     def __init__(
         self,
@@ -150,6 +158,12 @@ class Tuner:
             raise ValueError("search_space cannot be empty.")
         if (trainer_factory is None) == (objective is None):
             raise ValueError("Provide exactly one of trainer_factory or objective.")
+        reserved = sorted(_INJECTED_KEYS & set(search_space))
+        if trainer_factory is not None and reserved:
+            raise ValueError(
+                f"search_space must not define {reserved}: the tuner sets 'seed' from the "
+                "trial context and 'epochs' from max_epochs."
+            )
         self.trainer_factory = trainer_factory
         self.objective = objective
         self.search_space = dict(search_space)
@@ -230,10 +244,15 @@ class Tuner:
                     )
                 else:
                     assert self.trainer_factory is not None
+                    trainer_config = {
+                        **trial_config,
+                        "seed": trial_context.seed,
+                        "epochs": self.config.max_epochs,
+                    }
                     trainer = (
-                        self.trainer_factory(trial_config, context=trial_context)
+                        self.trainer_factory(trainer_config, context=trial_context)
                         if factory_takes_context
-                        else self.trainer_factory(trial_config)
+                        else self.trainer_factory(trainer_config)
                     )
                     if hasattr(trainer, "reporter"):
                         trainer.reporter = report
@@ -335,6 +354,61 @@ class Tuner:
         finally:
             if owned_ray:
                 ray.shutdown()
+
+
+# Trainer-config keys the tuner supplies for every trial.
+_INJECTED_KEYS = frozenset({"seed", "epochs"})
+
+
+def build_tuning_config(  # pylint: disable=too-many-arguments
+    *,
+    metric: str,
+    samples: int,
+    epochs: int,
+    seed: int,
+    device: torch.device | str,
+    cpus_per_trial: float = 1,
+    gpus_per_trial: float | None = None,
+    max_concurrent_trials: int = 1,
+    time_budget_s: float | None = None,
+    ray_cpus: int | None = None,
+    ray_gpus: float | None = None,
+    temp_dir: str | Path | None = None,
+    object_store_memory: int | None = 100 * 1024**2,
+    runtime_env: Mapping[str, Any] | None = None,
+) -> TuningConfig:
+    """Build the shared ASHA/Optuna :class:`TuningConfig` from budgets and resources.
+
+    ``samples`` trials of up to ``epochs`` epochs are minimized on ``metric``, with
+    Optuna seeded by ``seed``. Each trial requests ``cpus_per_trial`` CPUs and
+    ``gpus_per_trial`` GPUs (default: 1 when ``device`` is CUDA, else 0). The local
+    Ray cluster's totals are separate: ``ray_cpus`` and ``ray_gpus`` default to the
+    per-trial request times ``max_concurrent_trials``. ``runtime_env`` is passed to
+    Ray unchanged; nothing is added to it.
+    """
+    if gpus_per_trial is None:
+        gpus_per_trial = 1 if torch.device(device).type == "cuda" else 0
+    if ray_cpus is None:
+        ray_cpus = math.ceil(cpus_per_trial * max_concurrent_trials)
+    if ray_gpus is None:
+        ray_gpus = gpus_per_trial * max_concurrent_trials
+    return TuningConfig(
+        metric=metric,
+        mode="min",
+        num_samples=samples,
+        max_epochs=epochs,
+        resources_per_trial={"cpu": cpus_per_trial, "gpu": gpus_per_trial},
+        max_concurrent_trials=max_concurrent_trials,
+        time_budget_s=time_budget_s,
+        optuna_seed=seed,
+        ray_runtime=RayRuntimeConfig(
+            num_cpus=ray_cpus,
+            num_gpus=ray_gpus,
+            temp_dir=None if temp_dir is None else Path(temp_dir).resolve(),
+            object_store_memory=object_store_memory,
+            runtime_env=runtime_env,
+        ),
+    )
 
 
 def _local_ray_defaults() -> None:
@@ -473,6 +547,7 @@ def _trial_progress(result: Any) -> list[dict[str, Any]]:
 
 __all__ = [
     "DatasetPairFactory",
+    "build_tuning_config",
     "RayRuntimeConfig",
     "TrialObjective",
     "TrialReporter",

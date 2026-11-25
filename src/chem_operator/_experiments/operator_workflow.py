@@ -6,7 +6,6 @@ identity, trial readers, CLI overrides, and portable evaluation arrays.
 from __future__ import annotations
 
 import argparse
-from collections.abc import Mapping
 from contextlib import contextmanager
 from dataclasses import replace
 from pathlib import Path
@@ -19,9 +18,9 @@ from torch.utils.data import DataLoader, Subset
 from .runner import ExperimentRunner, ExperimentSpec
 from .seeds import resolve_train_config, train_final
 from .types import EvaluationOutcome
-from .tuning import Tuner, TuningConfig, RayRuntimeConfig
+from .tuning import Tuner, RayRuntimeConfig, build_tuning_config
 from .workflow import (
-    WorkflowStages, add_run_arguments, add_workflow_arguments, parse_workflow_args,
+    WorkflowStages, add_run_arguments, add_workflow_arguments, final_epochs, parse_workflow_args,
     run_context_from_namespace,
 )
 from .artifacts import fingerprint_path
@@ -29,20 +28,18 @@ from .metrics import StreamingRegressionMetrics
 from chem_operator._models.deeponet import relative_l2_loss
 
 
-def parse_operator_args(paths, *, epochs, tune_epochs, samples, description=None, parser=None):
-    """Parse the standard operator CLI with the problem's default budgets.
+def parse_operator_args(paths, *, tune_epochs, samples, description=None, parser=None):
+    """Parse the standard operator CLI with the problem's tuning budget.
 
-    ``epochs=None`` makes ``--epochs`` an optional override of final-training epochs;
-    read the resolved value with :func:`final_epochs`.
+    Problems set only the tuning defaults. ``--epochs`` is an optional override of
+    final-training epochs; read the resolved value with :func:`final_epochs`.
     """
     parser = parser or argparse.ArgumentParser(description=description)
     add_workflow_arguments(parser)
     add_run_arguments(parser, default_runs_root=paths.root / "artifacts" / "runs")
     parser.add_argument("--data-dir", type=Path, default=paths.data)
-    parser.add_argument(
-        "--epochs", type=int, default=epochs,
-        help=("Final-training epochs (default: 2 x --tune-epochs)." if epochs is None
-              else "Final-training epochs (default: %(default)s)."))
+    parser.add_argument("--epochs", type=int, default=None,
+                        help="Final-training epochs (default: 2 x --tune-epochs).")
     parser.add_argument("--tune-epochs", type=int, default=tune_epochs)
     parser.add_argument("--samples", type=int, default=samples)
     parser.add_argument("--max-cases", type=int, default=None)
@@ -52,19 +49,6 @@ def parse_operator_args(paths, *, epochs, tune_epochs, samples, description=None
     if args.max_cases is not None and args.max_cases < 1:
         parser.error("--max-cases must be positive.")
     return args
-
-
-def final_epochs(args) -> int:
-    """Return final-training epochs: ``--epochs`` when given, otherwise ``2 * --tune-epochs``."""
-    epochs = getattr(args, "epochs", None)
-    if epochs is None:
-        tune_epochs = int(args.tune_epochs)
-        if tune_epochs < 1:
-            raise ValueError("--tune-epochs must be positive.")
-        return 2 * tune_epochs
-    if int(epochs) < 1:
-        raise ValueError("--epochs must be positive.")
-    return int(epochs)
 
 
 def operator_spec(args, paths, problem, model, fields, units, coordinates, *, channels=None):
@@ -105,11 +89,15 @@ def operator_ray_runtime(paths, *, cpus, gpus, runtime_env=None):
 
 
 def run_operator(args, paths, spec, dataset_factory, trainer_factory, search_space, evaluator,
-                 *, seed=42, selection_metric="relative_l2", cpus=2, after_run=None, tuner_factory=None):
+                 *, seed=42, selection_metric="relative_l2", cpus=1, after_run=None, runtime_env=None):
     """Tune, train, and evaluate one operator model under the canonical artifact contract.
 
-    ``tuner_factory(trial_trainer, search_space, dataset_factory, context)`` may replace
-    the default Optuna/ASHA tuner, for instance with ``deeponet_tuner``.
+    Tuning trials and final training both build their trainer with
+    ``trainer_factory(config, context)``. The library sets ``config["seed"]`` to the
+    context seed and ``config["epochs"]`` to ``--tune-epochs`` in trials and to
+    :func:`final_epochs` in final training, so ``search_space`` sets neither.
+    Each tuning trial requests ``cpus`` CPUs (default 1). ``runtime_env`` is passed to
+    Ray unchanged (for example for a remote cluster).
     """
     stages = WorkflowStages.from_namespace(args)
     context = run_context_from_namespace(args, problem=spec.problem_id, model=spec.model_id, seed=seed,
@@ -121,34 +109,26 @@ def run_operator(args, paths, spec, dataset_factory, trainer_factory, search_spa
     def trial_data(_context):
         return opened_datasets(dataset_factory, ("train", "valid"), args.max_cases)
 
-    def trial_trainer(config, context):
-        return trainer_factory(dict(config, epochs=args.tune_epochs), context)
-
-    def default_tuner(trial_trainer, space, trial_data, context):
-        gpus = int(context.device.type == "cuda")
-        return Tuner(trial_trainer, space, dataset_factory=trial_data, config=TuningConfig(
-            metric=f"best_valid_{selection_metric}", mode="min", num_samples=args.samples,
-            max_epochs=args.tune_epochs,
-            max_concurrent_trials=1, optuna_seed=context.seed,
-            resources_per_trial={"cpu": cpus, "gpu": gpus},
-            ray_runtime=operator_ray_runtime(paths, cpus=cpus, gpus=gpus)))
+    def trial_trainer(config, *, context):
+        return trainer_factory(config, context)
 
     tuning = None
     if stages.tune:
-        tuner = (tuner_factory or default_tuner)(
-            trial_trainer, dict(search_space, epochs=args.tune_epochs), trial_data, context)
+        tuner = Tuner(trial_trainer, search_space, dataset_factory=trial_data, config=build_tuning_config(
+            metric=f"best_valid_{selection_metric}", samples=args.samples, epochs=args.tune_epochs,
+            seed=context.seed, device=context.device, cpus_per_trial=cpus,
+            temp_dir=paths.ray, runtime_env=runtime_env))
         tuning = runner.tune(tuner, None, None)
     if stages.train:
         config, source = resolve_train_config(stages.train_config, runner, tuning=tuning)
-        config["epochs"] = args.epochs
+        config["epochs"] = final_epochs(args)
 
         def train_one(run_runner, run_context, run_config):
-            trainer = trainer_factory(run_config, run_context)
-            # DeepONet trainers hold a dataclass config; operator trainers hold a mapping.
-            trained_config = trainer.config if isinstance(trainer.config, Mapping) else trainer.config.to_dict()
+            trainer = trainer_factory(dict(run_config, seed=run_context.seed), run_context)
             with opened_datasets(dataset_factory, ("train", "valid", "test"), args.max_cases) as data:
-                result = run_runner.run(trainer, data[0], data[1], data[2], config=trained_config,
-                                        evaluator=evaluator, tuning=tuning if run_runner is runner else None)
+                result = run_runner.run(trainer, data[0], data[1], data[2],
+                                        config=trainer.resolved_config(), evaluator=evaluator,
+                                        tuning=tuning if run_runner is runner else None)
             if after_run is not None:
                 try:
                     after_run(trainer, result)

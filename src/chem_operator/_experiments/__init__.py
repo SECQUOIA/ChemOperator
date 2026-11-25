@@ -42,10 +42,6 @@ from .data_loading import (
     resolve_data_cache,
 )
 from .device import hardware_metadata, resolve_device, resolve_dtype, seed_worker
-from .deeponet_workflow import (
-    DeepONetTuningSettings,
-    deeponet_tuner,
-)
 from .evaluation import deeponet_training_config, evaluate_deeponet
 from .metrics import History, MetricEvent, StreamingRegressionMetrics, TimingRecorder
 from .runner import ExperimentResult, ExperimentRunner, ExperimentSpec, SeedTrainer
@@ -60,7 +56,7 @@ from .trainers import (
     default_metric_adapter,
     mse_loss_term,
 )
-from .tuning import RayRuntimeConfig, Tuner, TuningConfig, TuningOutcome
+from .tuning import RayRuntimeConfig, Tuner, TuningConfig, TuningOutcome, build_tuning_config
 from .types import EvaluationOutcome, RunContext, RunPaths, Trainer, TrainingOutcome
 from .workflow import (
     WorkflowStages,
@@ -94,7 +90,6 @@ __all__ = [
     "validate_complete_run",
     "OperatorTrainer",
     "DeepONetTrainer",
-    "DeepONetTuningSettings",
     "EvaluationOutcome",
     "ExperimentResult",
     "ExperimentRunner",
@@ -119,13 +114,13 @@ __all__ = [
     "parse_workflow_args",
     "add_run_arguments",
     "build_manifest",
+    "build_tuning_config",
     "count_parameters",
     "comparison_records",
     "default_batch_size",
     "default_fno_batch_adapter",
     "default_metric_adapter",
     "deeponet_training_config",
-    "deeponet_tuner",
     "dependency_lock_hash",
     "final_metrics",
     "fingerprint_path",

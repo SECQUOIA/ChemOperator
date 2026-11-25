@@ -159,6 +159,27 @@ def _non_negative_int(value: str) -> int:
     return number
 
 
+def final_epochs(args: argparse.Namespace) -> int:
+    """Return final-training epochs: ``--epochs`` when given, otherwise ``2 * --tune-epochs``."""
+    epochs = getattr(args, "epochs", None)
+    if epochs is None:
+        tune_epochs = int(args.tune_epochs)
+        if tune_epochs < 1:
+            raise ValueError("--tune-epochs must be positive.")
+        return 2 * tune_epochs
+    if int(epochs) < 1:
+        raise ValueError("--epochs must be positive.")
+    return int(epochs)
+
+
+def final_epochs_provenance(args: argparse.Namespace) -> dict[str, object]:
+    """Return the resolved final epochs and their source (``2x_tune`` or ``override``)."""
+    return {
+        "final_epochs": final_epochs(args),
+        "final_epochs_source": "2x_tune" if getattr(args, "epochs", None) is None else "override",
+    }
+
+
 def run_context_from_namespace(
     namespace: argparse.Namespace,
     *,
@@ -173,6 +194,8 @@ def run_context_from_namespace(
     ``seed`` is the problem's default; ``--tune-seed`` overrides it. The
     resulting context seeds tuning and, for flat single-seed runs, training.
     Multi-seed children are derived with :meth:`RunContext.seed_child`.
+    Namespaces from :func:`parse_operator_args` also record the resolved final
+    epochs and their source in the provenance.
     """
     run_id = namespace.run_id or datetime.now(timezone.utc).strftime(
         "%Y%m%dT%H%M%SZ"
@@ -181,6 +204,9 @@ def run_context_from_namespace(
     provenance = dict(provenance or {})
     if hasattr(namespace, "num_workers"):
         provenance.setdefault("data_loading", data_loading_provenance(namespace))
+    if hasattr(namespace, "tune_epochs"):
+        for key, value in final_epochs_provenance(namespace).items():
+            provenance.setdefault(key, value)
     return RunContext.create(
         namespace.runs_root,
         problem=problem,
