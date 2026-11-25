@@ -24,13 +24,15 @@ from chem_operator.experiments import (
     run_operator,
 )
 from scripts.pipe_flow.common import (
-    BRANCH_NAMES,
     FIELDS,
     MAX_EPOCHS,
     NUM_SAMPLES,
     PATHS,
     PROBLEM_ID,
     UNITS,
+)
+from scripts.pipe_flow.physics_data import (
+    BRANCH_NAMES,
     Normalization,
     PipeData,
     fit_physics_normalization,

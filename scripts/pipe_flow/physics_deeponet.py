@@ -28,11 +28,9 @@ from chem_operator.experiments import (
     run_operator,
 )
 from chem_operator.reactors.pipe_flow.dataset_generator import HagenPoiseuille, hagen_poiseuille_velocity
-from scripts.pipe_flow.common import (
+from scripts.pipe_flow.common import MAX_EPOCHS, NUM_SAMPLES, PATHS
+from scripts.pipe_flow.physics_data import (
     BRANCH_NAMES,
-    MAX_EPOCHS,
-    NUM_SAMPLES,
-    PATHS,
     Normalization,
     PhysicsPipeDataset,
     fit_physics_normalization,

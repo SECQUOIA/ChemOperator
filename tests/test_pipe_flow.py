@@ -174,7 +174,7 @@ def test_physics_deeponet_canonical_run(tmp_path):
     """Autodiff residuals work in shared training, validation, and saved plots."""
     from argparse import Namespace
     from scripts.pipe_flow import physics_deeponet as model_script
-    from scripts.pipe_flow.common import load_physics_split, fit_physics_normalization, PhysicsPipeDataset, physics_experiment_spec
+    from scripts.pipe_flow.physics_data import load_physics_split, fit_physics_normalization, PhysicsPipeDataset, physics_experiment_spec
     from chem_operator.experiments import ExperimentRunner, RunContext, load_run
     from chem_operator.plotting import plot_operator_runs
     generator = SimulationDatasetGenerator(HagenPoiseuillePipeFlowSim(), tmp_path / "data")
