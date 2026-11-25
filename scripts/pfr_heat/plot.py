@@ -148,7 +148,7 @@ def plot_wall_field_profiles(run_path, output_dir, *, cases=2):
         colorbar.set_ticks(ticks, labels=tick_labels)
         colorbar.ax.minorticks_off()
         colorbar.ax.axhline(0.5, color="black", linewidth=0.8)
-        for position, text in ((0.25, "wall $T_s$ [K]"),
+        for position, text in ((0.25, "wall $T_w$ [K]"),
                                (0.75, "gas $T_{gas}$ [K]")):
             colorbar.ax.annotate(
                 text, xy=(1.0, position), xycoords="axes fraction",
