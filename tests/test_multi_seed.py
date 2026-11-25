@@ -170,32 +170,41 @@ def test_run_seeds_resumes_by_skipping_completed_children(tmp_path: Path) -> Non
         runner.start()
 
 
-def test_run_seeds_rejects_resume_with_different_config(tmp_path: Path) -> None:
+@pytest.mark.parametrize("layout", ["completed-group", "interrupted-group", "flat", "interrupted-flat"])
+@pytest.mark.parametrize(
+    "original, changed, differing",
+    [
+        ({"width": 4}, {"width": 8}, "width"),
+        ({"weight_decay": 0.2}, {}, "weight_decay"),
+        ({}, {"weight_decay": 0.2}, "weight_decay"),
+    ],
+    ids=["changed-value", "removed-key", "added-key"],
+)
+def test_run_seeds_rejects_resume_with_different_config(
+    tmp_path: Path, original: dict, changed: dict, differing: str, layout: str,
+) -> None:
     root = RunContext.create(tmp_path, problem="synthetic", model="fno", run_id="multi", seed=1, device="cpu")
     runner = ExperimentRunner(root, spec(tmp_path))
-    runner.run_seeds((1,), train_one, config={"seed": 1, "width": 4})
-    before = runner.artifacts.read_manifest()
-    with pytest.raises(ValueError, match="seed 1 was trained with different width"):
-        runner.run_seeds((1, 2), train_one, config={"seed": 1, "width": 8})
-    assert runner.artifacts.read_manifest() == before
-    assert runner.artifacts.read_best_config() == {"seed": 1, "width": 4}
+    # Flat runs save the trainer's complete config, so extend them using that
+    # same representation (as --train-config best does).
+    flat = layout.endswith("flat")
+    common = {"batch_size": 2, "learning_rate": 1.0e-2, "epochs": 1} if flat else {}
+    train_final(runner, WorkflowStages(tune=False, seeds=None if flat else (1,)),
+                config={**common, "seed": 1, **original}, tuning=None, train_one=train_one)
+    parent_failed = layout.startswith("interrupted")
+    if parent_failed:
+        runner.artifacts.mark_failed(RuntimeError("interrupted after seed 1"))
+    saved = runner.artifacts.read_best_config()
+    requested = (2,) if flat else (1, 2)
+    before = {path: path.read_bytes() for path in root.paths.run_dir.rglob("*") if path.is_file()}
+    with pytest.raises(ValueError, match=f"different.*{differing}"):
+        runner.run_seeds(requested, train_one, config={**common, "seed": 1, **changed})
+    assert {path: path.read_bytes() for path in root.paths.run_dir.rglob("*") if path.is_file()} == before
     assert not root.seed_child(2).paths.run_dir.exists()
-    assert load_run(root.paths.run_dir).seeds == (1,)
+    assert load_run(root.paths.run_dir, require_complete=not parent_failed).seeds == (1,)
     # Per-seed keys may change on resume.
-    runner.run_seeds((1, 2), train_one, config={"seed": 1, "width": 4, "epochs": 2})
+    runner.run_seeds(requested, train_one, config={**saved, "seed": 9, "epochs": 2})
     assert load_run(root.paths.run_dir).seeds == (1, 2)
-
-
-def test_run_seeds_rejects_config_unlike_completed_flat_run(tmp_path: Path) -> None:
-    root = RunContext.create(tmp_path, problem="synthetic", model="fno", run_id="flat", seed=42, device="cpu")
-    runner = ExperimentRunner(root, spec(tmp_path))
-    train_final(runner, WorkflowStages(tune=False), config={"seed": 42, "width": 4},
-                tuning=None, train_one=train_one)
-    with pytest.raises(ValueError, match="existing run was trained with different width"):
-        train_final(runner, WorkflowStages(tune=False, seeds=(43,)), config={"seed": 42, "width": 8},
-                    tuning=None, train_one=train_one)
-    assert runner.artifacts.read_manifest()["status"] == "completed"
-    assert runner.artifacts.read_best_config()["width"] == 4
 
 
 def test_run_operator_passes_tune_seed_to_optuna(tmp_path: Path, monkeypatch) -> None:
@@ -250,7 +259,9 @@ def test_flat_run_adds_seeds_to_existing_completed_root(tmp_path: Path) -> None:
     assert (root.paths.run_dir / "metrics.csv").exists()
     with pytest.raises(FileExistsError):
         train_final(runner, WorkflowStages(tune=False), config={"seed": 42}, tuning=None, train_one=train_one)
-    train_final(runner, WorkflowStages(tune=False, seeds=(43,)), config={"seed": 42}, tuning=None, train_one=train_one)
+    saved, source = resolve_train_config("best", runner)
+    train_final(runner, WorkflowStages(tune=False, seeds=(43,)), config=saved, tuning=None,
+                train_one=train_one, train_config_source=source)
     manifest = runner.artifacts.read_manifest()
     assert manifest["seeds"] == [43]
     assert manifest["random_seed"] == 42
