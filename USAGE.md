@@ -138,6 +138,14 @@ extended with more seeds under the same `--run-id`, and completed children are
 skipped when a run is resumed. Plotters and the paper tables average over
 members at read time; nothing aggregated is stored.
 
+Once a run has completed members, extending it requires the saved configuration's
+hyperparameter keys and values, except for `seed` and `epochs`. Added or removed
+keys are rejected before artifacts change, since omission can select a different
+trainer default. This also applies to a flat root after an interrupted extension.
+Use `--no-tune --train-config best` to reuse the saved configuration (including
+trainer defaults stored by flat runs), or choose a new `--run-id` for a different
+configuration. A partial JSON override is not sufficient when it omits saved keys.
+
 ```bash
 # Tune once, then train seeds 42-44 into the same run.
 python scripts/cstr/deeponet.py --run-id cstr_do_01 --seeds 42 43 44

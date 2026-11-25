@@ -236,7 +236,9 @@ class ExperimentRunner:
 
         The parent run keeps tuning artifacts and records the child seeds in
         its manifest. Completed children are skipped so an interrupted or
-        extended run can be resumed with the same ``--run-id``.
+        extended run can be resumed with the same ``--run-id``. Once members
+        complete, saved hyperparameters must retain their keys and values,
+        except for seed and epoch overrides.
         """
         if self.context.paths.is_seed_child:
             raise ValueError("run_seeds must be called on the parent run.")
@@ -301,18 +303,20 @@ class ExperimentRunner:
     def _check_seed_group_config(self, config: Mapping[str, Any]) -> None:
         """Reject ``config`` if a completed member of this run trained another one."""
         trained = [
-            (f"seed {seed}", ArtifactStore(self.context.seed_child(seed)).paths.best_config)
+            (f"seed {seed}", ArtifactStore(self.context.seed_child(seed)).paths.best_config, False)
             for seed in self.completed_seeds()
         ]
-        # A completed flat run is itself a member of the group.
-        if (self.artifacts.paths.manifest.is_file()
-                and self.artifacts.read_manifest()["status"] == "completed"):
-            trained.append(("the existing run", self.artifacts.paths.best_config))
-        for label, path in trained:
+        # Reuse the saved parent config, including trainer defaults for a flat
+        # root. Its metrics remain part of the group even if an extension failed.
+        if (trained or self.artifacts.paths.metrics.is_file()
+                or (self.artifacts.paths.manifest.is_file()
+                    and self.artifacts.read_manifest()["status"] == "completed")):
+            trained.append(("the existing run", self.artifacts.paths.best_config, True))
+        for label, path, require_same_keys in trained:
             if not path.is_file():
                 continue
             with path.open(encoding="utf-8") as stream:
-                differing = config_differences(config, json.load(stream))
+                differing = config_differences(config, json.load(stream), require_same_keys=require_same_keys)
             if differing:
                 raise ValueError(
                     f"Cannot resume {self.context.paths.run_dir}: {label} was trained with "
