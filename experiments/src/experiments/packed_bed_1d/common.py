@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 from contextlib import contextmanager
+from functools import partial
 from pathlib import Path
 from typing import Callable, Iterator
 
@@ -23,10 +24,8 @@ from chem_operator.experiments import (
     ExperimentSpec,
     RayRuntimeConfig,
     RunContext,
-    add_run_arguments,
-    add_workflow_arguments,
     fingerprint_path,
-    parse_workflow_args,
+    parse_operator_args,
     resolve_data_cache,
 )
 from chem_operator.models import (
@@ -69,9 +68,9 @@ UNITS = {
 COORDINATE_STRIDE = 1
 RESAMPLE_POINTS = 512
 SEED = 7
-RECONSTRUCTION_CASES = 2
-MAX_TRAJECTORIES: int | None = None
 
+# Defaults for --tune-epochs and --samples. Final training runs 2 x --tune-epochs
+# unless --epochs is given (see chem_operator.experiments.final_epochs).
 MAX_EPOCHS = 30
 NUM_SAMPLES = 15
 MAX_CONCURRENT_TRIALS = 1
@@ -83,21 +82,21 @@ RAY_OBJECT_STORE_BYTES = 100 * 1024**2
 
 
 def parse_args(
-    *, cache_factory: Callable[[str], Dataset] | None = None
+    *, cache_factory: Callable[[Path, str], Dataset] | None = None
 ) -> argparse.Namespace:
     """Parse the shared flags and resolve ``--data-cache``.
 
-    ``cache_factory(split)`` returns the uncached dataset whose memory the
-    cache would hold; the default is the raw HDF5 split.
+    ``cache_factory(data_dir, split)`` returns the uncached dataset whose memory
+    the cache would hold; the default is the raw HDF5 split.
     """
-    parser = argparse.ArgumentParser(description=__doc__)
-    add_workflow_arguments(parser)
-    add_run_arguments(
-        parser,
-        default_runs_root=PATHS.root / "artifacts" / "runs",
+    args = parse_operator_args(
+        PATHS,
+        epochs=None,
+        tune_epochs=MAX_EPOCHS,
+        samples=NUM_SAMPLES,
+        description=__doc__,
     )
-    args = parse_workflow_args(parser)
-    resolve_data_cache(args, cache_factory or open_raw)
+    resolve_data_cache(args, partial(cache_factory or open_raw, args.data_dir))
     return args
 
 
@@ -120,6 +119,7 @@ def raw_dataset(
 
 
 def limited(dataset: Dataset, maximum: int | None) -> Dataset:
+    """Return the first *maximum* cases (``--max-cases``), or all of them."""
     if maximum is None:
         return dataset
     return Subset(dataset, range(min(maximum, len(dataset))))
@@ -147,16 +147,17 @@ def adapter(dataset: Dataset, normalizer: ZScoreNormalizer) -> DeepONetAdapter:
     )
 
 
-def open_raw(split: str, *, preload: bool = False) -> ChemOperatorDataset:
-    return raw_dataset(PATHS.data, split, COORDINATE_STRIDE, preload=preload)
+def open_raw(data_dir: Path, split: str, *, preload: bool = False) -> ChemOperatorDataset:
+    return raw_dataset(data_dir, split, COORDINATE_STRIDE, preload=preload)
 
 
-def prepare_normalizer() -> ZScoreNormalizer:
-    raw = open_raw("train")
+def prepare_normalizer(args: argparse.Namespace) -> ZScoreNormalizer:
+    """Fit normalization on the selected training cases."""
+    raw = open_raw(args.data_dir, "train")
     try:
         normalizer = fit_zscore_normalizer(
             DataLoader(
-                limited(raw, MAX_TRAJECTORIES),
+                limited(raw, args.max_cases),
                 batch_size=None,
                 shuffle=False,
             ),
@@ -172,16 +173,17 @@ def prepare_normalizer() -> ZScoreNormalizer:
 def tuning_data(
     context: RunContext,
     *,
+    args: argparse.Namespace,
     normalizer: ZScoreNormalizer,
-    cache_data: bool = False,
 ) -> Iterator[tuple[DeepONetAdapter, DeepONetAdapter]]:
     del context
-    train_raw = open_raw("train", preload=cache_data)
-    valid_raw = open_raw("valid", preload=cache_data)
+    cache_data = getattr(args, "cache_data", False)
+    train_raw = open_raw(args.data_dir, "train", preload=cache_data)
+    valid_raw = open_raw(args.data_dir, "valid", preload=cache_data)
     try:
         yield (
-            adapter(limited(train_raw, MAX_TRAJECTORIES), normalizer),
-            adapter(limited(valid_raw, MAX_TRAJECTORIES), normalizer),
+            adapter(limited(train_raw, args.max_cases), normalizer),
+            adapter(limited(valid_raw, args.max_cases), normalizer),
         )
     finally:
         train_raw.close()
@@ -190,29 +192,31 @@ def tuning_data(
 
 @contextmanager
 def final_data(
+    args: argparse.Namespace,
     *,
     normalizer: ZScoreNormalizer,
-    cache_data: bool = False,
 ) -> Iterator[tuple[DeepONetAdapter, DeepONetAdapter, DeepONetAdapter]]:
+    cache_data = getattr(args, "cache_data", False)
     raw = tuple(
-        open_raw(split, preload=cache_data) for split in ("train", "valid", "test")
+        open_raw(args.data_dir, split, preload=cache_data)
+        for split in ("train", "valid", "test")
     )
     try:
-        yield tuple(
-            adapter(limited(item, MAX_TRAJECTORIES), normalizer) for item in raw
-        )  # type: ignore[misc]
+        yield tuple(  # type: ignore[misc]
+            adapter(limited(item, args.max_cases), normalizer) for item in raw
+        )
     finally:
         for item in raw:
             item.close()
 
 
-def experiment_spec(model_id: str) -> ExperimentSpec:
+def experiment_spec(model_id: str, args: argparse.Namespace) -> ExperimentSpec:
     return ExperimentSpec(
         problem_id=PROBLEM_ID,
         model_id=model_id,
         benchmark_protocol_id=PROTOCOL_ID,
         dataset_fingerprints={
-            name: fingerprint_path(PATHS.data / f"{PROBLEM_ID}_{split}.h5")
+            name: fingerprint_path(args.data_dir / f"{PROBLEM_ID}_{split}.h5")
             for name, split in (
                 ("train", "train"),
                 ("validation", "valid"),
@@ -223,16 +227,18 @@ def experiment_spec(model_id: str) -> ExperimentSpec:
         channels=FIELDS,
         units=UNITS,
         coordinates=("z",),
-        selected_test_case_ids=range(RECONSTRUCTION_CASES),
-        tuning_budget={"samples": NUM_SAMPLES, "epochs": MAX_EPOCHS},
+        selected_test_case_ids=range(
+            min(args.plot_cases, args.max_cases or args.plot_cases)
+        ),
+        tuning_budget={"samples": args.samples, "epochs": args.tune_epochs},
         project_root=PATHS.root,
     )
 
 
-def tuning_settings() -> DeepONetTuningSettings:
+def tuning_settings(args: argparse.Namespace) -> DeepONetTuningSettings:
     return DeepONetTuningSettings(
-        max_epochs=MAX_EPOCHS,
-        num_samples=NUM_SAMPLES,
+        max_epochs=args.tune_epochs,
+        num_samples=args.samples,
         max_concurrent_trials=MAX_CONCURRENT_TRIALS,
         time_budget_s=TIME_BUDGET_S,
         cpus_per_trial=CPUS_PER_TRIAL,

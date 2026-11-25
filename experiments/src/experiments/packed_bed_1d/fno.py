@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import argparse
 from contextlib import contextmanager
 from functools import partial
+from pathlib import Path
 import time
 from typing import Any, Iterator, Mapping
 
@@ -24,6 +26,7 @@ from chem_operator.experiments import (
     Tuner,
     TuningConfig,
     WorkflowStages,
+    final_epochs,
     resolve_train_config,
     run_context_from_namespace,
     train_final,
@@ -36,14 +39,10 @@ from experiments.packed_bed_1d.common import (
     FIELDS,
     GPUS_PER_TRIAL,
     MAX_CONCURRENT_TRIALS,
-    MAX_EPOCHS,
-    MAX_TRAJECTORIES,
-    NUM_SAMPLES,
     PATHS,
     PIN_MEMORY,
     PROBLEM_ID,
     RAY_OBJECT_STORE_BYTES,
-    RECONSTRUCTION_CASES,
     RESAMPLE_POINTS,
     SEED,
     TIME_BUDGET_S,
@@ -58,7 +57,6 @@ from experiments.packed_bed_1d.common import (
 MODEL_ID = "fno"
 GRID_POINTS = RESAMPLE_POINTS
 BED_LENGTH = 0.05
-FINAL_EPOCHS = 2 * MAX_EPOCHS
 
 
 class PackedBedFNOAdapter(Dataset):
@@ -145,35 +143,40 @@ class PackedBedFNOAdapter(Dataset):
         )
 
 
-def resampled(raw: Dataset, *, cache: bool = False) -> TrajectoryResamplingDataset:
-    """Resample one raw split onto the shared axial grid.
+def resampled(
+    raw: Dataset, maximum: int | None, *, cache: bool = False
+) -> TrajectoryResamplingDataset:
+    """Resample the first *maximum* cases of one raw split onto the shared axial grid.
 
     Raw arrays are never preloaded: the resampling cache serves every sample
     after the first epoch, so a raw copy would only use memory.
     """
     return TrajectoryResamplingDataset(
-        limited(raw, MAX_TRAJECTORIES),
+        limited(raw, maximum),
         coordinate_name="z",
         target_coordinate=torch.linspace(0.0, BED_LENGTH, GRID_POINTS),
         cache=cache,
     )
 
 
-def resampled_split(split: str) -> TrajectoryResamplingDataset:
-    """Return an uncached resampled split for ``--data-cache`` estimates."""
-    return resampled(open_raw(split))
+def resampled_split(data_dir: Path, split: str) -> TrajectoryResamplingDataset:
+    """Return an uncached, complete resampled split for ``--data-cache`` estimates."""
+    return resampled(open_raw(data_dir, split), None)
 
 
 @contextmanager
 def opened_data(
-    splits: tuple[str, ...], normalizer: ZScoreNormalizer, cache_data: bool = False
+    splits: tuple[str, ...], normalizer: ZScoreNormalizer, args: argparse.Namespace
 ) -> Iterator[tuple[PackedBedFNOAdapter, ...]]:
+    cache_data = getattr(args, "cache_data", False)
     raw = []
     try:
         for split in splits:
-            raw.append(open_raw(split))
+            raw.append(open_raw(args.data_dir, split))
         yield tuple(
-            PackedBedFNOAdapter(resampled(item, cache=cache_data), normalizer)
+            PackedBedFNOAdapter(
+                resampled(item, args.max_cases, cache=cache_data), normalizer
+            )
             for item in raw
         )
     finally:
@@ -239,7 +242,7 @@ def evaluate(
     data: PackedBedFNOAdapter,
     context: Any,
     *,
-    reconstruction_cases: int = RECONSTRUCTION_CASES,
+    reconstruction_cases: int = 2,
 ) -> EvaluationOutcome:
     """Score the full test set and save bounded plot arrays."""
     if reconstruction_cases < 1:
@@ -280,12 +283,12 @@ def evaluate(
     )
 
 
-def tuning_settings(seed: int = SEED) -> TuningConfig:
+def tuning_settings(args: argparse.Namespace, seed: int = SEED) -> TuningConfig:
     return TuningConfig(
         metric="best_valid_data_loss",
         mode="min",
-        num_samples=NUM_SAMPLES,
-        max_epochs=MAX_EPOCHS,
+        num_samples=args.samples,
+        max_epochs=args.tune_epochs,
         max_concurrent_trials=MAX_CONCURRENT_TRIALS,
         time_budget_s=TIME_BUDGET_S,
         resources_per_trial={"cpu": CPUS_PER_TRIAL, "gpu": GPUS_PER_TRIAL},
@@ -302,18 +305,19 @@ def tuning_settings(seed: int = SEED) -> TuningConfig:
 def main() -> None:
     args = parse_args(cache_factory=resampled_split)
     stages = WorkflowStages.from_namespace(args)
-    normalizer = prepare_normalizer()
+    normalizer = prepare_normalizer(args)
     context = run_context_from_namespace(
-        args, problem=PROBLEM_ID, model=MODEL_ID, seed=SEED
+        args, problem=PROBLEM_ID, model=MODEL_ID, seed=SEED,
+        provenance={"max_cases": args.max_cases},
     )
-    runner = ExperimentRunner(context, experiment_spec(MODEL_ID))
+    runner = ExperimentRunner(context, experiment_spec(MODEL_ID, args))
     tuning = None
 
     if stages.tune:
         PATHS.ray.mkdir(parents=True, exist_ok=True)
 
         def trial_data(_context: Any):
-            return opened_data(("train", "valid"), normalizer, getattr(args, "cache_data", False))
+            return opened_data(("train", "valid"), normalizer, args)
 
         def trial_trainer(config: Mapping[str, Any], *, context: Any):
             return make_trainer(config, context, normalizer)
@@ -321,8 +325,8 @@ def main() -> None:
         tuning = runner.tune(
             Tuner(
                 trial_trainer,
-                {**search_space(), "epochs": MAX_EPOCHS},
-                config=tuning_settings(context.seed),
+                {**search_space(), "epochs": args.tune_epochs},
+                config=tuning_settings(args, context.seed),
                 dataset_factory=trial_data,
             ),
             None,
@@ -332,21 +336,17 @@ def main() -> None:
 
     if stages.train:
         config, source = resolve_train_config(stages.train_config, runner, tuning=tuning)
-        config["epochs"] = FINAL_EPOCHS
+        config["epochs"] = final_epochs(args)
 
         def train_one(run_runner, run_context, run_config):
             trainer = make_trainer(run_config, run_context, normalizer)
-            with opened_data(
-                ("train", "valid", "test"), normalizer, getattr(args, "cache_data", False)
-            ) as datasets:
+            with opened_data(("train", "valid", "test"), normalizer, args) as datasets:
                 return run_runner.run(
                     trainer,
                     *datasets,
                     config=run_config,
                     tuning=tuning if run_runner is runner else None,
-                    evaluator=partial(
-                        evaluate, reconstruction_cases=RECONSTRUCTION_CASES
-                    ),
+                    evaluator=partial(evaluate, reconstruction_cases=args.plot_cases),
                 )
 
         train_final(

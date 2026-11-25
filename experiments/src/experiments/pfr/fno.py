@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import argparse
 from contextlib import contextmanager
 from functools import partial
 import time
@@ -23,6 +24,7 @@ from chem_operator.experiments import (
     Tuner,
     TuningConfig,
     WorkflowStages,
+    final_epochs,
     resolve_train_config,
     run_context_from_namespace,
     train_final,
@@ -34,13 +36,10 @@ from experiments.pfr.common import (
     CPUS_PER_TRIAL,
     GPUS_PER_TRIAL,
     MAX_CONCURRENT_TRIALS,
-    MAX_EPOCHS,
-    NUM_SAMPLES,
     PATHS,
     PIN_MEMORY,
     PROBLEM_ID,
     RAY_OBJECT_STORE_BYTES,
-    RECONSTRUCTION_CASES,
     SEED,
     TIME_BUDGET_S,
     experiment_spec,
@@ -53,7 +52,6 @@ from experiments.pfr.common import (
 
 MODEL_ID = "fno"
 GRID_POINTS = 50
-FINAL_EPOCHS = 2 * MAX_EPOCHS
 
 
 class PFRFNOAdapter(Dataset):
@@ -155,13 +153,14 @@ class PFRFNOAdapter(Dataset):
 
 @contextmanager
 def opened_data(
-    splits: tuple[str, ...], normalizer: ZScoreNormalizer, cache_data: bool = False
+    splits: tuple[str, ...], normalizer: ZScoreNormalizer, args: argparse.Namespace
 ) -> Iterator[tuple[PFRFNOAdapter, ...]]:
+    cache_data = getattr(args, "cache_data", False)
     raw = []
     try:
         for split in splits:
-            raw.append(raw_dataset(split, preload=cache_data))
-        yield tuple(PFRFNOAdapter(limited(item), normalizer) for item in raw)
+            raw.append(raw_dataset(args.data_dir, split, preload=cache_data))
+        yield tuple(PFRFNOAdapter(limited(item, args.max_cases), normalizer) for item in raw)
     finally:
         for item in raw:
             item.close()
@@ -224,7 +223,7 @@ def evaluate(
     data: PFRFNOAdapter,
     context: Any,
     *,
-    reconstruction_cases: int = RECONSTRUCTION_CASES,
+    reconstruction_cases: int = 2,
 ) -> EvaluationOutcome:
     """Score the full test set and save bounded DeepONet-layout plot arrays."""
     if reconstruction_cases < 1:
@@ -265,12 +264,12 @@ def evaluate(
     )
 
 
-def tuning_settings(seed: int = SEED) -> TuningConfig:
+def tuning_settings(args: argparse.Namespace, seed: int = SEED) -> TuningConfig:
     return TuningConfig(
         metric="best_valid_data_loss",
         mode="min",
-        num_samples=NUM_SAMPLES,
-        max_epochs=MAX_EPOCHS,
+        num_samples=args.samples,
+        max_epochs=args.tune_epochs,
         max_concurrent_trials=MAX_CONCURRENT_TRIALS,
         time_budget_s=TIME_BUDGET_S,
         resources_per_trial={"cpu": CPUS_PER_TRIAL, "gpu": GPUS_PER_TRIAL},
@@ -287,18 +286,19 @@ def tuning_settings(seed: int = SEED) -> TuningConfig:
 def main() -> None:
     args = parse_args(description=__doc__)
     stages = WorkflowStages.from_namespace(args)
-    normalizer = prepare_normalizer()
+    normalizer = prepare_normalizer(args)
     context = run_context_from_namespace(
-        args, problem=PROBLEM_ID, model=MODEL_ID, seed=SEED
+        args, problem=PROBLEM_ID, model=MODEL_ID, seed=SEED,
+        provenance={"max_cases": args.max_cases},
     )
-    runner = ExperimentRunner(context, experiment_spec(MODEL_ID))
+    runner = ExperimentRunner(context, experiment_spec(MODEL_ID, args))
     tuning = None
 
     if stages.tune:
         PATHS.ray.mkdir(parents=True, exist_ok=True)
 
         def trial_data(_context: Any):
-            return opened_data(("train", "valid"), normalizer, getattr(args, "cache_data", False))
+            return opened_data(("train", "valid"), normalizer, args)
 
         def trial_trainer(config: Mapping[str, Any], *, context: Any):
             return make_trainer(config, context, normalizer)
@@ -306,8 +306,8 @@ def main() -> None:
         tuning = runner.tune(
             Tuner(
                 trial_trainer,
-                {**search_space(), "epochs": MAX_EPOCHS},
-                config=tuning_settings(context.seed),
+                {**search_space(), "epochs": args.tune_epochs},
+                config=tuning_settings(args, context.seed),
                 dataset_factory=trial_data,
             ),
             None,
@@ -317,21 +317,17 @@ def main() -> None:
 
     if stages.train:
         config, source = resolve_train_config(stages.train_config, runner, tuning=tuning)
-        config["epochs"] = FINAL_EPOCHS
+        config["epochs"] = final_epochs(args)
 
         def train_one(run_runner, run_context, run_config):
             trainer = make_trainer(run_config, run_context, normalizer)
-            with opened_data(
-                ("train", "valid", "test"), normalizer, getattr(args, "cache_data", False)
-            ) as datasets:
+            with opened_data(("train", "valid", "test"), normalizer, args) as datasets:
                 return run_runner.run(
                     trainer,
                     *datasets,
                     config=run_config,
                     tuning=tuning if run_runner is runner else None,
-                    evaluator=partial(
-                        evaluate, reconstruction_cases=RECONSTRUCTION_CASES
-                    ),
+                    evaluator=partial(evaluate, reconstruction_cases=args.plot_cases),
                 )
 
         train_final(

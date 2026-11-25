@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import argparse
+from functools import partial
+import importlib
 from pathlib import Path
 import subprocess
 import sys
@@ -13,6 +15,7 @@ import pytest
 from chem_operator.experiments import (
     WorkflowStages,
     add_workflow_arguments,
+    final_epochs,
     parse_operator_args,
     parse_workflow_args,
 )
@@ -88,6 +91,73 @@ def test_model_parsers_validate_before_resolving_cache(problem, monkeypatch, cap
     stderr = capsys.readouterr().err
     assert "At least one of tuning or training" in stderr
     assert "Traceback" not in stderr
+
+
+def _operator_args(monkeypatch, tmp_path, argv, *, epochs=None, tune_epochs=5):
+    monkeypatch.setattr(sys, "argv", ["model.py", *argv])
+    paths = SimpleNamespace(root=tmp_path, data=tmp_path)
+    return parse_operator_args(paths, epochs=epochs, tune_epochs=tune_epochs, samples=1)
+
+
+@pytest.mark.parametrize(
+    ("argv", "expected"),
+    (([], 10), (["--tune-epochs", "3"], 6), (["--epochs", "7"], 7),
+     (["--tune-epochs", "3", "--epochs", "1"], 1)),
+)
+def test_final_epochs_is_twice_tune_epochs_unless_overridden(
+    argv, expected, monkeypatch, tmp_path,
+) -> None:
+    args = _operator_args(monkeypatch, tmp_path, argv)
+    assert final_epochs(args) == expected
+
+
+def test_explicit_epochs_default_is_still_final(monkeypatch, tmp_path) -> None:
+    args = _operator_args(monkeypatch, tmp_path, [], epochs=40, tune_epochs=20)
+    assert args.epochs == 40
+    assert final_epochs(args) == 40
+
+
+@pytest.mark.parametrize("value", ("0", "-2"))
+def test_non_positive_epochs_override_is_rejected(value, monkeypatch, tmp_path, capsys) -> None:
+    with pytest.raises(SystemExit) as error:
+        _operator_args(monkeypatch, tmp_path, ["--epochs", value])
+    assert error.value.code == 2
+    assert "Epochs and samples must be positive" in capsys.readouterr().err
+    with pytest.raises(ValueError, match="--epochs must be positive"):
+        final_epochs(SimpleNamespace(epochs=int(value), tune_epochs=5))
+
+
+def test_optional_epochs_help_names_the_default(monkeypatch, tmp_path, capsys) -> None:
+    with pytest.raises(SystemExit):
+        _operator_args(monkeypatch, tmp_path, ["--help"])
+    assert "2 x --tune-epochs" in " ".join(capsys.readouterr().out.split())
+
+
+@pytest.mark.parametrize("problem", ("cstr", "packed_bed_1d", "pfr", "pipe_flow"))
+def test_1d_parsers_use_the_standard_operator_cli(problem, monkeypatch, tmp_path) -> None:
+    common = importlib.import_module(f"experiments.{problem}.common")
+    factories = []
+    monkeypatch.setattr(common, "resolve_data_cache",
+                        lambda args, factory: factories.append(factory))
+
+    monkeypatch.setattr(sys, "argv", ["model.py"])
+    args = common.parse_args()
+    assert args.data_dir == common.PATHS.data
+    assert (args.epochs, args.max_cases) == (None, None)
+    assert (args.tune_epochs, args.samples) == (common.MAX_EPOCHS, common.NUM_SAMPLES)
+    assert args.plot_cases == 2
+    assert final_epochs(args) == 2 * common.MAX_EPOCHS
+
+    monkeypatch.setattr(sys, "argv", [
+        "model.py", "--data-dir", str(tmp_path), "--epochs", "3", "--tune-epochs", "2",
+        "--samples", "4", "--max-cases", "5", "--plot-cases", "1",
+    ])
+    args = common.parse_args()
+    assert (args.data_dir, args.epochs, args.tune_epochs, args.samples, args.max_cases,
+            args.plot_cases) == (tmp_path, 3, 2, 4, 5, 1)
+    assert final_epochs(args) == 3
+    # The --data-cache estimate opens the splits under --data-dir.
+    assert isinstance(factories[-1], partial) and factories[-1].args == (tmp_path,)
 
 
 def test_model_workflow_help_omits_removed_flags() -> None:

@@ -1,16 +1,14 @@
 """Tune and train a POD-DeepONet for packed-bed profiles."""
 
+import argparse
 from functools import partial
 import gc
 from typing import Any
 
 from experiments.packed_bed_1d.common import (
-    MAX_EPOCHS,
-    MAX_TRAJECTORIES,
     PATHS,
     PIN_MEMORY,
     PROBLEM_ID,
-    RECONSTRUCTION_CASES,
     SEED,
     adapter,
     experiment_spec,
@@ -31,6 +29,7 @@ from chem_operator.experiments import (
     deeponet_training_config,
     deeponet_tuner,
     evaluate_deeponet,
+    final_epochs,
     resolve_train_config,
     run_context_from_namespace,
     train_final,
@@ -43,7 +42,7 @@ MODEL_ID = "pod_deeponet"
 POD_VARIANCE_THRESHOLD = 0.999
 
 
-def search_space(pod_components: int) -> dict[str, Any]:
+def search_space(pod_components: int, epochs: int) -> dict[str, Any]:
     return {
         "loss": "relative_l2",
         "width": tune.choice([128, 256, 512]),
@@ -54,20 +53,19 @@ def search_space(pod_components: int) -> dict[str, Any]:
         "learning_rate": tune.loguniform(1e-4, 5e-3),
         "weight_decay": tune.loguniform(1e-6, 1e-4),
         "batch_size": tune.choice([16, 32, 64]),
-        "epochs": MAX_EPOCHS,
+        "epochs": epochs,
         "seed": SEED,
     }
 
 
-def prepare_pod(
-    normalizer: ZScoreNormalizer, num_workers: int = 0
-) -> PODTransform:
-    raw = open_raw("train")
+def prepare_pod(normalizer: ZScoreNormalizer, args: argparse.Namespace) -> PODTransform:
+    """Fit the POD basis on the selected training cases (``--max-cases``)."""
+    raw = open_raw(args.data_dir, "train")
     try:
         pod = fit_incremental_pod_dataset(
-            adapter(limited(raw, MAX_TRAJECTORIES), normalizer),
+            adapter(limited(raw, args.max_cases), normalizer),
             variance_threshold=POD_VARIANCE_THRESHOLD,
-            num_workers=num_workers,
+            num_workers=getattr(args, "num_workers", 0),
         )
     finally:
         raw.close()
@@ -78,12 +76,16 @@ def prepare_pod(
 def main() -> None:
     args = parse_args()
     stages = WorkflowStages.from_namespace(args)
-    normalizer = prepare_normalizer()
-    pod = prepare_pod(normalizer, getattr(args, "num_workers", 0))
+    normalizer = prepare_normalizer(args)
+    pod = prepare_pod(normalizer, args)
     context = run_context_from_namespace(
-        args, problem=PROBLEM_ID, model=MODEL_ID, seed=SEED
+        args,
+        problem=PROBLEM_ID,
+        model=MODEL_ID,
+        seed=SEED,
+        provenance={"max_cases": args.max_cases},
     )
-    runner = ExperimentRunner(context, experiment_spec(MODEL_ID))
+    runner = ExperimentRunner(context, experiment_spec(MODEL_ID, args))
     tuning = None
     result = None
 
@@ -91,13 +93,11 @@ def main() -> None:
         PATHS.ray.mkdir(parents=True, exist_ok=True)
         tuning = runner.tune(
             deeponet_tuner(
-                search_space=search_space(pod.n_components),
+                search_space=search_space(pod.n_components, args.tune_epochs),
                 pod=pod,
-                dataset_factory=partial(
-                    tuning_data, normalizer=normalizer, cache_data=getattr(args, "cache_data", False)
-                ),
+                dataset_factory=partial(tuning_data, args=args, normalizer=normalizer),
                 context=context,
-                settings=tuning_settings(),
+                settings=tuning_settings(args),
                 pin_memory=PIN_MEMORY,
             ),
             None,
@@ -108,17 +108,16 @@ def main() -> None:
 
     if stages.train:
         config, source = resolve_train_config(stages.train_config, runner, tuning=tuning)
+        config["epochs"] = final_epochs(args)
 
         def train_one(run_runner, run_context, run_config):
             trainer = DeepONetTrainer(
-                deeponet_training_config(run_config, epoch_multiplier=2.0),
+                deeponet_training_config(run_config),
                 pod=pod,
                 pin_memory=PIN_MEMORY,
                 checkpoint_metadata={"normalizer": normalizer.state_dict()},
             )
-            with final_data(
-                normalizer=normalizer, cache_data=getattr(args, "cache_data", False)
-            ) as (training, validation, test):
+            with final_data(args, normalizer=normalizer) as (training, validation, test):
                 return run_runner.run(
                     trainer,
                     training,
@@ -129,7 +128,7 @@ def main() -> None:
                     evaluator=partial(
                         evaluate_deeponet,
                         normalizer=normalizer,
-                        reconstruction_cases=RECONSTRUCTION_CASES,
+                        reconstruction_cases=args.plot_cases,
                     ),
                 )
 
