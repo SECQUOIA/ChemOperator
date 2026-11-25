@@ -2,9 +2,8 @@
 
 from __future__ import annotations
 
-import importlib.util
 import math
-from pathlib import Path
+import sys
 from types import SimpleNamespace
 
 import pytest
@@ -17,21 +16,7 @@ from chem_operator.reactors.pipe_flow_transient.dataset_generator import (
     TransientHagenPoiseuillePipeFlowSim,
 )
 from chem_operator.sampling import Constant, Uniform
-
-
-SCRIPT_PATH = (
-    Path(__file__).resolve().parents[1]
-    / "scripts"
-    / "pipe_flow_transient"
-    / "field_nemo_fno.py"
-)
-SCRIPT_SPEC = importlib.util.spec_from_file_location(
-    "pipe_flow_transient_nemo_fno",
-    SCRIPT_PATH,
-)
-assert SCRIPT_SPEC is not None and SCRIPT_SPEC.loader is not None
-NEMO_FNO = importlib.util.module_from_spec(SCRIPT_SPEC)
-SCRIPT_SPEC.loader.exec_module(NEMO_FNO)
+from experiments.pipe_flow_transient import field_nemo_fno as NEMO_FNO
 
 
 @pytest.fixture(scope="module", name="nemo_data_dir")
@@ -158,15 +143,15 @@ def test_variant_search_spaces_and_data_config(monkeypatch) -> None:
 
 def test_variant_cli_defaults_to_both_and_validates_choices(monkeypatch) -> None:
     """The transient CLI accepts the three variants and defaults compatibly."""
-    monkeypatch.setattr(NEMO_FNO.sys, "argv", [str(SCRIPT_PATH)])
+    monkeypatch.setattr(sys, "argv", [NEMO_FNO.__file__])
     assert NEMO_FNO.parse_cli_args().variant == "both"
     for variant in ("both", "data", "physics"):
         monkeypatch.setattr(
-            NEMO_FNO.sys, "argv", [str(SCRIPT_PATH), "--variant", variant]
+            sys, "argv", [NEMO_FNO.__file__, "--variant", variant]
         )
         assert NEMO_FNO.parse_cli_args().variant == variant
     monkeypatch.setattr(
-        NEMO_FNO.sys, "argv", [str(SCRIPT_PATH), "--variant", "invalid"]
+        sys, "argv", [NEMO_FNO.__file__, "--variant", "invalid"]
     )
     with pytest.raises(SystemExit):
         NEMO_FNO.parse_cli_args()

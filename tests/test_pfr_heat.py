@@ -5,9 +5,8 @@
 
 from __future__ import annotations
 
-import importlib.util
 import os
-from pathlib import Path
+import sys
 from types import SimpleNamespace
 
 os.environ.setdefault("WARP_CACHE_PATH", "/tmp/warp")
@@ -22,37 +21,10 @@ from chem_operator.reactors.pfr_heat.dataset_generator import (
     PFRHeatSim,
     PlugFlowReactor,
 )
-SCRIPT_PATH = (
-    Path(__file__).resolve().parents[1] / "scripts" / "pfr_heat" / "fno.py"
-)
-SCRIPT_SPEC = importlib.util.spec_from_file_location("pfr_heat_fno", SCRIPT_PATH)
-assert SCRIPT_SPEC is not None and SCRIPT_SPEC.loader is not None
-FNO_SCRIPT = importlib.util.module_from_spec(SCRIPT_SPEC)
-SCRIPT_SPEC.loader.exec_module(FNO_SCRIPT)
-HYBRID_SCRIPT_PATH = (
-    Path(__file__).resolve().parents[1]
-    / "scripts"
-    / "pfr_heat"
-    / "deeponet_fno.py"
-)
-HYBRID_SCRIPT_SPEC = importlib.util.spec_from_file_location(
-    "pfr_heat_deeponet_fno", HYBRID_SCRIPT_PATH
-)
-assert HYBRID_SCRIPT_SPEC is not None and HYBRID_SCRIPT_SPEC.loader is not None
-HYBRID_SCRIPT = importlib.util.module_from_spec(HYBRID_SCRIPT_SPEC)
-HYBRID_SCRIPT_SPEC.loader.exec_module(HYBRID_SCRIPT)
-POD_SCRIPT_PATH = (
-    Path(__file__).resolve().parents[1]
-    / "scripts"
-    / "pfr_heat"
-    / "pod_deeponet_fno.py"
-)
-POD_SCRIPT_SPEC = importlib.util.spec_from_file_location(
-    "pfr_heat_pod_deeponet_fno", POD_SCRIPT_PATH
-)
-assert POD_SCRIPT_SPEC is not None and POD_SCRIPT_SPEC.loader is not None
-POD_SCRIPT = importlib.util.module_from_spec(POD_SCRIPT_SPEC)
-POD_SCRIPT_SPEC.loader.exec_module(POD_SCRIPT)
+from experiments.pfr_heat import deeponet_fno as HYBRID_SCRIPT
+from experiments.pfr_heat import fno as FNO_SCRIPT
+from experiments.pfr_heat import pod_deeponet_fno as POD_SCRIPT
+
 CoupledPFRHeatDataset = FNO_SCRIPT.CoupledPFRHeatDataset
 InformerCache = FNO_SCRIPT.InformerCache
 PFR_OUTPUTS = FNO_SCRIPT.PFR_OUTPUTS
@@ -160,19 +132,19 @@ def test_variant_search_spaces_zero_all_data_weights() -> None:
 def test_pfr_heat_variant_clis_default_to_both(monkeypatch) -> None:
     """Both PFR-heat entry points expose the same validated variant CLI."""
     for module in (FNO_SCRIPT, HYBRID_SCRIPT, POD_SCRIPT):
-        monkeypatch.setattr(module.sys, "argv", [str(SCRIPT_PATH)])
+        monkeypatch.setattr(sys, "argv", [module.__file__])
         assert module.parse_cli_args().variant == "both"
         for variant in ("both", "data", "physics"):
             monkeypatch.setattr(
-                module.sys,
+                sys,
                 "argv",
-                [str(SCRIPT_PATH), "--variant", variant],
+                [module.__file__, "--variant", variant],
             )
             assert module.parse_cli_args().variant == variant
         monkeypatch.setattr(
-            module.sys,
+            sys,
             "argv",
-            [str(SCRIPT_PATH), "--variant", "invalid"],
+            [module.__file__, "--variant", "invalid"],
         )
         with pytest.raises(SystemExit):
             module.parse_cli_args()

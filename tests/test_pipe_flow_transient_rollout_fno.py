@@ -3,14 +3,11 @@
 from __future__ import annotations
 
 import math
-import sys
 from pathlib import Path
 
 import pytest
 import torch
 from torch.utils.data import DataLoader
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from chem_operator.datasets import SimulationDatasetGenerator
 from chem_operator.experiments import RunContext
@@ -18,12 +15,12 @@ from chem_operator.reactors.pipe_flow_transient.dataset_generator import (
     TransientHagenPoiseuillePipeFlowSim,
 )
 from chem_operator.sampling import Constant, Uniform
-from scripts.pipe_flow_transient.common import (
+from experiments.pipe_flow_transient.common import (
     evaluate_rollout_run,
     fit_rollout_normalizer,
     make_rollout_adapter,
 )
-from scripts.pipe_flow_transient.rollout_fno import (
+from experiments.pipe_flow_transient.rollout_fno import (
     RolloutFNO,
     RolloutFNOTrainer,
     search_space,

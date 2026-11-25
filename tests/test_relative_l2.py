@@ -7,8 +7,8 @@ import torch
 
 from chem_operator.experiments import StreamingRegressionMetrics
 from chem_operator.models import relative_l2_loss
-from scripts.cstr.fno import relative_l2
-from scripts.q2d.common import relative_l2_per_case
+from experiments.cstr.fno import relative_l2
+from experiments.q2d.common import relative_l2_per_case
 
 
 @pytest.mark.parametrize("dtype", [torch.float32, torch.float64])

@@ -173,8 +173,8 @@ def test_physics_informer_residual_for_exact_profile() -> None:
 def test_physics_deeponet_canonical_run(tmp_path):
     """Autodiff residuals work in shared training, validation, and saved plots."""
     from argparse import Namespace
-    from scripts.pipe_flow import physics_deeponet as model_script
-    from scripts.pipe_flow.physics_data import load_physics_split, fit_physics_normalization, PhysicsPipeDataset, physics_experiment_spec
+    from experiments.pipe_flow import physics_deeponet as model_script
+    from experiments.pipe_flow.physics_data import load_physics_split, fit_physics_normalization, PhysicsPipeDataset, physics_experiment_spec
     from chem_operator.experiments import ExperimentRunner, RunContext, load_run
     from chem_operator.plotting import plot_operator_runs
     generator = SimulationDatasetGenerator(HagenPoiseuillePipeFlowSim(), tmp_path / "data")
@@ -200,7 +200,7 @@ def test_physics_deeponet_canonical_run(tmp_path):
 def test_physics_deeponet_tuning_validation_skips_autodiff(monkeypatch):
     """compute_physics=False skips the autodiff residual in validation."""
     from types import SimpleNamespace
-    from scripts.pipe_flow import physics_deeponet as model_script
+    from experiments.pipe_flow import physics_deeponet as model_script
     statistics = SimpleNamespace(**{name: torch.zeros(1) for name in
                                     ("branch_mean", "branch_std", "velocity_mean", "velocity_std")})
     context = SimpleNamespace(device=torch.device("cpu"))

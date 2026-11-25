@@ -19,7 +19,7 @@ from chem_operator.experiments import (
 )
 from chem_operator.reactors.q2d.dataset_generator import CMRSim
 from chem_operator.normalization import normalizer_from_state_dict
-from scripts.q2d import common, deeponet, fno, plot, pod_deeponet
+from experiments.q2d import common, deeponet, fno, plot, pod_deeponet
 
 
 def record(offset=0.0):

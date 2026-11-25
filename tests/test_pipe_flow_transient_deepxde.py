@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import math
-import sys
 from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
@@ -13,8 +12,6 @@ import numpy as np
 import torch
 from torch.utils.data import DataLoader
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-
 from chem_operator.datasets import SimulationDatasetGenerator
 from chem_operator.experiments import ExperimentRunner, RunContext
 from chem_operator.plotting import plot_operator_fields, plot_operator_runs
@@ -22,17 +19,17 @@ from chem_operator.reactors.pipe_flow_transient.dataset_generator import (
     TransientHagenPoiseuillePipeFlowSim,
 )
 from chem_operator.sampling import Constant, Uniform
-from scripts.pipe_flow_transient.common import (
+from experiments.pipe_flow_transient.common import (
     experiment_spec,
     evaluate_rollout_run,
     fit_rollout_normalizer,
     make_rollout_adapter,
 )
-from scripts.pipe_flow_transient.rollout_deeponet import (
+from experiments.pipe_flow_transient.rollout_deeponet import (
     RolloutDeepXDE,
     RolloutDeepXDETrainer,
 )
-from scripts.pipe_flow_transient.rollout_pod_deeponet import (
+from experiments.pipe_flow_transient.rollout_pod_deeponet import (
     PODRolloutDeepXDETrainer,
     fit_rollout_pod,
 )

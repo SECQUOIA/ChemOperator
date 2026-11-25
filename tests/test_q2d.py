@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-import importlib.util
 import json
-from pathlib import Path
 
 import numpy as np
 import pytest
@@ -18,18 +16,7 @@ from chem_operator.reactors.q2d.dataset_generator import (
     read_input_dat,
     write_input_dat,
 )
-
-
-SCRIPT_PATH = (
-    Path(__file__).resolve().parents[1] / "scripts" / "q2d" / "generate_dataset.py"
-)
-SCRIPT_SPEC = importlib.util.spec_from_file_location(
-    "q2d_generate_dataset",
-    SCRIPT_PATH,
-)
-assert SCRIPT_SPEC is not None and SCRIPT_SPEC.loader is not None
-GENERATE_DATASET = importlib.util.module_from_spec(SCRIPT_SPEC)
-SCRIPT_SPEC.loader.exec_module(GENERATE_DATASET)
+from experiments.q2d import generate_dataset as GENERATE_DATASET
 
 
 def test_input_dat_round_trip_preserves_overrides(tmp_path) -> None:
@@ -158,7 +145,7 @@ def test_q2d_tolerance_interpolation_uses_physical_coordinates() -> None:
     """A linear field remains exact on a different cell-centre mesh."""
     import torch
 
-    from scripts.q2d.common import interpolate_fields, relative_l2_per_case
+    from experiments.q2d.common import interpolate_fields, relative_l2_per_case
 
     z = np.array([0.5, 1.5, 2.5])
     r = np.array([0.25, 0.75, 1.25])

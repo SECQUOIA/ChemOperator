@@ -251,7 +251,7 @@ def test_cstr_comparison_uses_mean_per_case_errors(tmp_path, monkeypatch):
 
 
 def test_cstr_cli_plots_saved_runs_without_raw_datasets(tmp_path, monkeypatch):
-    from scripts.cstr import plot
+    from experiments.cstr import plot
     import matplotlib.pyplot as plt
 
     run = write_run(tmp_path, "deeponet")
@@ -276,7 +276,7 @@ def test_cstr_cli_plots_saved_runs_without_raw_datasets(tmp_path, monkeypatch):
 def test_cstr_cli_plots_only_selected_channels_on_log_time(tmp_path, monkeypatch):
     """The mechanism saves ~1,270 channels; plots stay at T, P, NC7H16, O2, CO."""
     from matplotlib.figure import Figure
-    from scripts.cstr import plot
+    from experiments.cstr import plot
     import matplotlib.pyplot as plt
 
     gas = plot.ct.Solution(plot.MECHANISM)
@@ -319,7 +319,7 @@ def test_cstr_cli_plots_only_selected_channels_on_log_time(tmp_path, monkeypatch
 def test_cstr_co_diagnostic_can_run_explicitly_without_run(tmp_path, monkeypatch):
     import h5py
     import matplotlib.pyplot as plt
-    from scripts.cstr import plot
+    from experiments.cstr import plot
 
     mechanism = plot.ct.Solution(plot.MECHANISM)
     values = np.zeros((3, mechanism.n_species))

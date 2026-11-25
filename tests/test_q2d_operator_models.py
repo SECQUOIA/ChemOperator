@@ -12,7 +12,7 @@ import torch
 from chem_operator.datasets import SimulationDatasetGenerator, SimulationRecord
 from chem_operator.experiments import load_run
 from chem_operator.reactors.q2d.dataset_generator import CMRSim
-from scripts.q2d import common, fno, plot, tfno, uno
+from experiments.q2d import common, fno, plot, tfno, uno
 
 
 CONFIGS = (

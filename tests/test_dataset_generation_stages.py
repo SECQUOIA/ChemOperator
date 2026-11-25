@@ -39,10 +39,10 @@ def test_generate_missing_splits_preserves_existing_files(tmp_path: Path) -> Non
 @pytest.mark.parametrize(
     ("script", "dataset_name"),
     (
-        ("scripts/pfr_heat/generate_dataset.py", "pfr_heat"),
-        ("scripts/q2d/generate_dataset.py", "q2d_cmr"),
+        ("experiments.pfr_heat.generate_dataset", "pfr_heat"),
+        ("experiments.q2d.generate_dataset", "q2d_cmr"),
         (
-            "scripts/pipe_flow_transient/generate_dataset.py",
+            "experiments.pipe_flow_transient.generate_dataset",
             "pipe_flow_transient",
         ),
     ),
@@ -74,7 +74,10 @@ def test_generate_dataset_is_explicit_and_overwrites_all_splits(
         "SimulationDatasetGenerator",
         RecordingGenerator,
     )
-    script_path = Path(__file__).resolve().parents[1] / script
+    # Execute a fresh copy so that it binds the patched generator class.
+    installed = importlib.util.find_spec(script)
+    assert installed is not None and installed.origin is not None
+    script_path = Path(installed.origin)
     specification = importlib.util.spec_from_file_location(
         f"test_{dataset_name}_generate_dataset",
         script_path,

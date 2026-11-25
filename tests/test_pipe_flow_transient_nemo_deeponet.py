@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import math
-import importlib.util
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -17,12 +16,7 @@ from chem_operator.normalization import normalizer_from_state_dict
 from chem_operator.plotting import plot_operator_fields
 from chem_operator.reactors.pipe_flow_transient.dataset_generator import TransientHagenPoiseuillePipeFlowSim
 from chem_operator.sampling import Constant, Uniform
-
-SCRIPT_PATH = Path(__file__).resolve().parents[1] / "scripts" / "pipe_flow_transient" / "rollout_nemo_deeponet.py"
-SCRIPT_SPEC = importlib.util.spec_from_file_location("pipe_flow_transient_nemo_deeponet", SCRIPT_PATH)
-assert SCRIPT_SPEC is not None and SCRIPT_SPEC.loader is not None
-script = importlib.util.module_from_spec(SCRIPT_SPEC)
-SCRIPT_SPEC.loader.exec_module(script)
+from experiments.pipe_flow_transient import rollout_nemo_deeponet as script
 
 
 @pytest.fixture(scope="module")

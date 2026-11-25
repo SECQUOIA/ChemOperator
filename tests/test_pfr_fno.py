@@ -11,8 +11,8 @@ from chem_operator.experiments import ExperimentRunner, ExperimentSpec, RunConte
 from chem_operator.models import fit_zscore_normalizer
 from chem_operator.normalization import normalizer_from_state_dict
 from chem_operator.plotting import plot_deeponet_run_set
-from scripts.pfr import fno
-from scripts.pfr.common import CONSTANTS, FIELDS, UNITS, adapter as deeponet_adapter
+from experiments.pfr import fno
+from experiments.pfr.common import CONSTANTS, FIELDS, UNITS, adapter as deeponet_adapter
 
 
 class Cases(Dataset):

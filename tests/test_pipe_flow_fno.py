@@ -12,9 +12,9 @@ from chem_operator.experiments import (
     evaluate_fields,
     load_run,
 )
-from scripts.pipe_flow import fno
-from scripts.pipe_flow.common import FIELDS, UNITS
-from scripts.pipe_flow.physics_data import PipeData, fit_physics_normalization
+from experiments.pipe_flow import fno
+from experiments.pipe_flow.common import FIELDS, UNITS
+from experiments.pipe_flow.physics_data import PipeData, fit_physics_normalization
 
 
 def cases(count: int, *, start: int = 0, points: int = 16) -> PipeData:

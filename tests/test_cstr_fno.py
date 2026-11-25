@@ -9,8 +9,8 @@ from torch.utils.data import Dataset
 from chem_operator.experiments import ExperimentRunner, ExperimentSpec, RunContext, load_run
 from chem_operator.models import fit_zscore_normalizer
 from chem_operator.plotting import plot_deeponet_run_set
-from scripts.cstr import fno
-from scripts.cstr.common import (
+from experiments.cstr import fno
+from experiments.cstr.common import (
     CONSTANTS,
     FIELDS,
     LOG_TIME_POINTS,

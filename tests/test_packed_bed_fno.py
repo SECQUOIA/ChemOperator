@@ -13,8 +13,8 @@ from chem_operator.experiments import ExperimentRunner, ExperimentSpec, RunConte
 from chem_operator.models import fit_zscore_normalizer
 from chem_operator.normalization import normalizer_from_state_dict
 from chem_operator.plotting import plot_deeponet_run_set
-from scripts.packed_bed_1d import fno
-from scripts.packed_bed_1d.common import CONSTANTS, FIELDS, UNITS
+from experiments.packed_bed_1d import fno
+from experiments.packed_bed_1d.common import CONSTANTS, FIELDS, UNITS
 
 
 class Cases(Dataset):

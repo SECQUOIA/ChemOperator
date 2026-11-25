@@ -2,10 +2,8 @@
 
 from __future__ import annotations
 
-import importlib.util
 import math
 from dataclasses import replace
-from pathlib import Path
 
 import numpy as np
 import pytest
@@ -19,21 +17,9 @@ from chem_operator.reactors.pipe_flow_transient.dataset_generator import (
     TransientHagenPoiseuillePipeFlowSim,
 )
 from chem_operator.sampling import Constant, Uniform
+from experiments.pipe_flow_transient import field_fno as FNO_SCRIPT
 
 
-SCRIPT_PATH = (
-    Path(__file__).resolve().parents[1]
-    / "scripts"
-    / "pipe_flow_transient"
-    / "field_fno.py"
-)
-SCRIPT_SPEC = importlib.util.spec_from_file_location(
-    "pipe_flow_transient_fno",
-    SCRIPT_PATH,
-)
-assert SCRIPT_SPEC is not None and SCRIPT_SPEC.loader is not None
-FNO_SCRIPT = importlib.util.module_from_spec(SCRIPT_SPEC)
-SCRIPT_SPEC.loader.exec_module(FNO_SCRIPT)
 CONSTANT_NAMES = FNO_SCRIPT.CONSTANT_NAMES
 FIELD_NAMES = FNO_SCRIPT.FIELD_NAMES
 make_adapter = FNO_SCRIPT.make_adapter

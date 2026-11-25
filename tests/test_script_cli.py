@@ -75,7 +75,7 @@ def test_workflow_parsers_report_validation_as_cli_errors(
 def test_model_parsers_validate_before_resolving_cache(problem, monkeypatch, capsys) -> None:
     import importlib
 
-    common = importlib.import_module(f"scripts.{problem}.common")
+    common = importlib.import_module(f"experiments.{problem}.common")
 
     def unexpected_cache_resolution(*args, **kwargs):
         pytest.fail("Invalid workflow reached cache resolution")
@@ -108,18 +108,18 @@ def test_model_workflow_help_omits_removed_flags() -> None:
 @pytest.mark.parametrize(
     "script",
     (
-        "scripts/cstr/plot.py",
-        "scripts/packed_bed_1d/plot.py",
-        "scripts/pfr/plot.py",
-        "scripts/pfr_heat/plot.py",
-        "scripts/pipe_flow/plot.py",
-        "scripts/pipe_flow_transient/plot.py",
-        "scripts/q2d/plot.py",
-        "scripts/cstr/plot.py",
+        "experiments.cstr.plot",
+        "experiments.packed_bed_1d.plot",
+        "experiments.pfr.plot",
+        "experiments.pfr_heat.plot",
+        "experiments.pipe_flow.plot",
+        "experiments.pipe_flow_transient.plot",
+        "experiments.q2d.plot",
+        "experiments.cstr.plot",
     ),
 )
 def test_plot_scripts_require_run_paths(script: str) -> None:
-    command = [sys.executable, str(ROOT / script)]
+    command = [sys.executable, "-m", script]
     help_result = subprocess.run(
         [*command, "--help"], cwd=ROOT, capture_output=True, text=True,
         check=False,
