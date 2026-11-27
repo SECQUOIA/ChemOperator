@@ -17,7 +17,6 @@ from chem_operator.experiments import run_operator
 from chem_operator.models import PODTransform, fit_incremental_pod_dataset
 from experiments.pfr_heat import deeponet_fno
 from experiments.pfr_heat.common import (
-    CPUS_PER_TRIAL,
     PATHS,
     PFR_INPUTS,
     PFR_OUTPUTS,
@@ -193,7 +192,6 @@ def main():
             lambda trainer, data, context: evaluate_run(
                 trainer, data, context, pfr, wall, args.plot_cases
             ),
-            cpus=CPUS_PER_TRIAL,
         )
 
 

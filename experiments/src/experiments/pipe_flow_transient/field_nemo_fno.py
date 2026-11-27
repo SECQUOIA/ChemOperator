@@ -12,7 +12,6 @@ from chem_operator.normalization import ZScoreNormalizer
 from chem_operator.experiments import OperatorTrainer, LossTerm
 from chem_operator.experiments import run_operator, evaluate_fields
 from experiments.pipe_flow_transient.common import (
-    CPUS_PER_TRIAL,
     PATHS,
     FIELD_NAMES,
     MODEL_CONSTANT_NAMES,
@@ -290,7 +289,6 @@ def main():
                 coordinate_names=("t", "r"), cases=args.plot_cases,
                 extra_metrics=physics_metrics
             ),
-            cpus=CPUS_PER_TRIAL,
         )
 
 if __name__ == "__main__":

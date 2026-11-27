@@ -49,7 +49,8 @@ def resolve_data_cache(
     ``--data-cache on`` and ``off`` are used as given. ``auto`` caches when the
     estimated bytes of every split opened together, multiplied by
     ``max(1, --num-workers)`` because each DataLoader worker fills its own
-    cache, fit within ``ram_fraction`` of the RAM available now.
+    cache and by ``--concurrent-trials`` because each running tuning trial opens
+    its own datasets, fit within ``ram_fraction`` of the RAM available now.
 
     The result is stored on ``args`` as ``cache_data`` (with the estimate as
     ``data_cache_estimate_bytes``) so dataset factories and the run manifest
@@ -63,9 +64,10 @@ def resolve_data_cache(
 
     estimate: int | None = None
     if mode == "auto":
-        workers = max(1, int(getattr(args, "num_workers", 0)))
+        copies = max(1, int(getattr(args, "num_workers", 0)))
+        copies *= max(1, int(getattr(args, "concurrent_trials", 1)))
         try:
-            estimate = estimate_cache_nbytes(factory, splits) * workers
+            estimate = estimate_cache_nbytes(factory, splits) * copies
         except (AttributeError, TypeError, OSError, KeyError) as error:
             print(f"data cache: auto -> off (could not estimate size: {error})")
             enabled = False

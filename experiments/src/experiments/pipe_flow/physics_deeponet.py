@@ -24,7 +24,7 @@ from chem_operator.experiments import (
     run_operator,
 )
 from chem_operator.reactors.pipe_flow.dataset_generator import HagenPoiseuille, hagen_poiseuille_velocity
-from experiments.pipe_flow.common import CPUS_PER_TRIAL, MAX_EPOCHS, NUM_SAMPLES, PATHS
+from experiments.pipe_flow.common import MAX_EPOCHS, NUM_SAMPLES, PATHS
 from experiments.pipe_flow.physics_data import (
     BRANCH_NAMES,
     Normalization,
@@ -263,7 +263,6 @@ def main() -> None:
             search_space(variant),
             lambda trainer, data, run_context: evaluate_run(trainer, data, run_context, statistics, args.plot_cases),
             seed=SEED,
-            cpus=CPUS_PER_TRIAL,
         )
 
 

@@ -23,7 +23,6 @@ from experiments.pipe_flow.common import (
     FIELDS,
     MAX_EPOCHS,
     NUM_SAMPLES,
-    CPUS_PER_TRIAL,
     PATHS,
     PROBLEM_ID,
     UNITS,
@@ -245,7 +244,6 @@ def main() -> None:
             ),
             seed=SEED,
             selection_metric="data_loss",
-            cpus=CPUS_PER_TRIAL,
         )
 
 

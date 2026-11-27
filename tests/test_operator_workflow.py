@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import importlib
 import json
 import os
 from pathlib import Path
@@ -17,13 +18,24 @@ from torch.utils.data import Dataset
 from chem_operator.experiments import (
     ArtifactStore,
     EvaluationOutcome,
+    ExperimentRunner,
     ExperimentSpec,
     OperatorTrainer,
+    RunContext,
     Tuner,
+    TuningConfig,
     build_tuning_config,
     parse_operator_args,
+    run_context_from_namespace,
     run_operator,
+    tuning_resources,
 )
+from chem_operator._experiments import operator_workflow
+from chem_operator._experiments.tuning import _record_tuning_summary
+
+DEFAULT_RESOURCES = {
+    "cpus_per_trial": 1, "gpus_per_trial": None, "max_concurrent_trials": 1, "time_budget_s": None,
+}
 
 
 def spec(tmp_path: Path) -> ExperimentSpec:
@@ -112,6 +124,11 @@ def test_tuning_and_final_training_share_the_factory_with_stage_seed_and_epochs(
     assert manifest["provenance"]["final_epochs_source"] == "2x_tune"
     best = store.read_best_config()
     assert (best["seed"], best["epochs"]) == (7, 4)
+    assert manifest["tuning_budget"]["time_budget_s"] is None
+    assert manifest["tuning_budget"]["completed_trials"] == 1
+    assert manifest["provenance"]["tuning_resources"] == {
+        "cpus_per_trial": 1, "gpus_per_trial": 0, "concurrent_trials": 1,
+    }
 
 
 @pytest.mark.parametrize("reserved", ("seed", "epochs"))
@@ -154,3 +171,106 @@ def test_build_tuning_config_keeps_ray_totals_separate_from_trial_resources() ->
     assert explicit.resources_per_trial == {"cpu": 1, "gpu": 0.5}
     assert (explicit.ray_runtime.num_cpus, explicit.ray_runtime.num_gpus) == (16, 2)
     assert explicit.ray_runtime.runtime_env == {"working_dir": "."}
+
+
+def _operator_args(monkeypatch, tmp_path, *argv):
+    paths = SimpleNamespace(root=tmp_path, data=tmp_path, ray=tmp_path / "ray")
+    monkeypatch.setattr(sys, "argv", ["model.py", "--device", "cpu", "--runs-root",
+                                      str(tmp_path / "runs"), "--run-id", "r", *argv])
+    return paths, parse_operator_args(paths, tune_epochs=1, samples=4)
+
+
+def test_resource_flags_default_to_one_cpu_and_no_limits(monkeypatch, tmp_path) -> None:
+    _, args = _operator_args(monkeypatch, tmp_path)
+    assert tuning_resources(args) == DEFAULT_RESOURCES
+
+    _, args = _operator_args(monkeypatch, tmp_path, "--cpus-per-trial", "2", "--gpus-per-trial",
+                             "0.5", "--concurrent-trials", "3", "--time-budget", "90")
+    assert tuning_resources(args) == {
+        "cpus_per_trial": 2.0, "gpus_per_trial": 0.5, "max_concurrent_trials": 3, "time_budget_s": 90.0,
+    }
+
+
+@pytest.mark.parametrize(("flag", "value"), (
+    ("--cpus-per-trial", "0"), ("--cpus-per-trial", "-1"), ("--gpus-per-trial", "-0.5"),
+    ("--concurrent-trials", "0"), ("--concurrent-trials", "1.5"), ("--time-budget", "0"),
+))
+def test_invalid_resource_flags_are_usage_errors(flag, value, monkeypatch, tmp_path, capsys) -> None:
+    with pytest.raises(SystemExit) as error:
+        _operator_args(monkeypatch, tmp_path, flag, value)
+    assert error.value.code == 2
+    assert flag in capsys.readouterr().err
+
+
+def test_resource_help_explains_reproducibility_and_fractional_gpus(
+    monkeypatch, tmp_path, capsys,
+) -> None:
+    with pytest.raises(SystemExit):
+        _operator_args(monkeypatch, tmp_path, "--help")
+    text = " ".join(capsys.readouterr().out.split())
+    assert "not reproducible" in text
+    assert "pass a fraction such as 0.5" in text
+    assert "default: no limit" in text
+
+
+@pytest.mark.parametrize(
+    "problem", ("cstr", "pfr", "packed_bed_1d", "pipe_flow", "pfr_heat", "pipe_flow_transient", "q2d"),
+)
+def test_every_script_inherits_the_resource_defaults(problem, monkeypatch) -> None:
+    common = importlib.import_module(f"experiments.{problem}.common")
+    monkeypatch.setattr(common, "resolve_data_cache", lambda args, factory: None)
+    monkeypatch.setattr(sys, "argv", ["model.py"])
+    assert tuning_resources(common.parse_args()) == DEFAULT_RESOURCES
+
+
+def test_run_operator_passes_the_resource_flags_to_the_tuner(monkeypatch, tmp_path) -> None:
+    class Captured(Exception):
+        pass
+
+    def fake_tuner(*args, config, **kwargs):
+        raise Captured(config)
+
+    class Reader:
+        def close(self) -> None:
+            pass
+
+    monkeypatch.setattr(operator_workflow, "Tuner", fake_tuner)
+    paths, args = _operator_args(monkeypatch, tmp_path, "--no-train", "--cpus-per-trial", "3",
+                                 "--gpus-per-trial", "0.5", "--concurrent-trials", "2",
+                                 "--time-budget", "90")
+    with pytest.raises(Captured) as captured:
+        run_operator(args, paths, spec(tmp_path), lambda split: (Reader(), [0, 1, 2]),
+                     trainer_factory=None, search_space={"width": 1}, evaluator=None)
+    config = captured.value.args[0]
+    assert config.resources_per_trial == {"cpu": 3.0, "gpu": 0.5}
+    assert (config.max_concurrent_trials, config.time_budget_s) == (2, 90.0)
+    assert (config.ray_runtime.num_cpus, config.ray_runtime.num_gpus) == (6, 1.0)
+
+def test_run_provenance_records_resolved_tuning_resources(monkeypatch, tmp_path) -> None:
+    _, args = _operator_args(monkeypatch, tmp_path)
+    context = run_context_from_namespace(args, problem="p", model="m", seed=1)
+    assert context.provenance["tuning_resources"] == {
+        "cpus_per_trial": 1, "gpus_per_trial": 0, "concurrent_trials": 1,
+    }
+    _, args = _operator_args(monkeypatch, tmp_path, "--gpus-per-trial", "0.5",
+                             "--concurrent-trials", "2", "--run-id", "r2")
+    context = run_context_from_namespace(args, problem="p", model="m", seed=1)
+    assert context.provenance["tuning_resources"] == {
+        "cpus_per_trial": 1, "gpus_per_trial": 0.5, "concurrent_trials": 2,
+    }
+
+
+def test_tuning_records_its_time_budget_and_completed_trials(tmp_path: Path) -> None:
+    """A fake tuning outcome: two trials finished, one errored, under a 60 s budget."""
+    context = RunContext.create(tmp_path, problem="synthetic", model="fno", run_id="r", seed=1,
+                                device="cpu")
+    runner = ExperimentRunner(context, spec(tmp_path))
+    runner.start()
+    trials = [{"status": "completed"}, {"status": "error"}, {"status": "completed"}]
+    _record_tuning_summary(runner.artifacts, TuningConfig(num_samples=5, time_budget_s=60.0),
+                           trials, 12.5)
+    manifest = runner.artifacts.read_manifest()
+    assert manifest["tuning_budget"] == {
+        "samples": 1, "epochs": 2, "time_budget_s": 60.0, "completed_trials": 2,
+    }
+    assert manifest["timings"]["tuning_seconds"] == 12.5

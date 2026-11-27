@@ -46,7 +46,6 @@ TUNE_SAMPLES = 15
 TUNE_EPOCHS = 30
 EVALUATION_BATCH_SIZE = 2
 
-CPUS_PER_TRIAL = 2
 
 LATENCY_WARMUPS = 5
 LATENCY_REPEATS = 20
@@ -483,7 +482,6 @@ def run_model(
         search_space,
         evaluate_run,
         selection_metric="data_loss",
-        cpus=CPUS_PER_TRIAL,
         after_run=partial(
             after_run, data_dir=args.data_dir, normalizer=normalizer,
             geometry=geometry, shape=shape,
@@ -673,5 +671,5 @@ def run_deeponet(
     return run_operator(
         args, PATHS, experiment_spec(args, model_id), dataset_factory, trainer_factory,
         search_space, partial(evaluate_q2d_deeponet, cases=args.plot_cases),
-        seed=SEED, selection_metric="loss", cpus=CPUS_PER_TRIAL,
+        seed=SEED, selection_metric="loss",
     )

@@ -284,7 +284,7 @@ def test_tuning_setup_and_train_validation_factory(data_dir, tmp_path, monkeypat
         assert tuner.config.max_epochs == 3
         assert not {"seed", "epochs"} & set(tuner.search_space)
         assert tuner.config.num_samples == 2
-        assert tuner.config.resources_per_trial == {"cpu": 2, "gpu": 0}
+        assert tuner.config.resources_per_trial == {"cpu": 1, "gpu": 0}  # library default
         with tuner.dataset_factory(runner.context) as (training, valid):
             assert len(training) == len(valid) == 2
             assert unwrap_dataset(training).dataset.dataset.path.name == "q2d_cmr_train.h5"

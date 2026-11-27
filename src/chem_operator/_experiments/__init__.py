@@ -64,6 +64,7 @@ from .workflow import (
     add_workflow_arguments,
     parse_workflow_args,
     run_context_from_namespace,
+    tuning_resources,
 )
 
 from .operator_workflow import (
@@ -138,6 +139,7 @@ __all__ = [
     "resolve_dtype",
     "resolve_train_config",
     "run_context_from_namespace",
+    "tuning_resources",
     "DATA_CACHE_MODES",
     "data_loading_provenance",
     "estimate_cache_nbytes",

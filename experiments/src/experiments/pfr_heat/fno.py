@@ -16,7 +16,6 @@ from chem_operator.experiments import OperatorTrainer, LossTerm, EvaluationOutco
 from chem_operator.experiments import run_operator
 import numpy as np
 from experiments.pfr_heat.common import (
-    CPUS_PER_TRIAL,
     PATHS,
     CHECKPOINT,
     SEED,
@@ -31,7 +30,6 @@ from experiments.pfr_heat.common import (
     TUNE_SAMPLES,
     TUNE_EPOCHS,
     EVALUATION_BATCH_SIZE,
-    MAX_CONCURRENT_TRIALS,
     HISTORY_KEYS,
     raw_dataset,
     complete_field,
@@ -297,7 +295,6 @@ def main():
             lambda trainer,data,context: evaluate_run(
                 trainer,data,context,pfr,wall,args.plot_cases
             ),
-            cpus=CPUS_PER_TRIAL,
         )
 
 if __name__ == "__main__":

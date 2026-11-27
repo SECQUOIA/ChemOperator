@@ -217,6 +217,18 @@ def test_auto_cache_counts_one_copy_per_worker(monkeypatch) -> None:
     assert args.data_cache_estimate_bytes == 600
 
 
+def test_auto_cache_counts_one_copy_per_concurrent_trial(monkeypatch) -> None:
+    """Each running tuning trial opens its own datasets, on top of its workers."""
+    factory = lambda split: _Estimated(100, [], split)  # noqa: E731
+    _available(monkeypatch, 4 * 1200)
+    args = _args(num_workers=2, concurrent_trials=2)
+    assert resolve_data_cache(args, factory) is True
+    assert args.data_cache_estimate_bytes == 1200
+    args = _args(concurrent_trials=3)
+    resolve_data_cache(args, factory)
+    assert args.data_cache_estimate_bytes == 900
+
+
 def test_explicit_cache_modes_skip_the_estimate() -> None:
     def factory(split):
         raise AssertionError("on/off must not open datasets")

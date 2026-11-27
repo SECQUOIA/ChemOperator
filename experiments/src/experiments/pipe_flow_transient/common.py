@@ -41,7 +41,6 @@ SEED = 42
 # 2 x --tune-epochs unless --epochs is given.
 TUNE_EPOCHS = 10
 NUM_SAMPLES = 15
-CPUS_PER_TRIAL = 2
 
 PDE_REGISTRY: dict[str, type[PDE]] = {
     TransientHagenPoiseuille.__name__: TransientHagenPoiseuille,
@@ -524,5 +523,4 @@ def run_rollout_experiment(args, normalizer: ZScoreNormalizer, n_radial: int,
             trainer, data, context, normalizer, args.data_dir, n_radial,
             cases=args.plot_cases, max_cases=args.max_cases,
         ),
-        cpus=CPUS_PER_TRIAL,
     )

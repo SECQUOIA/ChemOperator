@@ -346,14 +346,36 @@ class Tuner:
                 artifact_store.write_tuning_progress(
                     row for result in results for row in _trial_progress(result)
                 )
-                if artifact_store.paths.manifest.is_file():
-                    artifact_store.update_manifest(
-                        timings={"tuning_seconds": tuning_seconds}
-                    )
+                _record_tuning_summary(artifact_store, self.config, trials, tuning_seconds)
             return outcome
         finally:
             if owned_ray:
                 ray.shutdown()
+
+
+def _record_tuning_summary(
+    store: ArtifactStore,
+    config: TuningConfig,
+    trials: Sequence[Mapping[str, Any]],
+    tuning_seconds: float,
+) -> None:
+    """Add the tuning time, time budget and completed-trial count to the manifest.
+
+    ``tuning_budget.completed_trials`` counts trials that ran without error,
+    including ones ASHA stopped early. It is below the sample budget when
+    ``time_budget_s`` stopped tuning before every trial started.
+    """
+    if not store.paths.manifest.is_file():
+        return
+    manifest = store.read_manifest()
+    store.update_manifest(
+        timings={"tuning_seconds": tuning_seconds},
+        tuning_budget={
+            **dict(manifest.get("tuning_budget") or {}),
+            "time_budget_s": config.time_budget_s,
+            "completed_trials": sum(trial.get("status") == "completed" for trial in trials),
+        },
+    )
 
 
 # Trainer-config keys the tuner supplies for every trial.

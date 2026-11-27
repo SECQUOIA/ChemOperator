@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 from collections.abc import Sequence
 from dataclasses import dataclass
+from typing import Any
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -150,11 +151,92 @@ def add_run_arguments(
             "available RAM."
         ),
     )
+    # Tuning resources describe the machine, not the experiment: every script
+    # shares these defaults (1 CPU, GPUs from --device, 1 trial, no time limit).
+    parser.add_argument(
+        "--cpus-per-trial",
+        type=_positive_float,
+        default=1,
+        help=(
+            "CPUs each tuning trial requests from Ray (default: 1). Ray also sets "
+            "the trial's OMP_NUM_THREADS to this value."
+        ),
+    )
+    # None means 1 GPU per trial when --device resolves to CUDA, else 0. A whole
+    # GPU per trial makes Ray queue extra concurrent trials on a single-GPU
+    # machine; a fraction such as 0.5 lets two trials share it.
+    parser.add_argument(
+        "--gpus-per-trial",
+        type=_non_negative_float,
+        default=None,
+        help=(
+            "GPUs each tuning trial requests (default: 1 when --device resolves "
+            "to CUDA, else 0). With --concurrent-trials above 1 on one GPU, pass "
+            "a fraction such as 0.5; with whole GPUs Ray queues the extra trials "
+            "instead of running them in parallel."
+        ),
+    )
+    parser.add_argument(
+        "--concurrent-trials",
+        type=_positive_int,
+        default=1,
+        help=(
+            "Tuning trials run at the same time (default: 1). Values above 1 are "
+            "not reproducible: Optuna proposes new trials before earlier ones "
+            "finish, and the finishing order varies, so a fixed seed no longer "
+            "fixes the tuning result."
+        ),
+    )
+    parser.add_argument(
+        "--time-budget",
+        type=_positive_float,
+        default=None,
+        metavar="SECONDS",
+        help=(
+            "Stop tuning after this many seconds (default: no limit). How many "
+            "trials finish then depends on machine speed and load."
+        ),
+    )
+
+
+def tuning_resources(args: argparse.Namespace) -> dict[str, Any]:
+    """Return :func:`build_tuning_config` keyword arguments from the resource flags.
+
+    A namespace without the flags gets the library defaults: 1 CPU per trial,
+    GPUs from the device, 1 concurrent trial and no time limit.
+    """
+    return {
+        "cpus_per_trial": getattr(args, "cpus_per_trial", 1),
+        "gpus_per_trial": getattr(args, "gpus_per_trial", None),
+        "max_concurrent_trials": int(getattr(args, "concurrent_trials", 1)),
+        "time_budget_s": getattr(args, "time_budget", None),
+    }
 
 
 def _non_negative_int(value: str) -> int:
     number = int(value)
     if number < 0:
+        raise argparse.ArgumentTypeError("must be non-negative")
+    return number
+
+
+def _positive_int(value: str) -> int:
+    number = int(value)
+    if number < 1:
+        raise argparse.ArgumentTypeError("must be a positive integer")
+    return number
+
+
+def _positive_float(value: str) -> float:
+    number = float(value)
+    if not number > 0:
+        raise argparse.ArgumentTypeError("must be positive")
+    return number
+
+
+def _non_negative_float(value: str) -> float:
+    number = float(value)
+    if not number >= 0:
         raise argparse.ArgumentTypeError("must be non-negative")
     return number
 
@@ -180,6 +262,17 @@ def final_epochs_provenance(args: argparse.Namespace) -> dict[str, object]:
     }
 
 
+def tuning_resources_provenance(args: argparse.Namespace, device: torch.device) -> dict[str, Any]:
+    """Return the per-trial resources and concurrency, with GPUs resolved for ``device``."""
+    resources = tuning_resources(args)
+    gpus = resources["gpus_per_trial"]
+    return {
+        "cpus_per_trial": resources["cpus_per_trial"],
+        "gpus_per_trial": (1 if device.type == "cuda" else 0) if gpus is None else gpus,
+        "concurrent_trials": resources["max_concurrent_trials"],
+    }
+
+
 def run_context_from_namespace(
     namespace: argparse.Namespace,
     *,
@@ -195,7 +288,7 @@ def run_context_from_namespace(
     resulting context seeds tuning and, for flat single-seed runs, training.
     Multi-seed children are derived with :meth:`RunContext.seed_child`.
     Namespaces from :func:`parse_operator_args` also record the resolved final
-    epochs and their source in the provenance.
+    epochs and their source, and the tuning resources, in the provenance.
     """
     run_id = namespace.run_id or datetime.now(timezone.utc).strftime(
         "%Y%m%dT%H%M%SZ"
@@ -207,6 +300,9 @@ def run_context_from_namespace(
     if hasattr(namespace, "tune_epochs"):
         for key, value in final_epochs_provenance(namespace).items():
             provenance.setdefault(key, value)
+    device = resolve_device(namespace.device)
+    if hasattr(namespace, "cpus_per_trial"):
+        provenance.setdefault("tuning_resources", tuning_resources_provenance(namespace, device))
     return RunContext.create(
         namespace.runs_root,
         problem=problem,
@@ -214,7 +310,7 @@ def run_context_from_namespace(
         run_id=run_id,
         seed=seed if tune_seed is None else int(tune_seed),
         dtype=dtype,
-        device=resolve_device(namespace.device),
+        device=device,
         num_workers=int(getattr(namespace, "num_workers", 0)),
         provenance=provenance,
     )

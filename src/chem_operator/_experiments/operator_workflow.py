@@ -21,7 +21,7 @@ from .types import EvaluationOutcome
 from .tuning import Tuner, RayRuntimeConfig, build_tuning_config
 from .workflow import (
     WorkflowStages, add_run_arguments, add_workflow_arguments, final_epochs, parse_workflow_args,
-    run_context_from_namespace,
+    run_context_from_namespace, tuning_resources,
 )
 from .artifacts import fingerprint_path
 from .metrics import StreamingRegressionMetrics
@@ -89,14 +89,15 @@ def operator_ray_runtime(paths, *, cpus, gpus, runtime_env=None):
 
 
 def run_operator(args, paths, spec, dataset_factory, trainer_factory, search_space, evaluator,
-                 *, seed=42, selection_metric="relative_l2", cpus=1, after_run=None, runtime_env=None):
+                 *, seed=42, selection_metric="relative_l2", after_run=None, runtime_env=None):
     """Tune, train, and evaluate one operator model under the canonical artifact contract.
 
     Tuning trials and final training both build their trainer with
     ``trainer_factory(config, context)``. The library sets ``config["seed"]`` to the
     context seed and ``config["epochs"]`` to ``--tune-epochs`` in trials and to
     :func:`final_epochs` in final training, so ``search_space`` sets neither.
-    Each tuning trial requests ``cpus`` CPUs (default 1). ``runtime_env`` is passed to
+    Tuning resources come from the ``--cpus-per-trial``, ``--gpus-per-trial``,
+    ``--concurrent-trials`` and ``--time-budget`` flags. ``runtime_env`` is passed to
     Ray unchanged (for example for a remote cluster).
     """
     stages = WorkflowStages.from_namespace(args)
@@ -116,7 +117,7 @@ def run_operator(args, paths, spec, dataset_factory, trainer_factory, search_spa
     if stages.tune:
         tuner = Tuner(trial_trainer, search_space, dataset_factory=trial_data, config=build_tuning_config(
             metric=f"best_valid_{selection_metric}", samples=args.samples, epochs=args.tune_epochs,
-            seed=context.seed, device=context.device, cpus_per_trial=cpus,
+            seed=context.seed, device=context.device, **tuning_resources(args),
             temp_dir=paths.ray, runtime_env=runtime_env))
         tuning = runner.tune(tuner, None, None)
     if stages.train:

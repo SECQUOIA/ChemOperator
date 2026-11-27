@@ -66,6 +66,7 @@ from chem_operator._experiments import (
     resolve_dtype,
     resolve_train_config,
     run_context_from_namespace,
+    tuning_resources,
     DATA_CACHE_MODES,
     data_loading_provenance,
     estimate_cache_nbytes,

@@ -27,6 +27,7 @@ from chem_operator.experiments import (
     fingerprint_path,
     parse_operator_args,
     resolve_data_cache,
+    tuning_resources,
 )
 from chem_operator.models import (
     DeepONetAdapter,
@@ -48,8 +49,6 @@ SEED = 42
 # unless --epochs is given (see chem_operator.experiments.final_epochs).
 MAX_EPOCHS = 20
 NUM_SAMPLES = 15
-MAX_CONCURRENT_TRIALS = 1
-CPUS_PER_TRIAL = 2
 PIN_MEMORY = torch.cuda.is_available()
 
 
@@ -193,14 +192,13 @@ def experiment_spec(model_id: str, args: argparse.Namespace) -> ExperimentSpec:
 def tuning_settings(
     args: argparse.Namespace, context: RunContext, *, metric: str = "best_valid_loss"
 ) -> TuningConfig:
-    """Tuning policy of the hand-built scripts here; GPUs per trial follow ``--device``."""
+    """Tuning policy of the hand-built scripts here; resources come from the CLI flags."""
     return build_tuning_config(
         metric=metric,
         samples=args.samples,
         epochs=args.tune_epochs,
         seed=context.seed,
         device=context.device,
-        cpus_per_trial=CPUS_PER_TRIAL,
-        max_concurrent_trials=MAX_CONCURRENT_TRIALS,
+        **tuning_resources(args),
         temp_dir=PATHS.ray,
     )

@@ -35,8 +35,6 @@ TUNE_SAMPLES = 15
 # Default for --tune-epochs; final training runs 2 x --tune-epochs unless --epochs is given.
 TUNE_EPOCHS = 60
 EVALUATION_BATCH_SIZE = 4
-MAX_CONCURRENT_TRIALS = 1
-CPUS_PER_TRIAL = 2
 HISTORY_KEYS = (
     "data_loss", "species_loss", "gas_loss", "solid_loss", "bc_loss",
     "total_loss", "valid_relative_l2", "valid_species_loss",
