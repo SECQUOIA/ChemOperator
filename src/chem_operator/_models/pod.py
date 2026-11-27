@@ -130,9 +130,9 @@ def fit_incremental_pod(
     n_components: int | None = None,
 ) -> PODTransform:
     """Fit trajectory-output IPCA from batches shaped ``[B, *output_shape]``.
-
     Components are truncated at the first cumulative explained-variance value
     meeting ``variance_threshold``.
+    Can also pass n_components explicitly which overrides ``variance_threshold``.
     """
 
     if not 0.0 < variance_threshold <= 1.0:

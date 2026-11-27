@@ -64,7 +64,7 @@ The direct and POD DeepONet scripts accept these options:
 | `--run-id ID` | UTC timestamp | Select the final run-directory component. |
 | `--device DEVICE` | `auto` | Select `auto`, `cpu`, `cuda`, or another PyTorch device. |
 | `--data-cache MODE` | `auto` | Keep dataset arrays in memory after their first read: `auto`, `on`, or `off`. |
-| `--num-workers N` | `0` | DataLoader worker processes per loader. Workers are only worth it for datasets too big to cache. More workers increases overhead and can very easily slo down training. |
+| `--num-workers N` | `0` | DataLoader worker processes per loader. Workers are only worth it for datasets too big to cache. More workers increases overhead and can very easily slow down training. |
 | `--plot-cases N` | `2` | Number of test reconstructions to store. |
 | `--train-config CONFIG` | `best` | Hyperparameters for final training: `best` (this run's `best_config.json`), `recent` (the newest tuned run of this model), a completed run directory, or a JSON file. |
 | `--seeds SEED [SEED ...]` | unset | Train the final model once per seed under `<run>/seeds/<seed>/`; requires `--train`. |
