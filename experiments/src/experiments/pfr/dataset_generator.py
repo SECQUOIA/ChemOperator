@@ -15,7 +15,6 @@ from chem_operator.datasets import (
     SimulationDatasetGenerator,
 )
 from chem_operator.sampling import ParameterSpec, Constant, Uniform
-from chem_operator.utils import datasets_path
 
 def _inlet_composition(
     mechanism_file_name: str,

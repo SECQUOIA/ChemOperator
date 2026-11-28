@@ -2,7 +2,7 @@
 
 from chem_operator.datasets import SimulationDatasetGenerator
 from experiments.paths import example_paths
-from chem_operator.reactors.pfr_heat.dataset_generator import PFRHeatSim
+from experiments.pfr_heat.dataset_generator import PFRHeatSim
 from chem_operator.sampling import Constant, Uniform
 
 

@@ -1,6 +1,6 @@
 from chem_operator.datasets import SimulationDatasetGenerator
 from experiments.paths import example_paths
-from chem_operator.reactors.pipe_flow.dataset_generator import HagenPoiseuillePipeFlowSim
+from experiments.pipe_flow.dataset_generator import HagenPoiseuillePipeFlowSim
 from chem_operator.datasets import SimulationDatasetGenerator
 from chem_operator.sampling import Constant, Uniform
 

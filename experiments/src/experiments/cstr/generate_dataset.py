@@ -1,6 +1,6 @@
 import cantera as ct
 from experiments.paths import example_paths
-from chem_operator.reactors.cstr.dataset_generator import CSTRSim, NonIsothermalCSTRSim
+from experiments.cstr.dataset_generator import CSTRSim, NonIsothermalCSTRSim
 from chem_operator.datasets import SimulationDatasetGenerator
 from chem_operator.sampling import Constant, Uniform
 

@@ -23,7 +23,7 @@ from chem_operator.experiments import (
     parse_operator_args,
     run_operator,
 )
-from chem_operator.reactors.pipe_flow.dataset_generator import HagenPoiseuille, hagen_poiseuille_velocity
+from experiments.pipe_flow.dataset_generator import HagenPoiseuille, hagen_poiseuille_velocity
 from experiments.pipe_flow.common import MAX_EPOCHS, NUM_SAMPLES, PATHS
 from experiments.pipe_flow.physics_data import (
     BRANCH_NAMES,

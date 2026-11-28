@@ -23,10 +23,10 @@ from chem_operator.datasets import (
     SimulationRecord,
 )
 from chem_operator.sampling import ParameterSpec
+from experiments.paths import project_root
 
 
-PROJECT_ROOT = Path(__file__).resolve().parents[4]
-DEFAULT_Q2D_EXPERIMENT_ROOT = PROJECT_ROOT / "Quasi-2D-packbed-experiement"
+DEFAULT_Q2D_EXPERIMENT_ROOT = project_root() / "Quasi-2D-packbed-experiement"
 DEFAULT_Q2D_SOLVER_ROOT = (
     DEFAULT_Q2D_EXPERIMENT_ROOT / "external" / "Quasi-2D-packbed"
 )

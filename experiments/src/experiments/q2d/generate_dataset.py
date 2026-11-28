@@ -5,7 +5,7 @@ from collections.abc import Mapping
 
 from chem_operator.datasets import SimulationDatasetGenerator
 from experiments.paths import example_paths
-from chem_operator.reactors.q2d.dataset_generator import (
+from experiments.q2d.dataset_generator import (
     CMRSim,
     default_docker_solver_command,
 )

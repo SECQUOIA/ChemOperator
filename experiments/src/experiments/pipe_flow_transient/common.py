@@ -11,12 +11,12 @@ from ray import tune
 from torch import nn
 from torch.nn import functional as F
 from torch.utils.data import DataLoader, Dataset, Subset
-from chem_operator._models.deeponet import DeepONetTrainingConfig
+from chem_operator.models import DeepONetTrainingConfig
 from chem_operator.datasets import ChemOperatorDataset
 from experiments.paths import example_paths
 from chem_operator.models import FNOAdapter, FNOChannel, fit_fno_zscore_normalizer, fit_zscore_normalizer
 from chem_operator.normalization import ZScoreNormalizer, normalizer_from_state_dict
-from chem_operator.reactors.pipe_flow_transient.dataset_generator import TransientHagenPoiseuille
+from experiments.pipe_flow_transient.dataset_generator import TransientHagenPoiseuille
 from chem_operator.experiments import OperatorTrainer, EvaluationOutcome, LossTerm, StreamingRegressionMetrics, parse_operator_args, operator_spec, resolve_data_cache, run_operator
 PATHS = example_paths(__file__, dataset="pipe_flow_transient")
 

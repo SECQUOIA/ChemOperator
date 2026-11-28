@@ -5,7 +5,6 @@ from __future__ import annotations
 import time
 from collections.abc import Mapping
 from copy import deepcopy
-from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -21,7 +20,6 @@ from chem_operator.datasets import (
 )
 from chem_operator.sampling import Constant, ParameterSpec, Uniform
 
-PROJECT_ROOT = Path(__file__).resolve().parents[4]
 LAMINAR_REYNOLDS_LIMIT = 2300.0
 
 class HagenPoiseuille(PDE):

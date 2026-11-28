@@ -11,7 +11,7 @@ import torch
 from torch import nn
 from torch.nn import functional as F
 from torch.utils.data import DataLoader
-from chem_operator.reactors.pfr_heat.dataset_generator import CylindricalWall, ModelConstants, PlugFlowReactor
+from experiments.pfr_heat.dataset_generator import CylindricalWall, ModelConstants, PlugFlowReactor
 from chem_operator.experiments import OperatorTrainer, LossTerm, EvaluationOutcome, StreamingRegressionMetrics
 from chem_operator.experiments import run_operator
 import numpy as np

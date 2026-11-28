@@ -9,7 +9,7 @@ import cantera as ct
 import numpy as np
 from scikits.odes import dae
 
-from chem_operator.utils import get_mechanism_file, datasets_path
+from chem_operator.utils import get_mechanism_file
 from chem_operator.datasets import (
     CaseParameters,
     CaseSimulator,

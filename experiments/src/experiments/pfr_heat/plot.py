@@ -1,7 +1,7 @@
 """Plot saved canonical operator runs without loading models or datasets."""
 from pathlib import Path
 import argparse
-from chem_operator._experiments.comparison import load_run, read_reconstructions
+from chem_operator.experiments import load_run, read_reconstructions
 from experiments.paths import example_paths
 from chem_operator.plotting import (
     add_plot_run_arguments, member_plot_dirs, select_plot_runs, plot_selected_runs,

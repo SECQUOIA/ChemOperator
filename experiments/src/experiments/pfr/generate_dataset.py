@@ -1,6 +1,6 @@
 import cantera as ct
 from experiments.paths import example_paths
-from chem_operator.reactors.pfr.dataset_generator import (
+from experiments.pfr.dataset_generator import (
     PFRLagrangianParticleSim, PFRChainOfReactorsSim, PFRNonIsothermalChainOfReactorsSim
 )
 from chem_operator.datasets import SimulationDatasetGenerator

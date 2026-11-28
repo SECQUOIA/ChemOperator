@@ -1,5 +1,5 @@
 from experiments.paths import example_paths
-from chem_operator.reactors.packed_bed_1D.dataset_generator import PackedBed1DSim
+from experiments.packed_bed_1d.dataset_generator import PackedBed1DSim
 from chem_operator.datasets import SimulationDatasetGenerator
 from chem_operator.sampling import Constant, Uniform
 

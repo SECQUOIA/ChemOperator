@@ -15,7 +15,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 from chem_operator.datasets import SimulationRecord
-from chem_operator.reactors.q2d.dataset_generator import (
+from experiments.q2d.dataset_generator import (
     CMRSim,
     compare_record_to_legacy_csv,
     default_docker_solver_command,
