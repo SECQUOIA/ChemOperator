@@ -4,8 +4,9 @@ __pycache__/
 .pytest_cache/
 
 artifacts/
-scripts/**/results/
-scripts/q2d/runs/
+
+experiments/src/experiments/**/results/
+experiments/src/experiments/q2d/runs/
 
 .coverage
 
