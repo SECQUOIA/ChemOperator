@@ -3,14 +3,9 @@ import os
 from pathlib import Path
 # from collections.abc import Iterable, Sequence, Callable
 # from typing import Any, Protocol, Literal
-# from io import StringIO
-# import time
-# from dataclasses import dataclass
 import warnings
 from importlib.resources import files
 from typing import TYPE_CHECKING
-
-# from tqdm import tqdm, trange
 
 import cantera as ct
 import numpy as np
@@ -24,8 +19,6 @@ os.environ["DDE_BACKEND"] = "pytorch"
 
 pd.set_option("display.max_columns", None)
 pd.set_option("display.max_rows", None)
-
-datasets_path = Path(__file__).resolve().parent.parent.parent / "datasets"
 
 def get_mechanism_file(file_name: str) -> Path:
     """
@@ -54,7 +47,7 @@ def get_species_names(sample, gas=None):
     return list(gas.species_names)
 
 def to_numpy(x):
-    if hasattr(x, "detach"):  # torch tensor
+    if hasattr(x, "detach"): # torch tensor
         return x.detach().cpu().numpy()
     return np.asarray(x)
 

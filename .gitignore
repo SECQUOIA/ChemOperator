@@ -25,4 +25,5 @@ core
 core.*
 
 # experiment figures
-scripts/*/results/
+experiments/src/experiments/*/results/
+experiments/src/experiments/**/*.png

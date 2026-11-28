@@ -1,0 +1,147 @@
+"""Generate canonical, resolution-sweep, and tolerance-sweep Q2D datasets."""
+
+import argparse
+from collections.abc import Mapping
+
+from chem_operator.datasets import SimulationDatasetGenerator
+from experiments.paths import example_paths
+from experiments.q2d.dataset_generator import (
+    CMRSim,
+    default_docker_solver_command,
+)
+from chem_operator.sampling import Constant, Grid, ParameterSpec, Uniform
+
+# axial x radial
+RESOLUTIONS = tuple(
+    (n_z, n_r)
+    for n_z in range(14, 20, 2)
+    for n_r in range(6, 10, 2)
+)
+STEADY_RTOLS = (1.0, 5e-1, 1e-1, 1e-2, 1e-3, 1e-4, 1e-5, 1e-6)
+
+q2d_parameter_space = {
+    "annular_channel": Constant(False),
+    "T0": Uniform(1150.0, 1240.0),
+    "sccm": Uniform(470.0, 530.0),
+    "P0": Constant(1.0e6),
+    "mesh_points": Constant(14),
+    "lumen_points": Constant(6),
+    "refine": Constant(False),
+    "rtol_ss": Constant(1e-3),
+}
+
+q2d_multiresolution_parameter_space = {
+    resolution: q2d_parameter_space
+    | {
+        "mesh_points": Constant(resolution[0]),
+        "lumen_points": Constant(resolution[1]),
+    }
+    for resolution in RESOLUTIONS
+}
+
+q2d_tolerance_parameter_space = {
+    "T0": Constant(1173.0),
+    "P0": Constant(1e6),
+    "sccm": Constant(500.0),
+    "mesh_points": Constant(20),
+    "lumen_points": Constant(10),
+    "refine": Constant(False),
+    "rtol_ss": Grid(STEADY_RTOLS),
+}
+
+q2d_tolerance_interp_parameter_space = {
+    "T0": Constant(1173.0),
+    "P0": Constant(1e6),
+    "sccm": Constant(500.0),
+    "mesh_points": Constant(14),
+    "lumen_points": Constant(6),
+    "refine": Constant(False),
+    "rtol_ss": Grid(STEADY_RTOLS),
+}
+
+
+def _simulator(parameter_space: Mapping[str, ParameterSpec], name: str) -> CMRSim:
+    """Construct one Docker-backed simulator with a unique dataset name."""
+    simulator = CMRSim(
+        parameter_space=parameter_space,
+        solver_command=default_docker_solver_command(),
+        use_reference_if_no_solver=False,
+    )
+    simulator.name = name
+    return simulator
+
+
+q2d_simulator = _simulator(q2d_parameter_space, "q2d_cmr")
+
+
+def _dataset_path():
+    return example_paths(__file__).datasets / "q2d_cmr"
+
+
+def generate_dataset(n_cases: int = 100) -> None:
+    """Generate and overwrite the canonical 14-by-6 dataset splits."""
+    q2d_dataset_generator = SimulationDatasetGenerator(q2d_simulator, _dataset_path())
+    records_splits = q2d_dataset_generator.generate_splits(n_cases=n_cases)
+    q2d_dataset_generator.save_splits(records_splits, overwrite=True)
+
+
+def generate_multiresolution_datasets(n_cases: int = 3) -> None:
+    """Generate one matched test split at each fixed mesh resolution."""
+    for (n_z, n_r), parameter_space in q2d_multiresolution_parameter_space.items():
+        simulator = _simulator(parameter_space, f"q2d_cmr_{n_z}_{n_r}")
+        generator = SimulationDatasetGenerator(simulator, _dataset_path())
+        records = generator.generate_split("test", n_cases, generator.seed + 3)
+        generator.save_split("test", records, overwrite=True)
+
+
+def _generate_tolerance_test(
+    parameter_space: Mapping[str, ParameterSpec],
+    name: str,
+) -> None:
+    """Generate one physical tutorial case at every configured tolerance."""
+    simulator = _simulator(parameter_space, name)
+    generator = SimulationDatasetGenerator(simulator, _dataset_path())
+    records = generator.generate_split("test", 1, generator.seed + 2)
+    generator.save_split("test", records, overwrite=True)
+
+
+def generate_tolerance_datasets() -> None:
+    """Generate paired target-grid and coarse-grid tolerance test files."""
+    _generate_tolerance_test(
+        q2d_tolerance_parameter_space,
+        "q2d_cmr_tolerance_20_10",
+    )
+    _generate_tolerance_test(
+        q2d_tolerance_interp_parameter_space,
+        "q2d_cmr_tolerance_14_6",
+    )
+
+
+def generate_all_datasets(n_cases: int = 100) -> None:
+    """Generate the canonical, resolution-sweep, and tolerance datasets."""
+    generate_dataset(n_cases=n_cases)
+    generate_multiresolution_datasets()
+    generate_tolerance_datasets()
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--suite", choices=("all", "base", "resolution", "tolerance"), default="all",
+                        help="Dataset suite to generate (default: all).")
+    parser.add_argument("--n-cases", type=int, default=100,
+                        help="Number of canonical cases for the all/base suites (default: 80).")
+    args = parser.parse_args()
+    if args.n_cases < 1:
+        parser.error("--n-cases must be positive.")
+    if args.suite == "all":
+        generate_all_datasets(n_cases=args.n_cases)
+    elif args.suite == "base":
+        generate_dataset(n_cases=args.n_cases)
+    elif args.suite == "resolution":
+        generate_multiresolution_datasets()
+    else:
+        generate_tolerance_datasets()
+
+
+if __name__ == "__main__":
+    main()

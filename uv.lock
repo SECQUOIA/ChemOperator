@@ -13,6 +13,12 @@ resolution-markers = [
     "python_full_version < '3.13' and sys_platform != 'emscripten' and sys_platform != 'win32'",
 ]
 
+[manifest]
+members = [
+    "experiment-v2",
+    "experiments",
+]
+
 [[package]]
 name = "aiobotocore"
 version = "3.8.0"
@@ -845,6 +851,7 @@ dependencies = [
     { name = "nvidia-physicsnemo" },
     { name = "optuna" },
     { name = "pandas" },
+    { name = "psutil" },
     { name = "pyqt6" },
     { name = "ray", extra = ["tune"] },
     { name = "scikit-learn" },
@@ -860,6 +867,7 @@ sundials = [
 
 [package.dev-dependencies]
 dev = [
+    { name = "experiments" },
     { name = "huggingface-hub" },
     { name = "pylint" },
     { name = "pytest" },
@@ -879,6 +887,7 @@ requires-dist = [
     { name = "nvidia-physicsnemo", specifier = ">=2.1.1" },
     { name = "optuna", specifier = ">=4.9.0" },
     { name = "pandas", specifier = ">=3.0.3" },
+    { name = "psutil", specifier = ">=7.2.2" },
     { name = "pyqt6", specifier = ">=6.11.0" },
     { name = "ray", extras = ["tune"], specifier = ">=2.56.0" },
     { name = "scikit-learn", specifier = ">=1.9.0" },
@@ -891,11 +900,23 @@ provides-extras = ["sundials"]
 
 [package.metadata.requires-dev]
 dev = [
+    { name = "experiments", editable = "experiments" },
     { name = "huggingface-hub", specifier = ">=1.24.0" },
     { name = "pylint", specifier = ">=4.0.6" },
     { name = "pytest", specifier = ">=9.1.1" },
     { name = "pytest-cov", specifier = ">=7.1.0" },
 ]
+
+[[package]]
+name = "experiments"
+version = "0.1.0"
+source = { editable = "experiments" }
+dependencies = [
+    { name = "experiment-v2" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "experiment-v2", editable = "." }]
 
 [[package]]
 name = "filelock"

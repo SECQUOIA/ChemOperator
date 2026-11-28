@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import csv
 import json
 from pathlib import Path
 
@@ -225,7 +226,7 @@ def test_run_operator_passes_tune_seed_to_optuna(tmp_path: Path, monkeypatch) ->
     monkeypatch.setattr(operator_workflow, "Tuner", fake_tuner)
     monkeypatch.setattr("sys.argv", ["fno.py", "--no-train", "--tune-seed", "19", "--device", "cpu",
                                      "--runs-root", str(tmp_path / "runs"), "--run-id", "r"])
-    args = operator_workflow.parse_operator_args(paths, epochs=1, tune_epochs=1, samples=1)
+    args = operator_workflow.parse_operator_args(paths, tune_epochs=1, samples=1)
     with pytest.raises(Captured) as captured:
         operator_workflow.run_operator(
             args, paths, spec(tmp_path), lambda split: (Raw(), TinyFields()),
@@ -599,3 +600,42 @@ def test_runs_trained_from_another_run_inherit_its_tuning_time(tmp_path: Path) -
     own = ExperimentRunner(context("own"), spec(tmp_path))
     train_final(own, WorkflowStages(tune=False), config={"seed": 1}, tuning=None, train_one=train_one)
     assert own.artifacts.read_manifest()["timings"]["tuning_seconds"] == 0.0
+
+
+def _rewrite_validation(member_dir: Path, metric: str, values: list[float]) -> None:
+    """Replace one validation metric's history while keeping other events."""
+    store = ArtifactStore(member_dir)
+    with store.paths.history.open(encoding="utf-8", newline="") as stream:
+        kept = [MetricEvent(int(row["epoch"]), row["split"], row["metric"], float(row["value"]))
+                for row in csv.DictReader(stream)
+                if not (row["split"] == "val" and row["metric"] == metric)]
+    store.write_history(kept + [MetricEvent(epoch, "val", metric, value)
+                                for epoch, value in enumerate(values, start=1)])
+
+
+def test_best_member_uses_final_validation_loss_not_test(tmp_path: Path) -> None:
+    from chem_operator.plotting import member_plot_dirs
+
+    # Test relative_l2 favours seed 1 (0.4 < 0.5 < 0.6).
+    parent = _seed_group(tmp_path, "model_a", "group", stamp="2025-02-01T00:00:00+00:00")
+    seeds = parent / "seeds"
+    # Seed 3 ends lowest on validation, though its best epoch is not its last.
+    _rewrite_validation(seeds / "3", "relative_l2", [0.001, 0.2, 0.05])
+    run = load_run(parent)
+    assert run.best_member.path == seeds / "3"
+    assert run.representative.path == seeds / "1"
+    assert member_plot_dirs(run, tmp_path / "plots")[0] == (run.best_member, tmp_path / "plots")
+
+    # A validation objective on every member takes priority over relative_l2.
+    for seed, final in ((1, 0.9), (2, 0.1), (3, 0.5)):
+        _rewrite_validation(seeds / str(seed), "objective", [1.0, final])
+    assert load_run(parent).best_member.path == seeds / "2"
+
+
+def test_best_member_falls_back_without_shared_validation(tmp_path: Path) -> None:
+    parent = _seed_group(tmp_path, "model_a", "group", stamp="2025-02-01T00:00:00+00:00")
+    _rewrite_validation(parent / "seeds" / "2", "relative_l2", [])
+    run = load_run(parent)
+    assert run.best_member.path == run.representative.path == parent / "seeds" / "1"
+    flat = load_run(parent / "seeds" / "3")
+    assert flat.best_member is flat

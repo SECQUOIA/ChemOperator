@@ -13,7 +13,7 @@ from chem_operator._experiments.metrics import MetricEvent
 from chem_operator._experiments.types import RunContext
 from chem_operator.plotting import (
     add_plot_run_arguments, comparison_groups, plot_selected_runs, print_plot_paths,
-    select_plot_runs,
+    select_plot_runs, set_log_xscale,
 )
 
 
@@ -146,5 +146,64 @@ def test_plot_all_runs_and_only_compatible_groups(tmp_path: Path) -> None:
                           ("model_c", "c"), ("model_d", "d")):
         assert (output / model / run_id / "case_00.png").is_file()
     assert (output / "comparisons" / "group_1" / "validation_history.png").is_file()
+    assert (output / "comparisons" / "group_1" / "reconstruction_overlay.png").is_file()
+    assert all(path.is_file() for path in saved)
+
+
+def test_plot_selected_runs_adds_tuning_progress_when_available(tmp_path: Path) -> None:
+    root = tmp_path / "project"
+    tuned = _run(root, "model_a", "tuned", stamp="2026-01-01T00:00:00+00:00")
+    untuned = _run(root, "model_b", "untuned", stamp="2026-01-01T00:00:00+00:00")
+    with (tuned / "tuning_progress.csv").open("w", encoding="utf-8") as stream:
+        stream.write("trial_id,training_iteration,timestamp,valid_relative_l2\n"
+                     "t1,1,1795000000,0.2\nt1,2,1795000060,0.1\n")
+    parser = _parser(root)
+    runs = select_plot_runs(parser.parse_args(["--run", str(tuned), "--run", str(untuned)]),
+                            parser, problem_id="synthetic")
+
+    saved = plot_selected_runs(runs, tmp_path / "plots", cases=1)
+
+    assert tmp_path / "plots" / "model_a" / "tuned" / "tuning_progress.png" in saved
+    assert not (tmp_path / "plots" / "model_b" / "untuned" / "tuning_progress.png").exists()
+
+
+def test_set_log_xscale_uses_symlog_when_values_include_zero() -> None:
+    import matplotlib.pyplot as plt
+
+    figure, (positive, with_zero) = plt.subplots(1, 2)
+    set_log_xscale(positive, np.array([1e-4, 1e-2, 1.0]))
+    set_log_xscale(with_zero, [np.array([0.0, 2e-4, 1.0]), np.array([0.0, 4e-4])])
+    assert positive.get_xscale() == "log"
+    assert with_zero.get_xscale() == "symlog"
+    assert with_zero.xaxis.get_transform().linthresh == pytest.approx(1e-4)
+    plt.close(figure)
+
+
+def test_set_log_xscale_float32_grid_keeps_first_decade_tick_off_zero() -> None:
+    import matplotlib.pyplot as plt
+
+    time = np.r_[0.0, np.geomspace(1.86e-4, 100.0, 20)].astype(np.float32)
+    figure, axis = plt.subplots()
+    axis.plot(time, time)
+    set_log_xscale(axis, time)
+    figure.canvas.draw()
+    ticks = [tick for tick in axis.get_xticks() if axis.get_xlim()[0] <= tick <= axis.get_xlim()[1]]
+    assert ticks[:2] == pytest.approx([0.0, 1e-4])
+    plt.close(figure)
+
+
+def test_plot_selected_runs_supports_log_time_axis(tmp_path: Path) -> None:
+    root = tmp_path / "runs"
+    # Fixture coordinates start at t = 0, exercising the symlog fallback.
+    a = _run(root, "model_a", "a", stamp="2025-01-01T00:00:00+00:00")
+    b = _run(root, "model_b", "b", stamp="2025-01-01T00:00:00+00:00")
+    parser = _parser(root)
+    runs = select_plot_runs(parser.parse_args(["--run", str(a), "--run", str(b)]),
+                            parser, problem_id="synthetic")
+    output = tmp_path / "plots"
+
+    saved = plot_selected_runs(runs, output, cases=1, labels=("T",), xlog=True)
+
+    assert (output / "model_a" / "a" / "case_00.png").is_file()
     assert (output / "comparisons" / "group_1" / "reconstruction_overlay.png").is_file()
     assert all(path.is_file() for path in saved)

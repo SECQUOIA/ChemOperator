@@ -37,10 +37,15 @@ class ExamplePaths:
         cls,
         script_file: StrPath,
         dataset: StrPath | None = None,
+        *,
+        root: StrPath,
     ) -> "ExamplePaths":
-        """Build paths for *script_file*, locating the project by ``pyproject.toml``."""
+        """Build paths for *script_file* below the caller-supplied project *root*.
+
+        A relative *dataset* is resolved below ``root / "datasets"``.
+        """
         script = Path(script_file).resolve()
-        root = cls._find_root(script.parent)
+        root = Path(root).resolve()
         example = script.parent
         dataset_path = None
         if dataset is not None:
@@ -57,12 +62,3 @@ class ExamplePaths:
         """Resolve a user or configuration path relative to the project root."""
         candidate = Path(path)
         return candidate if candidate.is_absolute() else self.root / candidate
-
-    @staticmethod
-    def _find_root(start: Path) -> Path:
-        for directory in (start, *start.parents):
-            if (directory / "pyproject.toml").is_file():
-                return directory
-        raise FileNotFoundError(
-            f"Could not find pyproject.toml above example directory: {start}"
-        )

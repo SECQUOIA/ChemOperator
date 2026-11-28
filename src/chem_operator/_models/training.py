@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 from collections.abc import Mapping
 from typing import Any
 
@@ -124,6 +125,7 @@ def train_deeponet_lazy(
     best_valid_loss = float("inf")
     best_state: dict[str, torch.Tensor] | None = None
     stale_epochs = 0
+    loop_started = time.perf_counter()
     for epoch in range(start_epoch + 1, config.epochs + 1):
         train_loss = _loader_loss(
             model,
@@ -153,6 +155,8 @@ def train_deeponet_lazy(
                 loss_name="relative_l2",
             )
         )
+        # Cumulative training-loop wall clock; per-batch float() calls sync CUDA.
+        elapsed_seconds = time.perf_counter() - loop_started
         is_best = valid_loss < best_valid_loss
         if is_best:
             best_valid_loss = valid_loss
@@ -176,6 +180,7 @@ def train_deeponet_lazy(
             "best_epoch": history.best_epoch or epoch,
             "is_best": int(is_best),
             "epoch": epoch,
+            "elapsed_seconds": elapsed_seconds,
             "branch_hidden_layers": config.branch_hidden_layers,
             "trunk_hidden_layers": (
                 0 if pod is not None else config.trunk_hidden_layers

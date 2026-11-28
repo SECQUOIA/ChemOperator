@@ -9,13 +9,11 @@ from pathlib import Path
 from typing import Any
 
 from .artifacts import ArtifactStore, build_manifest
-from .comparison import config_differences
+from .comparison import config_differences, train_config_source_chain
 from .tuning import Tuner, TuningOutcome
 from .types import EvaluationOutcome, RunContext, Trainer, TrainingOutcome
 
 Evaluator = Callable[[Trainer, Any, RunContext], EvaluationOutcome]
-
-_OWN_RUN_SOURCES = frozenset({"tuning", "best"})
 
 
 def source_tuning_seconds(train_config_source: str) -> float:
@@ -26,21 +24,10 @@ def source_tuning_seconds(train_config_source: str) -> float:
     ``best``, ``best:<run>``) and JSON files give 0. A source that was itself
     trained from a saved configuration is followed back to the run that tuned.
     """
-    seen: set[Path] = set()
-    source = train_config_source
-    while source and source not in _OWN_RUN_SOURCES and not source.startswith("best:"):
-        manifest_path = Path(source) / "manifest.json"
-        if not manifest_path.is_file():
-            break
-        resolved = manifest_path.resolve()
-        if resolved in seen:
-            raise ValueError(f"train_config_source cycle through {source}")
-        seen.add(resolved)
-        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    for _, manifest in train_config_source_chain(train_config_source):
         seconds = float((manifest.get("timings") or {}).get("tuning_seconds") or 0.0)
         if seconds:
             return seconds
-        source = str((manifest.get("provenance") or {}).get("train_config_source") or "")
     return 0.0
 
 

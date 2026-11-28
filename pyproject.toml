@@ -16,6 +16,7 @@ dependencies = [
     "nvidia-physicsnemo>=2.1.1",
     "optuna>=4.9.0",
     "pandas>=3.0.3",
+    "psutil>=7.2.2",
     "pyqt6>=6.11.0",
     "ray[tune]>=2.56.0",
     "scikit-learn>=1.9.0",
@@ -37,14 +38,23 @@ sundials = [
 where = ["src"]
 
 [tool.setuptools.package-data]
-"chem_operator.example_data" = ["*.yaml", "README.md"]
+"chem_operator.external" = ["example_data/*.yaml", "example_data/README.md"]
 "chem_operator._plotting" = ["styles/*.mplstyle"]
 
 [tool.uv]
 config-settings-package = { scikits-odes-daepack = { setup-args = "-Dc_std=c17" } }
 
+# The experiment scripts are a separate, unpublished package installed editable next to the library for now.
+# Listed under dev group so `uv sync`/`uv run` can install it.
+[tool.uv.workspace]
+members = ["experiments"]
+
+[tool.uv.sources]
+experiments = { workspace = true }
+
 [dependency-groups]
 dev = [
+    "experiments",
     "huggingface-hub>=1.24.0",
     "pylint>=4.0.6",
     "pytest>=9.1.1",

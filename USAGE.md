@@ -41,7 +41,8 @@ and artifact plotting:
 Plotters require `--run` or `--recent`, which are mutually exclusive. Repeat
 `--run` to compare compatible runs. Use `--recent` instead of `--run` to plot
 the newest completed run for every model, or `bash scripts/plot_all.sh` to do
-so across workflows. Every plotter shares the same output options:
+so across workflows; any extra arguments (e.g. `--use-tex`) are forwarded to
+every plotter. Every plotter shares the same output options:
 
 | Option | Default | Purpose |
 | --- | --- | --- |
@@ -62,10 +63,24 @@ The direct and POD DeepONet scripts accept these options:
 | `--runs-root PATH` | `artifacts/runs` | Select the parent directory for run artifacts. |
 | `--run-id ID` | UTC timestamp | Select the final run-directory component. |
 | `--device DEVICE` | `auto` | Select `auto`, `cpu`, `cuda`, or another PyTorch device. |
+| `--data-cache MODE` | `auto` | Keep dataset arrays in memory after their first read: `auto`, `on`, or `off`. |
+| `--num-workers N` | `0` | DataLoader worker processes per loader. Workers are only worth it for datasets too big to cache. More workers increases overhead and can very easily slow down training. |
 | `--plot-cases N` | `2` | Number of test reconstructions to store. |
 | `--train-config CONFIG` | `best` | Hyperparameters for final training: `best` (this run's `best_config.json`), `recent` (the newest tuned run of this model), a completed run directory, or a JSON file. |
 | `--seeds SEED [SEED ...]` | unset | Train the final model once per seed under `<run>/seeds/<seed>/`; requires `--train`. |
 | `--tune-seed N` | problem `SEED` | Seed for the Optuna study (and for training when `--seeds` is omitted). |
+
+`--data-cache` and `--num-workers` change only speed and memory, not results.
+
+- **`--data-cache auto`** estimates the memory of every split a run opens and
+  caches when that fits in 25% of the RAM available at start-up. Scripts that
+  resample trajectories (CSTR, packed-bed FNO) cache the resampled samples and
+  never keep a second, raw copy. Each run prints the decision and records it
+  under `provenance.data_loading` in its manifest.
+- **`--num-workers`**: cached data is fastest with `0`, because each worker
+  fills its own cache and batches must be copied between processes. Workers
+  help only with `--data-cache off` on data too large to cache. Keep them at or
+  below the CPUs Ray reserves per trial.
 
 The FNO and physics workflow scripts additionally accept:
 
@@ -97,7 +112,7 @@ python scripts/pfr/deeponet.py --run-id pfr_direct_02 --no-train
 python scripts/pfr/deeponet.py --run-id pfr_direct_02 --no-tune
 
 # Small FNO smoke run.
-python scripts/pipe_flow_transient/transient_fno.py \
+python scripts/pipe_flow_transient/field_fno.py \
   --device cpu --max-cases 8 --samples 1 --tune-epochs 1 --epochs 1 \
   --plot-cases 1
 ```
@@ -350,25 +365,27 @@ python scripts/pipe_flow_transient/generate_dataset.py
 Tune and train the data-only NeuralOperator FNO:
 
 ```bash
-python scripts/pipe_flow_transient/transient_fno.py
+python scripts/pipe_flow_transient/field_fno.py
 ```
 
 Tune and train the PhysicsNeMo FNO with data, PDE-residual, and constraint losses:
 
 ```bash
-python scripts/pipe_flow_transient/transient_nemo_fno.py
+python scripts/pipe_flow_transient/field_nemo_fno.py
 ```
 
 Both models predict the velocity field over time and radius and accept all common FNO options listed above.
 
-Tune and train data-only DeepXDE models that predict one radial profile at a time:
+Tune and train data-only models that predict one radial profile at a time
+(DeepXDE DeepONet and POD-DeepONet, and a 1D neuraloperator FNO over the radial grid):
 
 ```bash
-python scripts/pipe_flow_transient/deeponet.py
-python scripts/pipe_flow_transient/pod_deeponet.py
+python scripts/pipe_flow_transient/rollout_deeponet.py
+python scripts/pipe_flow_transient/rollout_pod_deeponet.py
+python scripts/pipe_flow_transient/rollout_fno.py
 ```
 
-The POD basis is fitted on training next-step profiles. Both runs report
+The POD basis is fitted on training next-step profiles. All three runs report
 teacher-forced one-step and recursive rollout metrics and can be compared with
 the existing PhysicsNeMo rollout DeepONet using `plot.py` and repeated `--run`.
 
@@ -416,12 +433,25 @@ reactor coordinate and feeds its predicted gas temperature into the same
 PhysicsNeMo wall FNO. Both components train end to end with the data, reactor,
 wall, and boundary losses.
 
+Tune and train the coupled reactor-POD-DeepONet/wall-FNO model:
+
+```bash
+python scripts/pfr_heat/pod_deeponet_fno.py
+```
+
+This variant replaces the learned trunk with a fixed POD basis fitted once on
+the normalized training reactor fields (`F_A`, `F_B`, `F_C`, `T_gas` over z,
+joint basis, 99.9% variance). A PhysicsNeMo MLP branch predicts the POD
+coefficients, and the decoded gas temperature feeds the same wall FNO. The
+basis is stored in the checkpoint. Losses and variants match `deeponet_fno.py`.
+
 Plot one or more saved runs:
 
 ```bash
 python scripts/pfr_heat/plot.py \
   --run artifacts/runs/pfr_heat/fno_physics/<run-id> \
   --run artifacts/runs/pfr_heat/deeponet_fno_physics/<run-id> \
+  --run artifacts/runs/pfr_heat/pod_deeponet_fno_physics/<run-id> \
   --cases 2
 ```
 

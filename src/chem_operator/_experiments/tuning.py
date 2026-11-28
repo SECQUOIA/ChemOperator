@@ -1,20 +1,18 @@
-"""Model-neutral Ray/Optuna orchestration for script-defined search spaces."""
+"""Model-neutral Ray/Optuna orchestration for caller-defined search spaces."""
 
 from __future__ import annotations
 
+import math
 import os
 import time
+import warnings
 from collections.abc import Callable, Mapping, Sequence
 from contextlib import AbstractContextManager, nullcontext
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-# These experiments launch local workers in the driver's installed environment.
-# Ray's automatic uv hook otherwise copies the project and installs another
-# environment under its temporary directory. Set this before importing Ray;
-# callers can explicitly opt back in for a distributed deployment.
-os.environ.setdefault("RAY_ENABLE_UV_RUN_RUNTIME_ENV", "0")
+import torch
 
 from .artifacts import ArtifactStore
 from .trainers import accepts_context
@@ -73,7 +71,7 @@ class RayRuntimeConfig:
 
 @dataclass(frozen=True, slots=True)
 class TuningConfig:
-    """Reusable tuning policy; experiment scripts still define the search space."""
+    """Reusable tuning policy; callers still define the search space."""
 
     metric: str = "valid_relative_l2"
     mode: str = "min"
@@ -85,9 +83,13 @@ class TuningConfig:
     max_concurrent_trials: int | None = None
     time_budget_s: float | None = None
     grace_period: int | None = None
-    reduction_factor: int = 2
+    reduction_factor: int = 3
+    # False skips LossTerm(physics=True) residuals in trial validation unless
+    # the tuning or selection metric depends on them.
+    validation_physics: bool = False
     optuna_seed: int = 0
-    optuna_startup_trials: int = 2
+    # None resolves to num_samples // 5 so random exploration scales with budget.
+    optuna_startup_trials: int | None = None
     optuna_multivariate: bool = True
     best_scope: str = "last"
     resume: bool = True
@@ -112,6 +114,8 @@ class TuningConfig:
             raise ValueError("grace_period must be positive.")
         if self.reduction_factor < 2:
             raise ValueError("reduction_factor must be at least 2.")
+        if self.optuna_startup_trials is None:
+            object.__setattr__(self, "optuna_startup_trials", self.num_samples // 5)
         if self.optuna_seed < 0 or self.optuna_startup_trials < 0:
             raise ValueError("Optuna seed/startup trial counts cannot be negative.")
         if self.verbose not in {0, 1, 2, 3}:
@@ -134,7 +138,12 @@ class TuningOutcome:
 
 
 class Tuner:
-    """Run or resume Ray Tune with one standardized ASHA/Optuna policy."""
+    """Run or resume Ray Tune with one standardized ASHA/Optuna policy.
+
+    ``trainer_factory(config[, context=...])`` receives each sampled configuration
+    with ``seed`` set to the trial context's seed and ``epochs`` set to
+    ``config.max_epochs``, so the search space must not define either.
+    """
 
     def __init__(
         self,
@@ -149,6 +158,12 @@ class Tuner:
             raise ValueError("search_space cannot be empty.")
         if (trainer_factory is None) == (objective is None):
             raise ValueError("Provide exactly one of trainer_factory or objective.")
+        reserved = sorted(_INJECTED_KEYS & set(search_space))
+        if trainer_factory is not None and reserved:
+            raise ValueError(
+                f"search_space must not define {reserved}: the tuner sets 'seed' from the "
+                "trial context and 'epochs' from max_epochs."
+            )
         self.trainer_factory = trainer_factory
         self.objective = objective
         self.search_space = dict(search_space)
@@ -194,6 +209,7 @@ class Tuner:
             raise ValueError("experiment_name must be one path component.")
         owned_ray = not ray.is_initialized()
         if owned_ray:
+            _local_ray_defaults()
             ray.init(**self.config.ray_runtime.init_kwargs())
 
         factory_takes_context = (
@@ -228,13 +244,19 @@ class Tuner:
                     )
                 else:
                     assert self.trainer_factory is not None
+                    trainer_config = {
+                        **trial_config,
+                        "seed": trial_context.seed,
+                        "epochs": self.config.max_epochs,
+                    }
                     trainer = (
-                        self.trainer_factory(trial_config, context=trial_context)
+                        self.trainer_factory(trainer_config, context=trial_context)
                         if factory_takes_context
-                        else self.trainer_factory(trial_config)
+                        else self.trainer_factory(trainer_config)
                     )
                     if hasattr(trainer, "reporter"):
                         trainer.reporter = report
+                    _configure_validation_physics(trainer, self.config)
                     result = trainer.fit(trial_train, trial_validation, trial_context)
             if not reported:
                 report(_result_metrics(result, self.config.metric))
@@ -265,7 +287,10 @@ class Tuner:
                     time_attr="training_iteration",
                     max_t=self.config.max_epochs,
                     grace_period=self.config.grace_period
-                    or max(1, self.config.max_epochs // 3),
+                    or min(
+                        self.config.max_epochs,
+                        max(3, self.config.max_epochs // 5),
+                    ),
                     reduction_factor=self.config.reduction_factor,
                 )
                 search_algorithm = OptunaSearch(
@@ -318,14 +343,112 @@ class Tuner:
             if artifact_store is not None:
                 artifact_store.write_best_config(best_config)
                 artifact_store.write_tuning_trials(trials)
-                if artifact_store.paths.manifest.is_file():
-                    artifact_store.update_manifest(
-                        timings={"tuning_seconds": tuning_seconds}
-                    )
+                artifact_store.write_tuning_progress(
+                    row for result in results for row in _trial_progress(result)
+                )
+                _record_tuning_summary(artifact_store, self.config, trials, tuning_seconds)
             return outcome
         finally:
             if owned_ray:
                 ray.shutdown()
+
+
+def _record_tuning_summary(
+    store: ArtifactStore,
+    config: TuningConfig,
+    trials: Sequence[Mapping[str, Any]],
+    tuning_seconds: float,
+) -> None:
+    """Add the tuning time, time budget and completed-trial count to the manifest.
+
+    ``tuning_budget.completed_trials`` counts trials that ran without error,
+    including ones ASHA stopped early. It is below the sample budget when
+    ``time_budget_s`` stopped tuning before every trial started.
+    """
+    if not store.paths.manifest.is_file():
+        return
+    manifest = store.read_manifest()
+    store.update_manifest(
+        timings={"tuning_seconds": tuning_seconds},
+        tuning_budget={
+            **dict(manifest.get("tuning_budget") or {}),
+            "time_budget_s": config.time_budget_s,
+            "completed_trials": sum(trial.get("status") == "completed" for trial in trials),
+        },
+    )
+
+
+# Trainer-config keys the tuner supplies for every trial.
+_INJECTED_KEYS = frozenset({"seed", "epochs"})
+
+
+def build_tuning_config(  # pylint: disable=too-many-arguments
+    *,
+    metric: str,
+    samples: int,
+    epochs: int,
+    seed: int,
+    device: torch.device | str,
+    cpus_per_trial: float = 1,
+    gpus_per_trial: float | None = None,
+    max_concurrent_trials: int = 1,
+    time_budget_s: float | None = None,
+    ray_cpus: int | None = None,
+    ray_gpus: float | None = None,
+    temp_dir: str | Path | None = None,
+    object_store_memory: int | None = 100 * 1024**2,
+    runtime_env: Mapping[str, Any] | None = None,
+) -> TuningConfig:
+    """Build the shared ASHA/Optuna :class:`TuningConfig` from budgets and resources.
+
+    ``samples`` trials of up to ``epochs`` epochs are minimized on ``metric``, with
+    Optuna seeded by ``seed``. Each trial requests ``cpus_per_trial`` CPUs and
+    ``gpus_per_trial`` GPUs (default: 1 when ``device`` is CUDA, else 0). The local
+    Ray cluster's totals are separate: ``ray_cpus`` and ``ray_gpus`` default to the
+    per-trial request times ``max_concurrent_trials``. ``runtime_env`` is passed to
+    Ray unchanged; nothing is added to it.
+    """
+    if gpus_per_trial is None:
+        gpus_per_trial = 1 if torch.device(device).type == "cuda" else 0
+    if ray_cpus is None:
+        ray_cpus = math.ceil(cpus_per_trial * max_concurrent_trials)
+    if ray_gpus is None:
+        ray_gpus = gpus_per_trial * max_concurrent_trials
+    return TuningConfig(
+        metric=metric,
+        mode="min",
+        num_samples=samples,
+        max_epochs=epochs,
+        resources_per_trial={"cpu": cpus_per_trial, "gpu": gpus_per_trial},
+        max_concurrent_trials=max_concurrent_trials,
+        time_budget_s=time_budget_s,
+        optuna_seed=seed,
+        ray_runtime=RayRuntimeConfig(
+            num_cpus=ray_cpus,
+            num_gpus=ray_gpus,
+            temp_dir=None if temp_dir is None else Path(temp_dir).resolve(),
+            object_store_memory=object_store_memory,
+            runtime_env=runtime_env,
+        ),
+    )
+
+
+def _local_ray_defaults() -> None:
+    """Set environment defaults for the local Ray cluster that ``Tuner.fit`` starts.
+
+    Variables the caller has already set are kept. Workers run in the driver's
+    installed environment, so Ray's ``uv run`` hook (which copies the project and
+    builds another environment under the Ray temp dir) is off. Ray parses that
+    flag once, when it is first imported, possibly before this module was, so the
+    parsed value is refreshed here. Ray's memory monitor is off as well.
+    """
+    os.environ.setdefault("RAY_ENABLE_UV_RUN_RUNTIME_ENV", "0")
+    os.environ.setdefault("RAY_memory_monitor_refresh_ms", "0")
+    from ray._private import ray_constants
+
+    ray_constants.RAY_ENABLE_UV_RUN_RUNTIME_ENV = ray_constants.env_bool(
+        "RAY_ENABLE_UV_RUN_RUNTIME_ENV", True
+    )
 
 
 def _metric_payload(
@@ -395,8 +518,58 @@ def _trial_record(result: Any, *, metric: str) -> dict[str, Any]:
     return record
 
 
+def _configure_validation_physics(trainer: Any, config: TuningConfig) -> None:
+    """Skip trial-validation physics unless the tuning metric needs it."""
+    if not hasattr(trainer, "validation_physics"):
+        return
+    keep = config.validation_physics
+    needs = getattr(trainer, "metric_needs_validation_physics", None)
+    if not keep and needs is not None and needs(config.metric):
+        warnings.warn(
+            f"Ray metric {config.metric!r} depends on physics terms; keeping "
+            "validation physics in tuning.",
+            stacklevel=2,
+        )
+        keep = True
+    trainer.validation_physics = keep
+
+
+# Ray bookkeeping columns that say nothing about the trial's learning curve.
+_PROGRESS_DROPPED_COLUMNS = frozenset(
+    {"pid", "hostname", "node_ip", "date", "checkpoint_dir_name", "done"}
+)
+
+
+def _trial_progress(result: Any) -> list[dict[str, Any]]:
+    """Return one row per reported iteration of a trial, from Ray's progress log.
+
+    ``config/*`` columns are dropped because ``tuning_trials.csv`` already
+    holds each trial's configuration; only numeric values are kept.
+    """
+    frame = getattr(result, "metrics_dataframe", None)
+    if frame is None or frame.empty:
+        return []
+    fallback_id = (result.metrics or {}).get("trial_id", Path(str(result.path)).name)
+    rows: list[dict[str, Any]] = []
+    for record in frame.to_dict("records"):
+        row: dict[str, Any] = {"trial_id": record.get("trial_id") or fallback_id}
+        for name, value in record.items():
+            if (
+                name == "trial_id"
+                or name in _PROGRESS_DROPPED_COLUMNS
+                or name.startswith("config/")
+                or isinstance(value, bool)
+                or not isinstance(value, (int, float))
+            ):
+                continue
+            row[name] = value.item() if hasattr(value, "item") else value
+        rows.append(row)
+    return rows
+
+
 __all__ = [
     "DatasetPairFactory",
+    "build_tuning_config",
     "RayRuntimeConfig",
     "TrialObjective",
     "TrialReporter",

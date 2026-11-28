@@ -1,0 +1,27 @@
+[project]
+name = "experiments"
+version = "0.1.0"
+description = "Experiment scripts for chem_operator."
+requires-python = ">=3.12"
+dependencies = ["experiment-v2"]
+
+[tool.uv.sources]
+experiment-v2 = { workspace = true }
+
+[build-system]
+requires = ["setuptools>=81.0.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+"experiments.q2d" = ["q2d_input_schema.tsv"]
+
+[tool.pytest.ini_options]
+# Script and dataset-generator tests. The library's tests live in tests/ and use the
+# root pyproject.toml; run the two suites as separate pytest sessions.
+testpaths = ["tests"]
+filterwarnings = [
+    "ignore:(?s)NasaPoly2.*discontinuity in h/RT detected:UserWarning",
+]

@@ -61,11 +61,15 @@ def test_deeponet_checkpoint_preserves_predictions(tmp_path, legacy_pod_state, u
         for index in range(4)
     ])
     context = RunContext.create(tmp_path, problem="synthetic", model="deeponet", run_id="pod", seed=7, device="cpu")
-    config = DeepONetTrainingConfig(epochs=1, width=8, latent_width=2, batch_size=2)
+    config = DeepONetTrainingConfig(epochs=2, width=8, latent_width=2, batch_size=2)
     pod = PODTransform.from_state_dict(legacy_pod_state) if use_pod else None
     trainer = DeepONetTrainer(config, pod=pod)
     outcome = trainer.fit(data, data, context)
     assert outcome.metadata["checkpoint_reload_verified"]
+    elapsed = [(event.epoch, event.value) for event in outcome.history
+               if event.split == "train" and event.metric == "elapsed_seconds"]
+    assert [epoch for epoch, _ in elapsed] == [1, 2]
+    assert 0. < elapsed[0][1] < elapsed[1][1] <= outcome.timings["final_training_seconds"]
     expected = trainer.predict(data, context)
     assert expected.shape == (4, 3, 1)
     # Restore the previous POD payload format inside the full trainer checkpoint.

@@ -150,7 +150,7 @@ splits = generator.generate_splits(n_cases=10)
 generator.save_splits(splits)
 
 dataset = ChemOperatorDataset(
-    output_dir / "hagen_poiseuille_pipe_flow_train.h5",
+    output_dir / "pipe_flow_train.h5",
     task="field_map",
     coordinate_name="r",
     input_fields=("velocity",),
@@ -358,7 +358,7 @@ constants = (
 
 raw = ChemOperatorDataset(
     "datasets/pipe_flow_transient/"
-    "transient_hagen_poiseuille_pipe_flow_train.h5",
+    "pipe_flow_transient_train.h5",
     task="operator_cartesian",
     coordinate_name="t",
     input_fields=fields,
@@ -474,11 +474,15 @@ canonical run directories.
 | `scripts/{cstr,packed_bed_1d,pfr,pipe_flow}/pod_deeponet.py` | Tune and train one POD-DeepONet |
 | `scripts/{cstr,packed_bed_1d,pfr,pipe_flow}/plot.py` | Compare explicit canonical direct and POD run directories |
 | [`scripts/pipe_flow/physics_deeponet.py`](scripts/pipe_flow/physics_deeponet.py) | PhysicsNeMo DeepONet data/physics-loss study |
-| [`scripts/pipe_flow_transient/transient_fno.py`](scripts/pipe_flow_transient/transient_fno.py) | Neuraloperator FNO tuning, training, evaluation, checkpointing, and plots |
-| [`scripts/pipe_flow_transient/transient_nemo_fno.py`](scripts/pipe_flow_transient/transient_nemo_fno.py) | PhysicsNeMo transient pipe-flow FNO workflow |
+| [`scripts/pipe_flow_transient/field_fno.py`](scripts/pipe_flow_transient/field_fno.py) | Neuraloperator FNO tuning, training, evaluation, checkpointing, and plots |
+| [`scripts/pipe_flow_transient/field_nemo_fno.py`](scripts/pipe_flow_transient/field_nemo_fno.py) | PhysicsNeMo transient pipe-flow FNO workflow |
 | [`scripts/pfr_heat/fno.py`](scripts/pfr_heat/fno.py) | Coupled PhysicsNeMo reactor/wall FNO workflow |
 | [`scripts/pfr_heat/deeponet_fno.py`](scripts/pfr_heat/deeponet_fno.py) | Coupled PhysicsNeMo-MLP reactor DeepONet and wall FNO workflow |
-| [`scripts/pipe_flow_transient/nemo_deeponet.py`](scripts/pipe_flow_transient/nemo_deeponet.py) | PhysicsNeMo DeepONet for one-step velocity prediction and recursive rollout |
+| [`scripts/pfr_heat/pod_deeponet_fno.py`](scripts/pfr_heat/pod_deeponet_fno.py) | Coupled reactor POD-DeepONet (training-only joint basis) and wall FNO workflow |
+| [`scripts/pipe_flow_transient/rollout_deeponet.py`](scripts/pipe_flow_transient/rollout_deeponet.py) | DeepXDE DeepONet for one-step velocity prediction and recursive rollout |
+| [`scripts/pipe_flow_transient/rollout_pod_deeponet.py`](scripts/pipe_flow_transient/rollout_pod_deeponet.py) | DeepXDE POD-DeepONet for one-step velocity prediction and recursive rollout |
+| [`scripts/pipe_flow_transient/rollout_fno.py`](scripts/pipe_flow_transient/rollout_fno.py) | Neuraloperator 1D FNO for one-step velocity prediction and recursive rollout |
+| [`scripts/pipe_flow_transient/rollout_nemo_deeponet.py`](scripts/pipe_flow_transient/rollout_nemo_deeponet.py) | PhysicsNeMo DeepONet for one-step velocity prediction and recursive rollout |
 | [`scripts/q2d/generate_dataset.py`](scripts/q2d/generate_dataset.py) | Quasi-2D CMR base datasets, mesh-resolution sweeps, and tolerance sweeps |
 | [`scripts/q2d/validate_solver.py`](scripts/q2d/validate_solver.py) | Bundled-reference and Docker-backed Q2D validation plots |
 | [`scripts/q2d/fno.py`](scripts/q2d/fno.py) | Quasi-2D FNO training, superresolution, and break-even analysis |
@@ -489,9 +493,7 @@ canonical run directories.
 | [`scripts/diagnostics/processing.py`](scripts/diagnostics/processing.py) | Visual smoke test for preprocessing and inverse reconstruction |
 
 The physics-informed model entry points accept
-`--variant {data,physics,both}` and default to `physics`. This applies to
-`pipe_flow_transient/transient_nemo_fno.py`, `pipe_flow_transient/nemo_deeponet.py`,
-`pfr_heat/fno.py`, and `pfr_heat/deeponet_fno.py`. The `physics` variant combines
+`--variant {data,physics,both}` (default `both`). The `physics` variant combines
 supervised data loss with PDE and constraint losses; it is not physics-only training. The
 `both` option runs independent data-only and physics-informed searches, writing
 artifacts under model IDs suffixed with `_data` and `_physics`, respectively.

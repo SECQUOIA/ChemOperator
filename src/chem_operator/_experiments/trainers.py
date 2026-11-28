@@ -101,6 +101,13 @@ def _verify_state_dict(
             raise RuntimeError(f"Reloaded checkpoint tensor {name!r} differs.")
 
 
+def _resolve_num_workers(explicit: int | None, context: RunContext) -> int:
+    """Use a trainer's explicit worker count, else the run's ``--num-workers``."""
+    if explicit is not None:
+        return int(explicit)
+    return int(getattr(context, "num_workers", 0))
+
+
 class DeepONetTrainer:
     """DeepONet epoch loop, early stopping, checkpointing, and prediction."""
 
@@ -114,7 +121,7 @@ class DeepONetTrainer:
         pod: PODTransform | None = None,
         target_transform: Callable[[torch.Tensor], torch.Tensor] | None = None,
         early_stopping_patience: int | None = None,
-        num_workers: int = 0,
+        num_workers: int | None = None,
         pin_memory: bool = False,
         reporter: Reporter | None = None,
         checkpoint_metadata: Mapping[str, Any] | None = None,
@@ -174,6 +181,9 @@ class DeepONetTrainer:
                 "relative_l2",
                 float(metrics["valid_relative_l2"]),
             )
+            history.record(
+                epoch, "train", "elapsed_seconds", float(metrics["elapsed_seconds"])
+            )
             if self.reporter is not None:
                 self.reporter(metrics)
 
@@ -187,7 +197,7 @@ class DeepONetTrainer:
             pod=self.pod,
             reporter=record,
             early_stopping_patience=self.early_stopping_patience,
-            num_workers=self.num_workers,
+            num_workers=_resolve_num_workers(self.num_workers, context),
             pin_memory=self.pin_memory,
             device=device,
             dtype=context.dtype,
@@ -238,7 +248,7 @@ class DeepONetTrainer:
             shuffle=False,
             coordinate_scaler=self.coordinate_scaler,
             target_transform=self.target_transform,
-            num_workers=self.num_workers,
+            num_workers=_resolve_num_workers(self.num_workers, context),
             pin_memory=self.pin_memory,
             seed=context.seed,
         )
@@ -262,6 +272,10 @@ class DeepONetTrainer:
         if not predictions:
             raise RuntimeError("Prediction loader produced no batches.")
         return torch.cat(predictions)
+
+    def resolved_config(self) -> dict[str, Any]:
+        """Return the training configuration as a JSON-compatible mapping."""
+        return self.config.to_dict()
 
     def save_checkpoint(self, path: str | Path) -> Path:
         if self.model is None or self.coordinate_scaler is None or self._architecture is None:
@@ -336,11 +350,16 @@ def _numpy(value: Any) -> np.ndarray:
 
 @dataclass(frozen=True, slots=True)
 class LossTerm:
-    """One named, weighted component of a composite FNO objective."""
+    """One named, weighted component of a composite FNO objective.
+
+    ``physics=True`` marks a PDE/constraint residual that an
+    :class:`OperatorTrainer` may skip during validation (tuning trials).
+    """
 
     name: str
     function: LossFunction
     weight: float = 1.0
+    physics: bool = False
 
     def __post_init__(self) -> None:
         if not self.name:
@@ -482,6 +501,10 @@ class OperatorTrainer:
     ``forward_adapter`` can compute model-dependent residuals once per batch
     and attach them to the adapted batch for named loss terms. Autodiff PDEs
     opt into ``validation_requires_grad``; prediction stays gradient-free.
+
+    ``validation_physics=False`` skips ``LossTerm(physics=True)`` terms in
+    validation passes (the Tuner sets it inside trials). Forward adapters that
+    accept a ``compute_physics`` keyword are told whether to build residuals.
     """
 
     CHECKPOINT_VERSION = 1
@@ -499,15 +522,21 @@ class OperatorTrainer:
         batch_size: BatchSize = default_batch_size,
         selection_metric: str = "relative_l2",
         early_stopping_patience: int | None = None,
-        num_workers: int = 0,
+        num_workers: int | None = None,
         pin_memory: bool = False,
         reporter: Reporter | None = None,
         checkpoint_metadata: Mapping[str, Any] | None = None,
         forward_adapter: Callable[[torch.nn.Module, Any, Mapping[str, Any]], Any] | None = None,
         validation_requires_grad: bool = False,
+        validation_physics: bool = True,
     ) -> None:
         self.forward_adapter = forward_adapter
+        self._adapter_takes_physics = (
+            forward_adapter is not None
+            and accepts_keyword(forward_adapter, "compute_physics")
+        )
         self.validation_requires_grad = validation_requires_grad
+        self.validation_physics = validation_physics
         self.model_factory = model_factory
         self.config = dict(config)
         self.loss_terms = tuple(loss_terms or (LossTerm("data_loss", mse_loss_term),))
@@ -515,7 +544,7 @@ class OperatorTrainer:
             raise ValueError("OperatorTrainer requires at least one loss term.")
         if early_stopping_patience is not None and early_stopping_patience < 1:
             raise ValueError("early_stopping_patience must be positive.")
-        if num_workers < 0:
+        if num_workers is not None and num_workers < 0:
             raise ValueError("num_workers cannot be negative.")
         self.batch_adapter = batch_adapter
         self.prediction_transform = prediction_transform
@@ -557,12 +586,14 @@ class OperatorTrainer:
             batch_size=batch_size,
             shuffle=True,
             seed=context.seed,
+            context=context,
         )
         validation_loader = self._loader(
             validation,
             batch_size=batch_size,
             shuffle=False,
             seed=context.seed,
+            context=context,
         )
         history = History()
         best_metric = float("inf")
@@ -582,7 +613,11 @@ class OperatorTrainer:
                 device=device,
                 dtype=context.dtype,
                 optimizer=None,
+                physics=self.validation_physics,
             )
+            # Cumulative training-loop wall clock; per-batch float() calls sync CUDA.
+            elapsed_seconds = time.perf_counter() - started
+            history.record(epoch, "train", "elapsed_seconds", elapsed_seconds)
             for name, value in train_metrics.items():
                 history.record(epoch, "train", name, value)
             for name, value in validation_metrics.items():
@@ -603,6 +638,7 @@ class OperatorTrainer:
                 stale_epochs += 1
             report = {
                 "epoch": epoch,
+                "elapsed_seconds": elapsed_seconds,
                 "train_objective": train_metrics["objective"],
                 "valid_objective": validation_metrics["objective"],
                 f"valid_{self.selection_metric}": selected,
@@ -649,11 +685,26 @@ class OperatorTrainer:
             metrics={f"validation_{self.selection_metric}": best_metric},
         )
 
+    def metric_needs_validation_physics(self, metric: str) -> bool:
+        """Whether ``metric`` or the selection metric depends on physics terms.
+
+        A metric depends on physics when it names a ``physics=True`` term or is
+        ``objective`` while any physics term has a positive weight.
+        """
+        physics = [term for term in self.loss_terms if term.physics]
+        names = {term.name for term in physics}
+        if any(term.weight > 0 for term in physics):
+            names.add("objective")
+        return any(
+            _strip_validation_prefix(candidate) in names
+            for candidate in (metric, self.selection_metric)
+        )
+
     def evaluate_losses(self, data: Any, context: RunContext) -> dict[str, float]:
         """Evaluate named objectives and shared metrics, including PDE residuals."""
         return self._epoch(
             self._loader(data, batch_size=int(self.config["batch_size"]),
-                         shuffle=False, seed=context.seed),
+                         shuffle=False, seed=context.seed, context=context),
             device=resolve_device(context.device), dtype=context.dtype, optimizer=None,
         )
 
@@ -664,29 +715,41 @@ class OperatorTrainer:
         device: torch.device,
         dtype: torch.dtype,
         optimizer: torch.optim.Optimizer | None,
+        physics: bool = True,
     ) -> dict[str, float]:
         if self.model is None:
             raise RuntimeError("FNO model has not been constructed.")
         training = optimizer is not None
         self.model.train(training)
-        totals = {term.name: 0.0 for term in self.loss_terms}
+        compute_physics = training or physics
+        terms = tuple(
+            term for term in self.loss_terms if compute_physics or not term.physics
+        )
+        totals = {term.name: 0.0 for term in terms}
         objective_total = 0.0
         samples = 0
         shared = StreamingRegressionMetrics()
-        gradient_context = (torch.enable_grad() if training or self.validation_requires_grad else torch.no_grad())
+        gradient_context = (
+            torch.enable_grad()
+            if training or (self.validation_requires_grad and compute_physics)
+            else torch.no_grad()
+        )
         with gradient_context:
             for raw_batch in loader:
                 inputs, target, batch = self.batch_adapter(raw_batch, device, dtype)
                 if optimizer is not None:
                     optimizer.zero_grad(set_to_none=True)
-                prediction = (
-                    _call_model(self.model, inputs)
-                    if self.forward_adapter is None
-                    else self.forward_adapter(self.model, inputs, batch)
-                )
+                if self.forward_adapter is None:
+                    prediction = _call_model(self.model, inputs)
+                elif self._adapter_takes_physics:
+                    prediction = self.forward_adapter(
+                        self.model, inputs, batch, compute_physics=compute_physics
+                    )
+                else:
+                    prediction = self.forward_adapter(self.model, inputs, batch)
                 count = self.batch_size(target, batch)
                 objective = _first_tensor(prediction).new_zeros(())
-                for term in self.loss_terms:
+                for term in terms:
                     value = term.function(prediction, target, batch)
                     if value.ndim != 0:
                         value = value.mean()
@@ -728,15 +791,21 @@ class OperatorTrainer:
         batch_size: int,
         shuffle: bool,
         seed: int,
+        context: RunContext | None = None,
     ) -> DataLoader:
         if isinstance(data, DataLoader):
             return data
+        workers = (
+            _resolve_num_workers(self.num_workers, context)
+            if context is not None
+            else int(self.num_workers or 0)
+        )
         return DataLoader(
             data,
             batch_size=min(batch_size, len(data)),
             shuffle=shuffle,
-            num_workers=self.num_workers,
-            persistent_workers=self.num_workers > 0,
+            num_workers=workers,
+            persistent_workers=workers > 0,
             pin_memory=self.pin_memory,
             generator=torch.Generator(device="cpu").manual_seed(seed),
         )
@@ -751,6 +820,7 @@ class OperatorTrainer:
             batch_size=int(self.config["batch_size"]),
             shuffle=False,
             seed=context.seed,
+            context=context,
         )
         predictions: list[Any] = []
         with torch.no_grad():
@@ -760,6 +830,10 @@ class OperatorTrainer:
         if not predictions:
             raise RuntimeError("Prediction loader produced no batches.")
         return _concatenate_batches(predictions)
+
+    def resolved_config(self) -> dict[str, Any]:
+        """Return a copy of the hyperparameter mapping the model is built and trained from."""
+        return dict(self.config)
 
     def save_checkpoint(self, path: str | Path) -> Path:
         if self.model is None:
@@ -798,11 +872,24 @@ class OperatorTrainer:
         model.load_state_dict(payload["state_dict"], strict=True)
         return model
 
-def accepts_context(factory: Callable[..., Any]) -> bool:
-    """Return whether a trainer factory explicitly accepts a run context."""
-    parameters = inspect.signature(factory).parameters.values()
+def accepts_keyword(function: Callable[..., Any], name: str) -> bool:
+    """Return whether ``function`` accepts ``name`` as a keyword argument."""
+    parameters = inspect.signature(function).parameters.values()
     return any(
         parameter.kind == inspect.Parameter.VAR_KEYWORD
-        or parameter.name == "context"
+        or parameter.name == name
         for parameter in parameters
     )
+
+
+def accepts_context(factory: Callable[..., Any]) -> bool:
+    """Return whether a trainer factory explicitly accepts a run context."""
+    return accepts_keyword(factory, "context")
+
+
+def _strip_validation_prefix(metric: str) -> str:
+    """Map a reported metric (``best_valid_x``/``valid_x``) to its term name."""
+    for prefix in ("best_valid_", "valid_"):
+        if metric.startswith(prefix):
+            return metric[len(prefix):]
+    return metric
