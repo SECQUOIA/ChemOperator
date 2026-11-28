@@ -14,3 +14,14 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+"experiments.q2d" = ["q2d_input_schema.tsv"]
+
+[tool.pytest.ini_options]
+# Script and dataset-generator tests. The library's tests live in tests/ and use the
+# root pyproject.toml; run the two suites as separate pytest sessions.
+testpaths = ["tests"]
+filterwarnings = [
+    "ignore:(?s)NasaPoly2.*discontinuity in h/RT detected:UserWarning",
+]

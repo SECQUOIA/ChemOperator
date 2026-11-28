@@ -38,14 +38,14 @@ sundials = [
 where = ["src"]
 
 [tool.setuptools.package-data]
-"chem_operator.example_data" = ["*.yaml", "README.md"]
+"chem_operator.external" = ["example_data/*.yaml", "example_data/README.md"]
 "chem_operator._plotting" = ["styles/*.mplstyle"]
 
 [tool.uv]
 config-settings-package = { scikits-odes-daepack = { setup-args = "-Dc_std=c17" } }
 
 # The experiment scripts are a separate, unpublished package installed editable next to the library for now.
-# Listed under dev group so  `uv sync`/`uv run` can install it.
+# Listed under dev group so `uv sync`/`uv run` can install it.
 [tool.uv.workspace]
 members = ["experiments"]
 

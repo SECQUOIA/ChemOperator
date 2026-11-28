@@ -16,7 +16,7 @@ import pytest
 from physicsnemo.sym.eq.phy_informer import PhysicsInformer
 
 from chem_operator.datasets import SimulationDatasetGenerator
-from chem_operator.reactors.pfr_heat.dataset_generator import (
+from experiments.pfr_heat.dataset_generator import (
     CylindricalWall,
     PFRHeatSim,
     PlugFlowReactor,

@@ -12,7 +12,8 @@ import pytest
 import experiments.paths as experiment_paths
 from experiments.paths import PROJECT_ROOT_ENV, example_paths, project_root
 
-REPO = Path(__file__).resolve().parents[1]
+# The workspace root, found from this file's place in the repo (experiments/tests/).
+REPO = Path(__file__).resolve().parents[2]
 
 
 def fake_package(tmp_path: Path, *, workspace: bool) -> Path:

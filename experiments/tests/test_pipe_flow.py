@@ -8,7 +8,7 @@ import torch
 from physicsnemo.sym.eq.phy_informer import PhysicsInformer
 
 from chem_operator.datasets import ChemOperatorDataset, SimulationDatasetGenerator
-from chem_operator.reactors.pipe_flow.dataset_generator import (
+from experiments.pipe_flow.dataset_generator import (
     HagenPoiseuille,
     HagenPoiseuillePipeFlowSim,
     hagen_poiseuille_velocity,

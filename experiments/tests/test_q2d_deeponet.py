@@ -17,7 +17,7 @@ from chem_operator.experiments import (
     DeepONetTrainer, ExperimentRunner, RunContext, deeponet_training_config,
     evaluate_fields, load_run, unwrap_dataset, validate_model_comparison,
 )
-from chem_operator.reactors.q2d.dataset_generator import CMRSim
+from experiments.q2d.dataset_generator import CMRSim
 from chem_operator.normalization import normalizer_from_state_dict
 from experiments.q2d import common, deeponet, fno, plot, pod_deeponet
 

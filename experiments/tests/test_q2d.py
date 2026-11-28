@@ -7,7 +7,7 @@ import json
 import numpy as np
 import pytest
 
-from chem_operator.reactors.q2d.dataset_generator import (
+from experiments.q2d.dataset_generator import (
     CMRSim,
     DEFAULT_TUTORIAL_CASES,
     compare_record_to_legacy_csv,

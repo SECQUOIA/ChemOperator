@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import importlib
 import json
 import os
 from pathlib import Path
@@ -211,16 +210,6 @@ def test_resource_help_explains_reproducibility_and_fractional_gpus(
     assert "not reproducible" in text
     assert "pass a fraction such as 0.5" in text
     assert "default: no limit" in text
-
-
-@pytest.mark.parametrize(
-    "problem", ("cstr", "pfr", "packed_bed_1d", "pipe_flow", "pfr_heat", "pipe_flow_transient", "q2d"),
-)
-def test_every_script_inherits_the_resource_defaults(problem, monkeypatch) -> None:
-    common = importlib.import_module(f"experiments.{problem}.common")
-    monkeypatch.setattr(common, "resolve_data_cache", lambda args, factory: None)
-    monkeypatch.setattr(sys, "argv", ["model.py"])
-    assert tuning_resources(common.parse_args()) == DEFAULT_RESOURCES
 
 
 def test_run_operator_passes_the_resource_flags_to_the_tuner(monkeypatch, tmp_path) -> None:

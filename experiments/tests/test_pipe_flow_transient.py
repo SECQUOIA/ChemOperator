@@ -9,7 +9,7 @@ from scipy.special import jn_zeros  # pylint: disable=no-name-in-module
 from sympy import Derivative, Symbol
 
 from chem_operator.datasets import ChemOperatorDataset, SimulationDatasetGenerator
-from chem_operator.reactors.pipe_flow_transient.dataset_generator import (
+from experiments.pipe_flow_transient.dataset_generator import (
     TransientHagenPoiseuille,
     TransientHagenPoiseuillePipeFlowSim,
     startup_hagen_poiseuille_dimensionless_velocity,

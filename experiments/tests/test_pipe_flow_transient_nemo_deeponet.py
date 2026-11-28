@@ -14,7 +14,7 @@ from chem_operator.datasets import SimulationDatasetGenerator
 from chem_operator.experiments import RunContext
 from chem_operator.normalization import normalizer_from_state_dict
 from chem_operator.plotting import plot_operator_fields
-from chem_operator.reactors.pipe_flow_transient.dataset_generator import TransientHagenPoiseuillePipeFlowSim
+from experiments.pipe_flow_transient.dataset_generator import TransientHagenPoiseuillePipeFlowSim
 from chem_operator.sampling import Constant, Uniform
 from experiments.pipe_flow_transient import rollout_nemo_deeponet as script
 

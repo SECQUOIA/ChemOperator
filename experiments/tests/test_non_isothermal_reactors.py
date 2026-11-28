@@ -5,11 +5,11 @@ import numpy as np
 import pytest
 
 from chem_operator.datasets import CaseParameters
-from chem_operator.reactors.cstr.dataset_generator import (
+from experiments.cstr.dataset_generator import (
     CSTRSim,
     NonIsothermalCSTRSim,
 )
-from chem_operator.reactors.pfr.dataset_generator import (
+from experiments.pfr.dataset_generator import (
     PFRChainOfReactorsSim,
     PFRNonIsothermalChainOfReactorsSim,
 )

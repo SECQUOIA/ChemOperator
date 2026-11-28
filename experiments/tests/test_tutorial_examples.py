@@ -5,8 +5,8 @@ import numpy as np
 
 from chem_operator.datasets import CaseParameters
 from chem_operator.utils import get_mechanism_file
-from chem_operator.reactors.cstr.dataset_generator import CSTRSim
-from chem_operator.reactors.packed_bed_1D.dataset_generator import PackedBed1DSim
+from experiments.cstr.dataset_generator import CSTRSim
+from experiments.packed_bed_1d.dataset_generator import PackedBed1DSim
 
 def _run_cstr_tutorial_reference(case: CaseParameters) -> tuple[float, float, np.ndarray]:
     # Cantera tutorial:

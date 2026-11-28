@@ -12,7 +12,7 @@ from torch.utils.data import DataLoader, Subset
 
 from chem_operator.datasets import SimulationDatasetGenerator
 from chem_operator.models import fit_fno_zscore_normalizer
-from chem_operator.reactors.pipe_flow_transient.dataset_generator import (
+from experiments.pipe_flow_transient.dataset_generator import (
     TransientHagenPoiseuillePipeFlowSim,
 )
 from chem_operator.sampling import Constant, Uniform

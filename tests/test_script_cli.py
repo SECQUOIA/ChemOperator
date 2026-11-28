@@ -1,12 +1,8 @@
-"""CLI contracts shared by model and plotting scripts."""
+"""Library CLI contracts: workflow stages, operator arguments and final epochs."""
 
 from __future__ import annotations
 
 import argparse
-from functools import partial
-import importlib
-from pathlib import Path
-import subprocess
 import sys
 from types import SimpleNamespace
 
@@ -20,9 +16,6 @@ from chem_operator.experiments import (
     parse_workflow_args,
     run_context_from_namespace,
 )
-
-
-ROOT = Path(__file__).resolve().parents[1]
 
 
 def test_workflow_stages_require_an_enabled_stage() -> None:
@@ -75,25 +68,6 @@ def test_workflow_parsers_report_validation_as_cli_errors(
         assert "Traceback" not in stderr
 
 
-@pytest.mark.parametrize("problem", ("cstr", "packed_bed_1d", "pfr", "pipe_flow"))
-def test_model_parsers_validate_before_resolving_cache(problem, monkeypatch, capsys) -> None:
-    import importlib
-
-    common = importlib.import_module(f"experiments.{problem}.common")
-
-    def unexpected_cache_resolution(*args, **kwargs):
-        pytest.fail("Invalid workflow reached cache resolution")
-
-    monkeypatch.setattr(common, "resolve_data_cache", unexpected_cache_resolution)
-    monkeypatch.setattr(sys, "argv", ["model.py", "--no-tune", "--no-train"])
-    with pytest.raises(SystemExit) as error:
-        common.parse_args()
-    assert error.value.code == 2
-    stderr = capsys.readouterr().err
-    assert "At least one of tuning or training" in stderr
-    assert "Traceback" not in stderr
-
-
 def _operator_args(monkeypatch, tmp_path, argv, *, tune_epochs=5):
     monkeypatch.setattr(sys, "argv", ["model.py", *argv])
     paths = SimpleNamespace(root=tmp_path, data=tmp_path)
@@ -141,33 +115,6 @@ def test_optional_epochs_help_names_the_default(monkeypatch, tmp_path, capsys) -
     assert "2 x --tune-epochs" in " ".join(capsys.readouterr().out.split())
 
 
-@pytest.mark.parametrize("problem", ("cstr", "packed_bed_1d", "pfr", "pipe_flow"))
-def test_1d_parsers_use_the_standard_operator_cli(problem, monkeypatch, tmp_path) -> None:
-    common = importlib.import_module(f"experiments.{problem}.common")
-    factories = []
-    monkeypatch.setattr(common, "resolve_data_cache",
-                        lambda args, factory: factories.append(factory))
-
-    monkeypatch.setattr(sys, "argv", ["model.py"])
-    args = common.parse_args()
-    assert args.data_dir == common.PATHS.data
-    assert (args.epochs, args.max_cases) == (None, None)
-    assert (args.tune_epochs, args.samples) == (common.MAX_EPOCHS, common.NUM_SAMPLES)
-    assert args.plot_cases == 2
-    assert final_epochs(args) == 2 * common.MAX_EPOCHS
-
-    monkeypatch.setattr(sys, "argv", [
-        "model.py", "--data-dir", str(tmp_path), "--epochs", "3", "--tune-epochs", "2",
-        "--samples", "4", "--max-cases", "5", "--plot-cases", "1",
-    ])
-    args = common.parse_args()
-    assert (args.data_dir, args.epochs, args.tune_epochs, args.samples, args.max_cases,
-            args.plot_cases) == (tmp_path, 3, 2, 4, 5, 1)
-    assert final_epochs(args) == 3
-    # The --data-cache estimate opens the splits under --data-dir.
-    assert isinstance(factories[-1], partial) and factories[-1].args == (tmp_path,)
-
-
 def test_model_workflow_help_omits_removed_flags() -> None:
     parser = argparse.ArgumentParser()
     add_workflow_arguments(parser)
@@ -181,37 +128,3 @@ def test_model_workflow_help_omits_removed_flags() -> None:
         parser.parse_args(["--generate"])
     with pytest.raises(SystemExit):
         parser.parse_args(["--plot"])
-
-
-@pytest.mark.parametrize(
-    "script",
-    (
-        "experiments.cstr.plot",
-        "experiments.packed_bed_1d.plot",
-        "experiments.pfr.plot",
-        "experiments.pfr_heat.plot",
-        "experiments.pipe_flow.plot",
-        "experiments.pipe_flow_transient.plot",
-        "experiments.q2d.plot",
-        "experiments.cstr.plot",
-    ),
-)
-def test_plot_scripts_require_run_paths(script: str) -> None:
-    command = [sys.executable, "-m", script]
-    help_result = subprocess.run(
-        [*command, "--help"], cwd=ROOT, capture_output=True, text=True,
-        check=False,
-    )
-    assert help_result.returncode == 0, help_result.stderr
-    assert "--run RUN" in help_result.stdout
-    assert "--recent" in help_result.stdout
-    assert "--runs-root RUNS_ROOT" in help_result.stdout
-    assert "--output-dir OUTPUT_DIR" in help_result.stdout
-    assert "--cases CASES" in help_result.stdout
-    assert "--deeponet-run" not in help_result.stdout
-
-    missing_result = subprocess.run(
-        command, cwd=ROOT, capture_output=True, text=True, check=False,
-    )
-    assert missing_result.returncode != 0
-    assert "--run" in missing_result.stderr
